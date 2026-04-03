@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "product": "Mclaw",
+  "openclawVersion": "2026.3.24",
+  "defaultDeliveryMode": "bundled-runtime",
+  "targetDeliveryMode": "bundled-runtime",
+  "artifacts": {
+    "tgz": {
+      "fileName": "openclaw-2026.3.24.tgz",
+      "version": "2026.3.24"
+    },
+    "runtime": [
+      {
+        "platform": "win32",
+        "arch": "x64",
+        "directoryName": "windows-x64",
+        "version": "2026.3.24"
+      },
+      {
+        "platform": "darwin",
+        "arch": "arm64",
+        "directoryName": "darwin-arm64",
+        "version": "2026.3.24"
+      },
+      {
+        "platform": "darwin",
+        "arch": "x64",
+        "directoryName": "darwin-x64",
+        "version": "2026.3.24"
+      }
+    ]
+  },
+  "notes": [
+    "Switch defaultDeliveryMode to bundled-runtime only after real runtime payloads are present and validated.",
+    "Keep tgz as controlled bundled-fallback rather than the primary delivery path."
+  ]
+}

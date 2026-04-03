@@ -1,0 +1,8 @@
+{
+  "publish": {
+    "url": "https://your-domain.example.com/mclaw/updates/latest"
+  },
+  "cos": {
+    "baseUrl": "https://your-domain.example.com/mclaw/updates"
+  }
+}

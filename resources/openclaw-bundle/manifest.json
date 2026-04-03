@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "product": "Mclaw",
+  "openclawVersion": "2026.3.24",
+  "defaultDeliveryMode": "bundled-runtime",
+  "targetDeliveryMode": "bundled-runtime",
+  "artifacts": {
+    "tgz": {
+      "fileName": "openclaw-2026.3.24.tgz",
+      "version": "2026.3.24"
+    },
+    "runtime": [
+      {
+        "platform": "win32",
+        "arch": "x64",
+        "directoryName": "windows-x64",
+        "version": "2026.3.24"
+      }
+    ]
+  },
+  "notes": [
+    "Windows x64 runtime validated and active as bundled-runtime.",
+    "macOS runtime payloads are pending and will fall back to bundled-fallback/online-fallback."
+  ]
+}
