@@ -209,6 +209,16 @@ import {
 } from './skills-uninstall-safety'
 import { removeManagedSkillLocally, removeSkillDirectoryLocally } from './skills-managed-uninstall'
 import { withExclusiveSkillMutation } from './skill-mutation-guard'
+import {
+  startWatchdog,
+  stopWatchdog,
+  isWatchdogRunning,
+  getWatchdogState,
+  getEventHistory,
+  getThresholds,
+  updateThresholds,
+  resetWatchdogState,
+} from './watchdog'
 
 const { randomUUID } = process.getBuiltinModule('node:crypto') as typeof import('node:crypto')
 const { appendFile, readFile, rm } = process.getBuiltinModule('node:fs/promises') as typeof import('node:fs/promises')
@@ -1248,4 +1258,33 @@ export function registerIpcHandlers() {
       'env-setup'
     )
   })
+
+  // Watchdog handlers
+  ipcMain.handle('watchdog:start', (_e, thresholds?) => {
+    startWatchdog(thresholds)
+    return { ok: true, running: isWatchdogRunning() }
+  })
+
+  ipcMain.handle('watchdog:stop', () => {
+    stopWatchdog()
+    return { ok: true, running: isWatchdogRunning() }
+  })
+
+  ipcMain.handle('watchdog:state', () => getWatchdogState())
+
+  ipcMain.handle('watchdog:events', () => getEventHistory())
+
+  ipcMain.handle('watchdog:thresholds:get', () => getThresholds())
+
+  ipcMain.handle('watchdog:thresholds:update', (_e, thresholds) => {
+    updateThresholds(thresholds)
+    return { ok: true, thresholds: getThresholds() }
+  })
+
+  ipcMain.handle('watchdog:reset', () => {
+    resetWatchdogState()
+    return { ok: true }
+  })
+
+  ipcMain.handle('watchdog:is-running', () => isWatchdogRunning())
 }

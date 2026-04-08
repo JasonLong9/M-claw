@@ -291,6 +291,17 @@ export const api = {
   onDepsInstallLog: (listener: (msg: string) => void) => subscribeToChannel('deps:install:log', listener),
   depsCheckBrew: () => ipcRenderer.invoke('deps:checkBrew'),
   depsInstallBrew: () => ipcRenderer.invoke('deps:installBrew'),
+
+  // Watchdog
+  watchdogStart: (thresholds?: Record<string, any>) => ipcRenderer.invoke('watchdog:start', thresholds),
+  watchdogStop: () => ipcRenderer.invoke('watchdog:stop'),
+  watchdogIsRunning: () => ipcRenderer.invoke('watchdog:is-running'),
+  watchdogGetState: () => ipcRenderer.invoke('watchdog:state'),
+  watchdogGetEvents: () => ipcRenderer.invoke('watchdog:events'),
+  watchdogGetThresholds: () => ipcRenderer.invoke('watchdog:thresholds:get'),
+  watchdogUpdateThresholds: (thresholds: Record<string, any>) =>
+    ipcRenderer.invoke('watchdog:thresholds:update', thresholds),
+  watchdogReset: () => ipcRenderer.invoke('watchdog:reset'),
 }
 
 contextBridge.exposeInMainWorld('api', api)

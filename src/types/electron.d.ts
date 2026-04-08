@@ -2004,6 +2004,14 @@ interface ElectronApi {
   onDepsInstallLog: (listener: (msg: string) => void) => () => void
   depsCheckBrew: () => Promise<{ installed: boolean }>
   depsInstallBrew: () => Promise<CliResult>
+
+  // Watchdog
+  watchdogStart: (thresholds?: Record<string, any>) => Promise<{ ok: boolean }>
+  watchdogStop: () => Promise<{ ok: boolean }>
+  watchdogReset: () => Promise<{ ok: boolean }>
+  watchdogIsRunning: () => Promise<boolean>
+  watchdogGetState: () => Promise<any>
+  watchdogGetEvents: () => Promise<any[]>
 }
 
 declare global {
