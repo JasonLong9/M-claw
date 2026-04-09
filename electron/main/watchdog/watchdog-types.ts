@@ -20,6 +20,8 @@ export type WatchdogEventKind =
   | 'recovery_started'
   | 'recovery_succeeded'
   | 'recovery_failed'
+  | 'recovery_verify_started'
+  | 'recovery_verify_failed'
   | 'circuit_opened'
   | 'circuit_closed'
   | 'watchdog_started'

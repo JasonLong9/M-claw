@@ -20,6 +20,8 @@ export type WatchdogEventKind =
   | 'recovery_started'
   | 'recovery_succeeded'
   | 'recovery_failed'
+  | 'recovery_verify_started'
+  | 'recovery_verify_failed'
   | 'circuit_opened'
   | 'circuit_closed'
   | 'watchdog_started'
@@ -58,7 +60,7 @@ export interface WatchdogThresholds {
 }
 
 export const DEFAULT_WATCHDOG_THRESHOLDS: WatchdogThresholds = {
-  healthCheckIntervalMs: 5000,
+  healthCheckIntervalMs: 10000,
   healthCheckTimeoutMs: 10000,
   maxConsecutiveFailures: 3,
   circuitOpenDurationMs: 60000,

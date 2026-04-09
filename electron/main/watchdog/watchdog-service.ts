@@ -188,16 +188,52 @@ async function attemptRecoverySequence(): Promise<void> {
   })
 
   if (recoveryResult.ok) {
-    setWatchdogState({
-      stateCode: 'monitoring',
-      totalRecoveries: state.totalRecoveries + 1,
-    })
-
-    addEvent('recovery_succeeded', `Recovery action ${action} succeeded`, {
+    addEvent('recovery_verify_started', `Verifying recovery action ${action}...`, {
       action,
     })
 
-    recoveryAttemptIndex = 0
+    await new Promise(resolve => setTimeout(resolve, 2000))
+
+    const verifyResult = await performHealthCheck(thresholds)
+
+    if (verifyResult.ok) {
+      setWatchdogState({
+        stateCode: 'monitoring',
+        totalRecoveries: state.totalRecoveries + 1,
+        lastHealthyTime: verifyResult.timestamp,
+        consecutiveFailures: 0,
+        lastError: undefined,
+      })
+
+      addEvent('recovery_succeeded', `Recovery action ${action} succeeded and verified`, {
+        action,
+      })
+
+      addEvent('health_check_success', 'Post-recovery health check passed', {
+        action: 'health_check',
+        detail: verifyResult.result?.summary,
+      })
+
+      recoveryAttemptIndex = 0
+    } else {
+      setWatchdogState({
+        consecutiveFailures: 1,
+        totalFailures: state.totalFailures + 1,
+        lastError: verifyResult.error?.message || verifyResult.result?.summary,
+      })
+
+      addEvent('recovery_verify_failed', `Recovery action ${action} verification failed`, {
+        action,
+        detail: verifyResult.error?.message || verifyResult.result?.summary,
+      })
+
+      addEvent('health_check_failure', 'Post-recovery health check failed', {
+        action: 'health_check',
+        detail: verifyResult.error?.message || verifyResult.result?.summary,
+      })
+
+      recoveryAttemptIndex++
+    }
   } else {
     addEvent('recovery_failed', `Recovery action ${action} failed: ${recoveryResult.message}`, {
       action,
