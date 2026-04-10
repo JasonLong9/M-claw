@@ -41,6 +41,7 @@ import type {
   DashboardEntrySnapshot,
 } from '../shared/dashboard-entry-bootstrap'
 import tooltips from '@/constants/tooltips.json'
+import WatchdogStatus from '../components/WatchdogStatus'
 
 interface GatewayStatus {
   running: boolean
@@ -1069,7 +1070,7 @@ export default function Dashboard({
     }
   }
 
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({ gateway: true, dev: true })
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({ gateway: true, watchdog: true, dev: true })
   const toggleSection = useCallback((key: string) => {
     setExpanded((prev) => ({ ...prev, [key]: !prev[key] }))
   }, [])
@@ -1208,6 +1209,43 @@ export default function Dashboard({
                 </Button>
               </Tooltip>
             </Group>
+          </div>
+        </Collapse>
+      </div>
+
+      {/* 看门狗状态 */}
+      <div
+        className="border app-border rounded-lg overflow-hidden"
+        style={{ transition: 'border-color 0.2s ease, box-shadow 0.2s ease' }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.borderColor = 'var(--app-hover-border)'
+          e.currentTarget.style.boxShadow = '0 0 12px var(--app-hover-glow)'
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.borderColor = ''
+          e.currentTarget.style.boxShadow = ''
+        }}
+      >
+        <Group
+          justify="space-between"
+          className="px-3 py-2.5 cursor-pointer select-none"
+          onClick={() => toggleSection('watchdog')}
+        >
+          <Group gap="sm">
+            <IconChevronRight
+              size={14}
+              style={{
+                transform: expanded.watchdog ? 'rotate(90deg)' : 'rotate(0deg)',
+                transition: 'transform 0.2s',
+              }}
+              className="app-text-muted"
+            />
+            <Text size="sm" fw={600} className="app-text-primary">看门狗服务</Text>
+          </Group>
+        </Group>
+        <Collapse in={Boolean(expanded.watchdog)}>
+          <div className="px-3 pb-3">
+            <WatchdogStatus />
           </div>
         </Collapse>
       </div>

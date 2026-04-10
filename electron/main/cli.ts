@@ -1080,12 +1080,15 @@ async function runDirectOnce(
   controlDomain: CommandControlDomain = 'global'
 ): Promise<CliResult> {
   const spawn = await getSpawnFn()
+  const isWin = process.platform === 'win32'
+  const needsShell = isWin && (command.endsWith('.cmd') || command.endsWith('.bat') || command.endsWith('.ps1'))
   return new Promise((resolve) => {
     const managedEnv = sanitizeManagedEnv(process.env, controlDomain)
     const proc = spawn(command, args, {
       env: managedEnv,
       cwd: resolveManagedSpawnCwd(),
       timeout,
+      shell: needsShell,
     })
     trackActiveProcess(proc, controlDomain)
     let stdout = ''
