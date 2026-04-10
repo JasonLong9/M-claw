@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import * as openClawPackage from '../openclaw-package'
 import {
   getCommandPathLookupInvocation,
@@ -7,6 +7,14 @@ import {
   resolveOpenClawPackageRoot,
 } from '../openclaw-package'
 import { buildTestEnv } from './test-env'
+
+const { inspectBundledOpenClawDeliveryStatusMock } = vi.hoisted(() => ({
+  inspectBundledOpenClawDeliveryStatusMock: vi.fn(),
+}))
+
+vi.mock('../openclaw-bundled-manifest', () => ({
+  inspectBundledOpenClawDeliveryStatus: inspectBundledOpenClawDeliveryStatusMock,
+}))
 
 const fs = process.getBuiltinModule('fs') as typeof import('node:fs')
 const os = process.getBuiltinModule('os') as typeof import('node:os')
@@ -105,11 +113,72 @@ function createNestedBinaryOpenClawInstall(): {
   return { tempDir, commandPath, packageRoot, packageJsonPath }
 }
 
+function createWindowsNpmShimOpenClawInstall(): {
+  tempDir: string
+  commandPath: string
+  packageRoot: string
+  packageJsonPath: string
+} {
+  const tempDir = makeTempDir()
+  const packageRoot = path.join(tempDir, 'node_modules', 'openclaw')
+  fs.mkdirSync(packageRoot, { recursive: true })
+
+  const packageJsonPath = path.join(packageRoot, 'package.json')
+  fs.writeFileSync(
+    packageJsonPath,
+    JSON.stringify(
+      {
+        name: 'openclaw',
+        version: '2026.3.24',
+        bin: { openclaw: 'bin/openclaw.mjs' },
+      },
+      null,
+      2
+    )
+  )
+
+  const binDir = path.join(packageRoot, 'bin')
+  fs.mkdirSync(binDir, { recursive: true })
+  const mjsTarget = path.join(binDir, 'openclaw.mjs')
+  fs.writeFileSync(mjsTarget, '#!/usr/bin/env node\nconsole.log("openclaw")\n')
+
+  const commandPath = path.join(tempDir, 'openclaw.cmd')
+  fs.writeFileSync(commandPath, `@node "${mjsTarget}" %*\r\n`)
+
+  return { tempDir, commandPath, packageRoot, packageJsonPath }
+}
+
 afterEach(() => {
+  inspectBundledOpenClawDeliveryStatusMock.mockReset()
+  inspectBundledOpenClawDeliveryStatusMock.mockReturnValue({
+    manifestPath: null,
+    manifest: null,
+    platform: process.platform,
+    arch: process.arch,
+    defaultDeliveryMode: null,
+    targetDeliveryMode: null,
+    runtimeArtifact: null,
+    runtimePath: null,
+    runtimeBinaryPath: null,
+  })
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop()
     if (dir) fs.rmSync(dir, { recursive: true, force: true })
   }
+})
+
+beforeEach(() => {
+  inspectBundledOpenClawDeliveryStatusMock.mockReturnValue({
+    manifestPath: null,
+    manifest: null,
+    platform: process.platform,
+    arch: process.arch,
+    defaultDeliveryMode: null,
+    targetDeliveryMode: null,
+    runtimeArtifact: null,
+    runtimePath: null,
+    runtimeBinaryPath: null,
+  })
 })
 
 describe('resolveOpenClawBinaryPath', () => {
@@ -154,6 +223,31 @@ describe('resolveOpenClawBinaryPath', () => {
         fileExists: () => false,
       })
     ).rejects.toThrow(/Unable to locate the openclaw command/i)
+  })
+
+  it('falls back to the bundled runtime binary when PATH lookup misses', async () => {
+    inspectBundledOpenClawDeliveryStatusMock.mockReturnValue({
+      manifestPath: 'D:\\bundle\\manifest.json',
+      manifest: {} as any,
+      platform: 'win32',
+      arch: 'x64',
+      defaultDeliveryMode: 'bundled-runtime',
+      targetDeliveryMode: 'bundled-runtime',
+      runtimeArtifact: {} as any,
+      runtimePath: 'D:\\bundle\\runtime\\windows-x64',
+      runtimeBinaryPath: 'D:\\bundle\\runtime\\windows-x64\\openclaw.cmd',
+    })
+
+    const resolved = await resolveOpenClawBinaryPath({
+      commandPathResolver: async () => {
+        throw new Error('INFO: Could not find files for the given pattern(s).')
+      },
+      platform: 'win32',
+      env: buildTestEnv(),
+      fileExists: () => false,
+    })
+
+    expect(resolved).toBe('D:\\bundle\\runtime\\windows-x64\\openclaw.cmd')
   })
 
   it('prefers npm prefix bins before static fallback directories when command lookup misses', async () => {
@@ -244,6 +338,17 @@ describe('resolveOpenClawPackageRoot', () => {
 
     const packageRoot = await resolveOpenClawPackageRoot({
       binaryPath: probePath,
+    })
+
+    expect(packageRoot).toBe(fs.realpathSync(install.packageRoot))
+  })
+
+  it('resolves the package root from a Windows npm global shim layout', async () => {
+    if (!IS_WINDOWS) return
+
+    const install = createWindowsNpmShimOpenClawInstall()
+    const packageRoot = await resolveOpenClawPackageRoot({
+      binaryPath: install.commandPath,
     })
 
     expect(packageRoot).toBe(fs.realpathSync(install.packageRoot))

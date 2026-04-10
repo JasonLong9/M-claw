@@ -124,7 +124,7 @@ function buildSummary(params: {
 
 function buildRecommendedAction(available: boolean, authState: FeishuOfficialCliAuthState): string {
   if (!available) {
-    return '当前可以继续使用下面的官方插件安装器，不会与 lark-cli 冲突；如需补充官方 OAuth / scope 状态感知，再按飞书官方 CLI 文档安装 lark-cli 后点击“刷新状态”。'
+    return '当前可以继续使用下面的官方插件安装器，不会与 lark-cli 冲突；如需补充官方 OAuth / scope 状态感知，请先执行 `npm install -g @larksuite/cli` 安装官方 CLI，完成后回到页面点击“刷新状态”。'
   }
   if (authState === 'unauthenticated') {
     return '建议先在终端执行 `lark-cli auth login` 完成官方授权；登录成功后回到这里点击“刷新状态”，然后继续使用下面的官方插件安装器完成 Bot 落盘。'
@@ -132,7 +132,7 @@ function buildRecommendedAction(available: boolean, authState: FeishuOfficialCli
   if (authState === 'authenticated') {
     return '官方授权层已可用；可以继续使用下面的官方插件安装器完成 Bot 落盘和渠道接入，两者当前按职责分层共存。'
   }
-  return '建议在终端手动执行 `lark-cli auth status` 或 `lark-cli auth login` 复核当前授权状态；复核期间仍可按需使用下面的官方插件安装器。'
+  return '建议在终端手动执行 `lark-cli auth status` 或 `lark-cli auth login` 复核当前授权状态；复核完成后回到页面点击“刷新状态”。复核期间仍可按需使用下面的官方插件安装器。'
 }
 
 async function runFeishuOfficialCli(args: string[]): Promise<CliResult> {

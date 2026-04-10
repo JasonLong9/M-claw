@@ -14,9 +14,14 @@ Current repository state:
 
 - `openclaw-2026.3.24.tgz` exists
 - `runtime/windows-x64` now exists and has passed direct `openclaw.cmd --version` probing
-- real macOS `runtime/<platform-arch>/` payloads do not exist yet
-- therefore `defaultDeliveryMode` is still `bundled-fallback`
+- `runtime/darwin-arm64` exists and is declared as `bundled-runtime`
+- `runtime/darwin-x64` exists and is declared as `bundled-runtime`
+- `defaultDeliveryMode` is currently `bundled-runtime`
 - `targetDeliveryMode` remains `bundled-runtime`
+- `Phase 2` exit checks currently pass with three ready targets:
+  - `win32-x64`
+  - `darwin-arm64`
+  - `darwin-x64`
 
 ## Accepted tgz filenames
 
@@ -79,4 +84,5 @@ Minimum runtime requirements:
 - Runtime acquisition and ingestion rules are maintained in `docs/openclaw-bundled-runtime-acquisition-sop.md`
 - A short execution runbook is maintained in `docs/openclaw-runtime-intake-runbook.md`
 - The current pending-item note is maintained in `docs/openclaw-runtime-pending-items.md`
+- Intel Mac offline first-launch validation is maintained in `docs/darwin-x64-offline-first-launch-runbook.md`
 - Extracting the npm tgz alone is not sufficient to claim a runnable bundled runtime; runtime payloads must include the full dependency closure and pass `--version` validation

@@ -9,6 +9,7 @@ import {
 } from '../../src/shared/gateway-runtime-state'
 
 const { createServer } = process.getBuiltinModule('node:net') as typeof import('node:net')
+const { createConnection } = process.getBuiltinModule('node:net') as typeof import('node:net')
 
 export interface GatewayHealthProbeResult extends CliResult {
   stateCode: GatewayRuntimeStateCode
@@ -111,6 +112,36 @@ export async function probeGatewayPortOwner(port = DEFAULT_GATEWAY_PORT): Promis
   }
 
   return parseLsofPortOwnerOutput(result.stdout, port)
+}
+
+export async function probeGatewayPortReachable(port = DEFAULT_GATEWAY_PORT): Promise<boolean> {
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    return false
+  }
+
+  return new Promise<boolean>((resolve) => {
+    const socket = createConnection({
+      host: '127.0.0.1',
+      port,
+    })
+
+    let settled = false
+    const finalize = (value: boolean) => {
+      if (settled) return
+      settled = true
+      try {
+        socket.destroy()
+      } catch {
+        // Ignore best-effort cleanup failures.
+      }
+      resolve(value)
+    }
+
+    socket.setTimeout(800)
+    socket.once('connect', () => finalize(true))
+    socket.once('timeout', () => finalize(false))
+    socket.once('error', () => finalize(false))
+  })
 }
 
 export async function probeGatewayTokenFromConfig(): Promise<string | null> {

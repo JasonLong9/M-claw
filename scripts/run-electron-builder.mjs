@@ -1,5 +1,5 @@
-import { spawn } from 'node:child_process'
-import { createReadStream, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { readLocalPublishUrl } from './electron-builder-local-config.mjs'
@@ -8,10 +8,11 @@ import { claimPackageVersion, persistPackageVersionState, releasePackageVersionC
 const forwardedArgs = process.argv.slice(2)
 const packageVersion = claimPackageVersion()
 const { version, displayVersion, timeZone, fromOverride } = packageVersion
+const releaseRootDir = join(process.cwd(), 'release')
+const currentReleaseDir = join(releaseRootDir, displayVersion)
 const localPublishUrl = await readLocalPublishUrl()
 const updatePublishUrl = localPublishUrl || String(process.env.QCLAW_UPDATE_PUBLISH_URL || '').trim()
 const localElectronDist = join(process.cwd(), 'electron-dist')
-const hasLocalElectronDist = existsSync(localElectronDist)
 const localNsisDist = join(process.cwd(), 'nsis-dist', 'nsis-3.0.4.1')
 const hasLocalNsisDist = existsSync(join(localNsisDist, 'Bin', 'makensis.exe'))
 const localNsisResourcesArchive = join(
@@ -26,6 +27,75 @@ const localNsisResourcesDir = join(
   'nsis-resources-3.4.1'
 )
 const hasLocalNsisResourcesDir = existsSync(join(localNsisResourcesDir, 'plugins'))
+const bundledElectronPackageJsonPath = join(process.cwd(), 'node_modules', 'electron', 'package.json')
+const bundledElectronDistDir = join(process.cwd(), 'node_modules', 'electron', 'dist')
+
+function resolveBundledElectronZipSpec() {
+  if (process.platform !== 'win32') return null
+  if (!existsSync(bundledElectronPackageJsonPath)) return null
+  if (!existsSync(join(bundledElectronDistDir, 'electron.exe'))) return null
+
+  try {
+    const electronPackage = JSON.parse(readFileSync(bundledElectronPackageJsonPath, 'utf8'))
+    const bundledVersion = String(electronPackage?.version || '').trim()
+    if (!bundledVersion) return null
+
+    const archiveName = `electron-v${bundledVersion}-win32-x64.zip`
+    return {
+      archiveName,
+      archivePath: join(localElectronDist, archiveName),
+      sourceDir: bundledElectronDistDir,
+    }
+  } catch {
+    return null
+  }
+}
+
+function ensureLocalElectronDistSeeded() {
+  const zipSpec = resolveBundledElectronZipSpec()
+  if (!zipSpec) return { available: existsSync(localElectronDist), seeded: false }
+  if (existsSync(zipSpec.archivePath)) return { available: true, seeded: false }
+
+  mkdirSync(localElectronDist, { recursive: true })
+  const tarPath = 'C:\\Windows\\System32\\tar.exe'
+  if (!existsSync(tarPath)) {
+    return { available: existsSync(zipSpec.archivePath), seeded: false }
+  }
+
+  try {
+    if (existsSync(zipSpec.archivePath)) rmSync(zipSpec.archivePath, { force: true })
+  } catch {
+    // Ignore stale archive cleanup failures and let tar report the actual problem.
+  }
+
+  const result = spawnSync(
+    tarPath,
+    ['-a', '-cf', zipSpec.archivePath, '-C', zipSpec.sourceDir, '.'],
+    {
+      stdio: 'pipe',
+      encoding: 'utf8',
+    }
+  )
+
+  if (result.status !== 0 || !existsSync(zipSpec.archivePath)) {
+    try {
+      if (existsSync(zipSpec.archivePath)) rmSync(zipSpec.archivePath, { force: true })
+    } catch {
+      // Ignore cleanup failures and fall back to online download if necessary.
+    }
+    const stderr = String(result.stderr || result.stdout || '').trim()
+    if (stderr) {
+      console.warn(`[run-electron-builder] 本地 Electron 压缩包生成失败：${stderr}`)
+    }
+    return { available: false, seeded: false }
+  }
+
+  console.log(`[run-electron-builder] 已从本地 electron npm 包生成离线压缩包：${zipSpec.archivePath}`)
+  return { available: true, seeded: true }
+}
+
+const localElectronDistState = ensureLocalElectronDistSeeded()
+const hasLocalElectronDist = localElectronDistState.available
 
 function startLocalBinaryMirror() {
   const routes = new Map()
@@ -107,6 +177,37 @@ function ensureLocalNsisResourcesPatch() {
   }
 
   writeFileSync(nsisTargetPath, source.replace(hardcodedLine, patchedLine), 'utf8')
+}
+
+function pruneOlderReleaseBuilds() {
+  if (!existsSync(releaseRootDir)) return
+
+  const removedEntries = []
+  const skippedEntries = []
+  for (const entry of readdirSync(releaseRootDir, { withFileTypes: true })) {
+    if (entry.name === displayVersion) continue
+    const entryPath = join(releaseRootDir, entry.name)
+    try {
+      rmSync(entryPath, { recursive: true, force: true })
+      removedEntries.push(entry.name)
+    } catch (error) {
+      skippedEntries.push(
+        `${entry.name}（${error instanceof Error ? error.message : String(error)}）`
+      )
+    }
+  }
+
+  if (removedEntries.length > 0) {
+    console.log(
+      `[run-electron-builder] 已清理旧打包产物，仅保留最新版本 ${displayVersion}：${removedEntries.join(', ')}`
+    )
+  }
+
+  if (skippedEntries.length > 0) {
+    console.warn(
+      `[run-electron-builder] 以下旧打包目录暂未删除，通常是仍被运行中的旧版本占用：${skippedEntries.join(', ')}`
+    )
+  }
 }
 
 const builderArgs = [
@@ -214,6 +315,18 @@ child.on('exit', (code, signal) => {
       )
       process.exit(1)
       return
+    }
+
+    try {
+      if (existsSync(currentReleaseDir)) {
+        pruneOlderReleaseBuilds()
+      } else {
+        console.warn(`[run-electron-builder] 未找到当前版本输出目录，跳过旧包清理：${currentReleaseDir}`)
+      }
+    } catch (error) {
+      console.warn(
+        `[run-electron-builder] 打包成功，但旧版本清理阶段出现异常：${error instanceof Error ? error.message : String(error)}`
+      )
     }
   } else {
     try {

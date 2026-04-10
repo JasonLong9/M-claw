@@ -411,13 +411,13 @@ export async function discoverOpenClawInstallations(): Promise<OpenClawDiscovery
   ) {
     appendUniqueMessage(
       warnings,
-      `当前 OpenClaw 内置交付模式为 ${bundledDeliveryMode}，目标模式为 ${bundledTargetDeliveryMode}。`
+      `当前 OpenClaw 内置交付模式为 ${bundledDeliveryMode}，目标模式为 ${bundledTargetDeliveryMode}；请检查当前平台载荷是否缺失、损坏或在安装包中打包不完整。`
     )
   }
   if (bundledTargetDeliveryMode === 'bundled-runtime' && !bundledRuntimePath) {
     appendUniqueMessage(
       warnings,
-      `当前未发现适用于 ${bundledDeliveryStatus.platform}-${bundledDeliveryStatus.arch} 的内置 OpenClaw runtime，本仓库仍处于过渡交付阶段。`
+      `当前未发现适用于 ${bundledDeliveryStatus.platform}-${bundledDeliveryStatus.arch} 的内置 OpenClaw runtime，请检查该平台包体是否缺失或未完整打包。`
     )
   }
   if (bundledRuntimePath && !bundledRuntimeBinaryPath) {

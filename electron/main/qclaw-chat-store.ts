@@ -441,7 +441,9 @@ export async function ensureLocalChatSession(params: {
   } else {
     store.sessions.push(nextRecord)
   }
-  await saveStore(store)
+  await saveStore(store).catch((error) => {
+    console.error('[qclaw-chat-store] Failed to persist session (non-fatal):', error)
+  })
   return toTranscript(nextRecord) as ChatTranscript
 }
 
@@ -540,7 +542,9 @@ export async function appendLocalChatMessages(params: {
   } else {
     store.sessions.push(nextRecord)
   }
-  await saveStore(store)
+  await saveStore(store).catch((error) => {
+    console.error('[qclaw-chat-store] Failed to persist messages (non-fatal):', error)
+  })
   return toTranscript(nextRecord) as ChatTranscript
 }
 

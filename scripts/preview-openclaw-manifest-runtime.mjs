@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { assessRuntimeIntakeDecision } from './openclaw-runtime-intake-decision.mjs'
 
 const repoRoot = process.cwd()
 const manifestPath = path.join(repoRoot, 'resources', 'openclaw-bundle', 'manifest.json')
@@ -36,11 +37,17 @@ function stableArtifactKey(item) {
 }
 
 const runtimeArgs = []
+const runtimeCheckArgs = []
 for (let index = 0; index < process.argv.length; index += 1) {
   if (process.argv[index] === '--runtime') {
     const raw = process.argv[index + 1]
     if (!raw) fail('Missing value after --runtime')
     runtimeArgs.push(raw)
+  }
+  if (process.argv[index] === '--runtime-check') {
+    const raw = process.argv[index + 1]
+    if (!raw) fail('Missing value after --runtime-check')
+    runtimeCheckArgs.push(raw)
   }
 }
 
@@ -93,4 +100,36 @@ info(`manifest=${path.relative(repoRoot, manifestPath)}`)
 info(`currentDefaultDeliveryMode=${manifest.defaultDeliveryMode ?? 'unknown'}`)
 info(`previewDefaultDeliveryMode=${preview.defaultDeliveryMode ?? 'unknown'}`)
 info(`runtimeArtifactCount=${preview.artifacts.runtime.length}`)
+
+for (const raw of runtimeCheckArgs) {
+  const parts = String(raw).split(':')
+  if (parts.length !== 4) {
+    fail(`Invalid --runtime-check value "${raw}". Expected <platform>:<arch>:<runtimeDir>:<version>.`)
+  }
+
+  const [platform, rawArch, runtimeDirArg, version] = parts.map((item) => String(item || '').trim())
+  const arch = normalizeArch(rawArch)
+  const runtimeDir = path.resolve(repoRoot, runtimeDirArg)
+  const decision = assessRuntimeIntakeDecision({
+    runtimeDir,
+    expectedVersion: version,
+  })
+
+  info(`runtimeCheck=${platform}-${arch}`)
+  info(`runtimeCheck.runtimeDir=${path.relative(repoRoot, runtimeDir)}`)
+  info(`runtimeCheck.intakeDecision=${decision.intakeDecision}`)
+  info(`runtimeCheck.packageVersion=${decision.packageVersion || 'unknown'}`)
+  info(`runtimeCheck.pinnedVersion=${decision.pinnedVersion || 'unknown'}`)
+  if (decision.notes) {
+    info(`runtimeCheck.notes=${path.relative(repoRoot, decision.notes.path)}`)
+    info(`runtimeCheck.notes.sourceVersion=${decision.sourceVersion || 'unknown'}`)
+    info(`runtimeCheck.notes.copiedVersion=${decision.copiedVersion || 'unknown'}`)
+  } else {
+    info('runtimeCheck.notes=missing')
+  }
+  for (const reason of decision.decisionReasons) {
+    info(`runtimeCheck.decisionReason=${reason}`)
+  }
+}
+
 console.log(JSON.stringify(preview, null, 2))

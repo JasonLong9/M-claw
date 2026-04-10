@@ -15,11 +15,38 @@ describe('ENV_CHECK_UI_POLICY', () => {
         href: 'https://nodejs.org/',
       },
     ])
-    expect(getEnvCheckSupportActionsForIssueKind('blocked-by-policy')).toHaveLength(1)
+    expect(getEnvCheckSupportActionsForIssueKind('blocked-by-policy')).toEqual([
+      {
+        kind: 'external-link',
+        label: '打开 Node 下载页',
+        href: 'https://nodejs.org/en/download',
+      },
+    ])
+    expect(getEnvCheckSupportActionsForIssueKind('permission-denied')).toEqual([
+      {
+        kind: 'external-link',
+        label: '打开 Node 下载页',
+        href: 'https://nodejs.org/en/download',
+      },
+    ])
+    expect(getEnvCheckSupportActionsForIssueKind('not-admin-user')).toEqual([
+      {
+        kind: 'external-link',
+        label: '打开 Node 下载页',
+        href: 'https://nodejs.org/en/download',
+      },
+    ])
+    expect(getEnvCheckSupportActionsForIssueKind('missing-installer')).toEqual([
+      {
+        kind: 'external-link',
+        label: '打开 Node 下载页',
+        href: 'https://nodejs.org/en/download',
+      },
+    ])
   })
 
   it('does not expose Node manual download action for unrelated issue kinds', () => {
-    expect(getEnvCheckSupportActionsForIssueKind('permission-denied')).toEqual([])
     expect(getEnvCheckSupportActionsForIssueKind(undefined)).toEqual([])
+    expect(getEnvCheckSupportActionsForIssueKind('git-unavailable')).toEqual([])
   })
 })

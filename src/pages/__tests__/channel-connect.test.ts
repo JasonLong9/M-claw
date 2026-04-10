@@ -4,6 +4,7 @@ import {
   buildManagedPluginScopedRepairOptions,
   buildDingtalkOfficialSetupLog,
   buildChannelConnectCompletionCopy,
+  buildChannelConnectConnectedActionLabel,
   canFinalizeWeixinSetup,
   canPrepareFeishuManualBindingWithoutInstall,
   canFinishFeishuCreateMode,
@@ -688,7 +689,27 @@ describe('buildChannelConnectCompletionCopy', () => {
         name: '飞书',
         skipPairing: false,
       })
-    ).toContain('获取配对码')
+    ).toContain('建议直接粘贴机器人完整回复')
+  })
+})
+
+describe('buildChannelConnectConnectedActionLabel', () => {
+  it('uses a feishu-specific pairing CTA after connection', () => {
+    expect(
+      buildChannelConnectConnectedActionLabel({
+        id: 'feishu',
+        skipPairing: false,
+      })
+    ).toBe('下一步：输入飞书配对码')
+  })
+
+  it('keeps skip-pairing channels on the finish CTA', () => {
+    expect(
+      buildChannelConnectConnectedActionLabel({
+        id: 'dingtalk',
+        skipPairing: true,
+      })
+    ).toBe('完成配置')
   })
 })
 

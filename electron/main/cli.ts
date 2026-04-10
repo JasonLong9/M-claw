@@ -138,6 +138,7 @@ import {
   resolveBundledOpenClawInstallPlan,
   type BundledOpenClawInstallPlan,
 } from './openclaw-bundled-plan'
+import { ensureRequiredOpenClawStateDirs } from './openclaw-state-bootstrap'
 import { inspectBundledOpenClawDeliveryStatus } from './openclaw-bundled-manifest'
 import {
   buildBundledOpenClawWindowsCopyPlan,
@@ -178,10 +179,15 @@ async function ensureOpenClawConfigRepairPreflight(): Promise<void> {
   }
 
   openClawConfigRepairPreflightPromise = (async () => {
+    const openClawPaths = await getOpenClawPaths().catch(() => null)
+    const homeDir = String(openClawPaths?.homeDir || '').trim()
+    if (homeDir) {
+      await ensureRequiredOpenClawStateDirs(homeDir)
+    }
+
     await runPluginRepairPreflight({
       resolveHomeDir: async () => {
-        const openClawPaths = await getOpenClawPaths().catch(() => null)
-        return String(openClawPaths?.homeDir || '').trim() || null
+        return homeDir || null
       },
       repair: async (homeDir) =>
         repairIncompatibleExtensionPluginsOnDisk({
@@ -192,8 +198,7 @@ async function ensureOpenClawConfigRepairPreflight(): Promise<void> {
     })
     await runPluginRepairPreflight({
       resolveHomeDir: async () => {
-        const openClawPaths = await getOpenClawPaths().catch(() => null)
-        return String(openClawPaths?.homeDir || '').trim() || null
+        return homeDir || null
       },
       repair: async () =>
         repairKnownProviderConfigGapsOnDisk({
@@ -719,12 +724,23 @@ async function runCliStreamingOnce(args: string[], options: RunCliStreamOptions 
       env: commandProbeEnv,
     })
     if (!openClawCapability.available) {
-      return {
-        ok: false,
-        stdout: '',
-        stderr: openClawCapability.message || 'OpenClaw CLI command is unavailable',
-        code: 1,
+      // where.exe / command -v couldn't find openclaw on PATH.
+      // Fall back to filesystem scan (matches how gatewayRunInBackground finds
+      // the binary on bundled/non-standard Windows installations).
+      const fallbackPath = await resolveOpenClawBinaryPath({
+        platform: process.platform,
+        env: commandProbeEnv,
+        fileExists: existsSync,
+      }).catch(() => '')
+      if (!fallbackPath) {
+        return {
+          ok: false,
+          stdout: '',
+          stderr: openClawCapability.message || 'OpenClaw CLI command is unavailable',
+          code: 1,
+        }
       }
+      return runCliStreamingOnce(args, { ...options, binaryPath: fallbackPath })
     }
   }
   const needsPtyWrapper = shouldAutoOpenBrowserForArgs(args) && !isWin
@@ -2690,6 +2706,147 @@ export async function gatewayHealth(): Promise<GatewayHealthCheckResult> {
     stateCode: r.ok ? 'healthy' : classification.stateCode,
     summary: r.ok ? 'Gateway 已确认可用' : classification.summary,
   }
+}
+
+const GATEWAY_FOREGROUND_STABILIZE_MS = 1500
+
+async function readGatewayForegroundLog(logPath: string): Promise<string> {
+  try {
+    const content = await readFile(logPath, 'utf8')
+    return String(content || '').trim()
+  } catch {
+    return ''
+  }
+}
+
+export async function gatewayRunInBackground(options: {
+  port?: number
+  allowUnconfigured?: boolean
+} = {}): Promise<CliResult> {
+  await ensureOpenClawConfigRepairPreflight()
+
+  const envFromFile = await readEnvFile().catch(() => ({}))
+  const spawn = await getSpawnFn()
+  const envPath = buildCliPathWithCandidates({
+    platform: process.platform,
+    currentPath: process.env.PATH || '',
+    detectedNodeBinDir,
+    env: process.env,
+  })
+  const mergedEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...envFromFile,
+    PATH: envPath,
+    NO_COLOR: '1',
+  }
+  const binaryPath = await resolveOpenClawBinaryPath({
+    platform: process.platform,
+    env: mergedEnv,
+    fileExists: existsSync,
+  }).catch(() => '')
+
+  const args = [
+    'gateway',
+    'run',
+    ...(options.allowUnconfigured ? ['--allow-unconfigured'] : []),
+    ...(Number.isFinite(options.port) && Number(options.port) > 0
+      ? ['--port', String(Math.trunc(Number(options.port)))]
+      : []),
+  ]
+  const resolvedCommand = resolveOpenClawCommand(args, {
+    platform: process.platform,
+    commandPath: binaryPath || undefined,
+  })
+
+  const logDir = join(tmpdir(), 'qclaw-lite', 'gateway-run')
+  await mkdir(logDir, { recursive: true }).catch(() => undefined)
+  const logSuffix = `${Date.now()}-${process.pid}`
+  const stdoutLogPath = join(logDir, `stdout-${logSuffix}.log`)
+  const stderrLogPath = join(logDir, `stderr-${logSuffix}.log`)
+  const stdoutStream = createWriteStream(stdoutLogPath, { flags: 'a' })
+  const stderrStream = createWriteStream(stderrLogPath, { flags: 'a' })
+
+  return new Promise((resolve) => {
+    let settled = false
+    let settledBySpawn = false
+
+    const closeStreams = () => {
+      stdoutStream.end()
+      stderrStream.end()
+    }
+
+    const finalize = (result: CliResult) => {
+      if (settled) return
+      settled = true
+      closeStreams()
+      resolve(result)
+    }
+
+    try {
+      const proc = spawn(resolvedCommand.command, resolvedCommand.args, {
+        env: mergedEnv,
+        cwd: resolveManagedSpawnCwd(),
+        shell: resolvedCommand.shell,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: true,
+        windowsHide: true,
+      })
+
+      proc.stdout?.pipe(stdoutStream)
+      proc.stderr?.pipe(stderrStream)
+
+      proc.once('error', (error) => {
+        finalize({
+          ok: false,
+          stdout: '',
+          stderr: error instanceof Error ? error.message : String(error),
+          code: -1,
+        })
+      })
+
+      proc.once('exit', async (code, signal) => {
+        if (!settledBySpawn) {
+          const stderrLog = await readGatewayForegroundLog(stderrLogPath)
+          const stdoutLog = await readGatewayForegroundLog(stdoutLogPath)
+          finalize({
+            ok: false,
+            stdout: stdoutLog,
+            stderr:
+              stderrLog ||
+              `Gateway foreground compatibility process exited before it became stable (code=${String(code)}, signal=${String(signal)}).`,
+            code,
+          })
+          return
+        }
+      })
+
+      proc.once('spawn', () => {
+        proc.unref()
+        setTimeout(async () => {
+          if (settled) return
+          settledBySpawn = true
+          finalize({
+            ok: true,
+            stdout: '',
+            stderr: [
+              resolvedCommand.capabilityWarning ? `[Qclaw] ${resolvedCommand.capabilityWarning}` : '',
+              `Gateway foreground compatibility logs: ${stderrLogPath}`,
+            ]
+              .filter(Boolean)
+              .join('\n'),
+            code: 0,
+          })
+        }, GATEWAY_FOREGROUND_STABILIZE_MS).unref?.()
+      })
+    } catch (error) {
+      finalize({
+        ok: false,
+        stdout: '',
+        stderr: error instanceof Error ? error.message : String(error),
+        code: -1,
+      })
+    }
+  })
 }
 
 export async function gatewayStart(): Promise<CliResult> {

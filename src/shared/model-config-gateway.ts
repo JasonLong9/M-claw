@@ -274,6 +274,7 @@ async function waitForDefaultModelConfirmation(params: {
   readUpstreamState?: () => Promise<RendererUpstreamModelStateResult>
   getModelStatus: () => Promise<ModelStatusLikeResult>
   confirmationPolicy?: BackoffPollingPolicy
+  allowConfigOnlyConfirmation?: boolean
 }): Promise<{
   ok: boolean
   configMatched: boolean
@@ -309,11 +310,19 @@ async function waitForDefaultModelConfirmation(params: {
     },
     isSuccess: (value) =>
       isRuntimeModelConfirmed(value.configModel, params.model)
-      && isRuntimeModelConfirmed(value.statusModel, params.model),
+      && (
+        isRuntimeModelConfirmed(value.statusModel, params.model)
+        || params.allowConfigOnlyConfirmation === true
+      ),
   })
 
   return {
-    ok: result.ok,
+    ok:
+      result.ok
+      || (
+        params.allowConfigOnlyConfirmation === true
+        && isRuntimeModelConfirmed(extractConfiguredDefaultModel(lastConfig), params.model)
+      ),
     configMatched: isRuntimeModelConfirmed(extractConfiguredDefaultModel(lastConfig), params.model),
     statusMatched: isRuntimeModelConfirmed(
       extractDefaultModelConfirmationStatus({
@@ -393,6 +402,7 @@ export async function applyDefaultModelWithGatewayReload(params: {
   getModelStatus: () => Promise<ModelStatusLikeResult>
   reloadGatewayAfterModelChange: () => Promise<CliLikeResult>
   confirmationPolicy?: BackoffPollingPolicy
+  allowConfigOnlyConfirmation?: boolean
 }): Promise<ApplyDefaultModelWithGatewayReloadResult> {
   const model = String(params.model || '').trim()
   if (!model) {
@@ -433,6 +443,7 @@ export async function applyDefaultModelWithGatewayReload(params: {
       readUpstreamState: params.readUpstreamState,
       getModelStatus: params.getModelStatus,
       confirmationPolicy: params.confirmationPolicy,
+      allowConfigOnlyConfirmation: params.allowConfigOnlyConfirmation,
     })
     if (confirmation.ok) {
       return {
@@ -441,14 +452,6 @@ export async function applyDefaultModelWithGatewayReload(params: {
         gatewayReloaded: upstreamWriteResult.gatewayReloaded === true,
         writeSource: upstreamWriteResult.source,
       }
-    }
-
-    return {
-      ok: false,
-      modelApplied: true,
-      gatewayReloaded: upstreamWriteResult.gatewayReloaded === true,
-      writeSource: upstreamWriteResult.source,
-      message: '模型已通过 OpenClaw 上游配置写入，但当前仍未确认模型状态刷新完成',
     }
   }
 
@@ -475,6 +478,7 @@ export async function applyDefaultModelWithGatewayReload(params: {
     readUpstreamState: params.readUpstreamState,
     getModelStatus: params.getModelStatus,
     confirmationPolicy: params.confirmationPolicy,
+    allowConfigOnlyConfirmation: params.allowConfigOnlyConfirmation,
   })
   if (confirmation.ok) {
     return {
@@ -502,6 +506,7 @@ export async function applyDefaultModelWithGatewayReload(params: {
     readUpstreamState: params.readUpstreamState,
     getModelStatus: params.getModelStatus,
     confirmationPolicy: params.confirmationPolicy,
+    allowConfigOnlyConfirmation: params.allowConfigOnlyConfirmation,
   })
   if (!postReloadConfirmation.ok) {
     return {

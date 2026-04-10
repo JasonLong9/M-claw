@@ -56,7 +56,7 @@ export function getPairingIntroCopy(target: ChannelPairingTarget | null): {
   if (target?.channelId === 'feishu' && accountName) {
     return {
       title: `${channelName} Bot「${accountName}」已接入`,
-      message: `已完成${channelName} Bot「${accountName}」的接入配置。接下来请在对应的飞书机器人里发送一条消息，获取配对码后粘贴到下方，完成这个 Bot 的用户配对。`,
+      message: `已完成${channelName} Bot「${accountName}」的接入配置。接下来请在对应的飞书机器人里发送一条消息，建议直接粘贴机器人完整回复（含配对码和用户 ID）到下方，完成这个 Bot 的用户配对。`,
     }
   }
 
@@ -69,6 +69,6 @@ export function getPairingIntroCopy(target: ChannelPairingTarget | null): {
 
   return {
     title: `${channelName} 机器人已接入`,
-    message: `已完成${channelName}机器人的接入配置。接下来请在${channelName}中给机器人发送一条消息，获取配对码后粘贴到下方，完成用户配对。`,
+    message: `已完成${channelName}机器人的接入配置。接下来请在${channelName}中给机器人发送一条消息，建议直接粘贴机器人完整回复（含配对码和用户 ID）到下方，完成用户配对。`,
   }
 }

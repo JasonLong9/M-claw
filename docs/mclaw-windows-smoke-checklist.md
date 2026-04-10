@@ -33,6 +33,27 @@
 10. 已确认安装目录内存在 `Mclaw.exe`、`Uninstall Mclaw.exe`、`resources/app.asar`、`resources/elevate.exe`
 11. 已确认安装后生成的 `resources/app-update.yml` 仍写入占位更新源：`https://example.invalid/mclaw/updates/latest`
 
+## 2.2 下一轮推荐执行顺序（2026-04-08）
+
+基于最近几轮对 `EnvCheck` 的 Windows 主线收口，下一轮 smoke 建议按以下顺序执行，优先验证“首启恢复链路是否已经像真实交付品”：
+
+1. 安装并启动最新 Windows 构建产物，确认能稳定进入 `EnvCheck`
+2. 在“系统已装 Node / 未装 OpenClaw”场景下验证：
+   - `Node.js` 步骤应直接显示 `已安装`
+   - `OpenClaw` 步骤应进入准备流程，而不是误展示 macOS 专属提示
+3. 在“未装 Node / 未装 OpenClaw”场景下验证：
+   - `Node.js` 安装完成后，应出现“刷新环境变量 -> 重新检测 Node.js -> 已安装”的连续状态变化
+   - 若安装后仍失败，提示应明确要求先重启 `Mclaw`，再手动安装 Windows 版 Node.js
+4. 在 `OpenClaw` 准备路径验证：
+   - 应出现“刷新环境变量 -> 重新检测/正在验证 OpenClaw 运行环境”的连续状态变化
+   - 若安装后仍失败，提示中应包含 PATH 异常说明、先重启 `Mclaw`、再执行 PowerShell 手动兜底命令
+5. 在准备完成后验证 `Gateway`：
+   - 当前阶段应显示“先跳过 Gateway 运行态检查，完成后续配置后会再次自动确认”
+   - 若共享配置已初始化，主按钮应显示 `进入控制面板`
+   - 若共享配置未初始化，主按钮应显示 `开始配置`
+
+本轮 smoke 的重点不再是“构建能不能产出”，而是确认 `EnvCheck` 的 Node / OpenClaw / Gateway 三段状态，在 Windows 真机上是否已经按预期收口。
+
 ## 3. Smoke Checklist
 
 ### A. 构建与产物
@@ -59,6 +80,15 @@
 - [ ] OpenClaw 检查结果正确
 - [ ] 缺依赖时提示可理解、可执行
 - [ ] 断网条件下仍可完成 OpenClaw 准备（内置载荷路径）
+
+#### C-1. 当前建议重点观察项（2026-04-08）
+
+- [ ] `Node.js` 已安装场景直接显示 `已安装`
+- [ ] `Node.js` 自动安装场景出现“刷新环境变量 -> 重新检测 Node.js -> 已安装”
+- [ ] `Node.js` 安装后失败提示包含“先关闭并重新打开 Mclaw / 再手动安装 Windows 版 Node.js”
+- [ ] `OpenClaw` 自动准备场景出现“刷新环境变量 -> 重新检测/正在验证 OpenClaw 运行环境 -> 已安装”
+- [ ] `OpenClaw` 安装后失败提示包含 PATH 异常说明、重启提示和 PowerShell 手动兜底命令
+- [ ] 环境检查页底部主按钮文案与共享配置状态一致：`进入控制面板` / `开始配置`
 
 ### D. 运行时与 gateway
 
@@ -102,6 +132,7 @@
 3. 当前 GUI smoke 同时暴露出新的 UI 品牌残留：欢迎页、顶部壳层和窗口标题仍出现过 `Qclaw`。
 4. 更新源策略仍未明确，且安装后的 `app-update.yml` 已再次证明当前仍在使用占位值。
 5. 当前 OpenClaw 默认仍走在线安装，尚未完成“安装包内置交付 + 断网首启”验证。
+6. 最近几轮 `EnvCheck` 内部收口主要集中在 Windows 首启恢复链路，但这些变化尚未完成一次新的真机 smoke 回归验证。
 
 ## 4. 当前新增环境要求
 

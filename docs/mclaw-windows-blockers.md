@@ -162,6 +162,33 @@
 
 1. 该项为新增 `P0` 阻塞，未关闭前不应宣布 Windows 最小闭环完成。
 
+### P0-07 Legacy Direct Chat 仍会被 gateway 就绪误判卡死
+
+现状：
+
+1. 在 bundled `OpenClaw 2026.3.24` 路径下，`ensureGatewayRunning()` 的 legacy 兼容结果仍可能比真实运行态更悲观：手工执行打包内置 runtime 的 `health --json` 已能返回 `ok: true`，但 UI / 发送链路此前仍可能停留在 `offline` / `error`。
+2. 用户侧表象是模型已保存、点击“启动网关”后仍停在 `Gateway 尚未完成就绪确认` 或 `模型已配置，但网关当前未运行`，即使真实 Gateway 实际已经起来。
+3. 当前根因已进一步收敛为“Direct Chat 前后两段门禁不一致”：renderer 侧可放行后，`sendChatMessage()` 仍会再次严格信任 `ensureGatewayRunning()` 并失败关闭。
+
+风险：
+
+1. 本地 Direct Chat 无法作为模型/运行时的第一验证面。
+2. 飞书 IM 接入前缺少最小本地 smoke，问题会被放大到渠道层。
+3. 若此时直接切到看门狗，会把状态误判问题掩盖到后台，不能真正关闭主阻塞项。
+
+处理建议：
+
+1. 优先收口 `ChatPage -> getDashboardChatAvailability -> sendChatMessage` 的放行链路。
+2. 对 legacy runtime 的显式“启动网关”操作，允许在短时兼容窗口内先放行一条真实消息验证。
+3. `sendChatMessage()` 在 fail closed 前，必须补做一次直接 `gatewayHealth()` 复检；若复检已确认运行，则继续走真实发送链路。
+4. 只有当“模型已配置 -> 启动网关 -> 发送首条消息”稳定后，再进入 `Phase 6` 看门狗实现。
+
+当前状态：
+
+1. `2026-04-10` 已先在 renderer 侧加入兼容恢复窗口：显式启动网关成功后，只要存在已保存模型且阻塞原因属于 legacy readiness 假阴性，就允许 Direct Chat 以 `degraded` 状态先发送。
+2. `2026-04-10` 已继续在 main/chat service 侧补上发送前复检：当 `ensureGatewayRunning()` 返回不可用时，会再做一次直接 `gatewayHealth()` 复核；若复核已健康，则继续发送而不是误报 `gateway-offline`。
+3. 该项已从“根因未明”推进到“代码链路已收口”，下一步只剩 Windows 打包产物真机复测；在复测通过前仍保持 `P0`。
+
 ## 4. P1 阻塞项
 
 ### P1-01 Windows 预检脚本缺失
@@ -306,6 +333,7 @@
 | P0-04 | `EnvCheck` 存在 mac-only 流程与文案 | P0 | 桌面主流程 |
 | P0-05 | 主进程已切换，但 UI/全仓品牌迁移未完全落地 | P0 | 产品接管 |
 | P0-06 | OpenClaw 尚未实现“内置本体直用”，仍未脱离安装流程 | P0 | 安装交付/首次启动 |
+| P0-07 | Legacy Direct Chat 仍会被 gateway 就绪误判卡死 | P0 | 聊天主链/Windows 验证 |
 | P1-01 | Windows 预检脚本缺失 | 已完成 | 构建/发布 |
 | P1-02 | 自动更新代码与 v1 文档策略有偏差 | P1 | 发布/产品 |
 | P1-03 | 非飞书渠道仍占用复杂度 | P1 | 产品范围治理 |

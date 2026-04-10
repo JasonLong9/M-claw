@@ -24,6 +24,7 @@ import {
   gatewayStop,
   getOpenClawPaths,
   gatewayStart,
+  gatewayRunInBackground,
   installEnv,
   repairIncompatibleExtensionPlugins,
   readConfig,
@@ -38,7 +39,12 @@ import {
 } from './cli'
 import { guardedWriteConfig } from './openclaw-config-guard'
 import { applyConfigPatchGuarded } from './openclaw-config-coordinator'
-import { findAvailableLoopbackPort, probeGatewayPortOwner } from './openclaw-gateway-probes'
+import { inspectControlUiAppViaBrowser } from './openclaw-control-ui-rpc'
+import {
+  findAvailableLoopbackPort,
+  probeGatewayPortOwner,
+  probeGatewayPortReachable,
+} from './openclaw-gateway-probes'
 import { cleanupIsolatedNpmCacheEnv, createIsolatedNpmCacheEnv } from './npm-cache-env'
 import { reconcileTrustedPluginAllowlist, sanitizeManagedPluginConfig } from './openclaw-plugin-config'
 import {
@@ -348,9 +354,45 @@ function buildGatewayEnsureResult(
 
 function shouldInspectControlUiApp(stateCode: GatewayRuntimeStateCode): boolean {
   return (
+    stateCode === 'unknown_runtime_failure' ||
+    stateCode === 'gateway_not_running' ||
+    stateCode === 'service_loaded_but_stale' ||
     stateCode === 'token_mismatch' ||
     stateCode === 'websocket_1006' ||
     stateCode === 'auth_missing'
+  )
+}
+
+function hasUsableControlUiConnection(
+  diagnostics: GatewayControlUiAppDiagnostics | null | undefined
+): boolean {
+  return Boolean(diagnostics?.connected && diagnostics?.hasClient)
+}
+
+function shouldAcceptLegacyGatewayStartAsDegradedReady(params: {
+  startResult: CliResult
+  classification: ReturnType<typeof classifyGatewayRuntimeState>
+  doctorSummary?: string | null
+}): boolean {
+  if (!params.startResult.ok) return false
+  if (params.classification.stateCode !== 'unknown_runtime_failure') return false
+  if (!params.classification.safeToRetry) return false
+
+  const combined = joinNonEmpty([
+    params.startResult.stderr,
+    params.startResult.stdout,
+    params.doctorSummary,
+    params.classification.summary,
+    params.classification.reasonDetail?.message,
+  ]).toLowerCase()
+
+  return !(
+    /plugin|manifest|allowlist|failed to load plugin/.test(combined) ||
+    /config invalid|unrecognized key|unknown channel id|doctor --fix/.test(combined) ||
+    /token mismatch|websocket|1006/.test(combined) ||
+    /api[_ -]?key|credential|auth|unauthorized|forbidden|login/.test(combined) ||
+    /eacces|eperm|permission denied|operation not permitted/.test(combined) ||
+    /network|dns|proxy|certificate|tls|ssl|fetch failed/.test(combined)
   )
 }
 
@@ -382,12 +424,14 @@ function projectControlUiAppDiagnostics(input: {
 }
 
 async function collectControlUiAppDiagnostics(
-  stateCode: GatewayRuntimeStateCode
+  stateCode: GatewayRuntimeStateCode,
+  options: {
+    force?: boolean
+  } = {}
 ): Promise<GatewayControlUiAppDiagnostics | null> {
-  if (!shouldInspectControlUiApp(stateCode)) return null
+  if (!options.force && !shouldInspectControlUiApp(stateCode)) return null
 
   try {
-    const { inspectControlUiAppViaBrowser } = await import('./openclaw-control-ui-rpc')
     const inspection = await inspectControlUiAppViaBrowser({
       readConfig,
       readEnvFile,
@@ -410,6 +454,15 @@ function combineCliOutput(result: Partial<CliResult> | null | undefined): string
     .filter(Boolean)
     .join('\n')
     .trim()
+}
+
+function shouldFallbackToForegroundGatewayRun(installResult: CliResult): boolean {
+  if (process.platform !== 'win32') return false
+  const detail = combineCliOutput(installResult).toLowerCase()
+  return detail.includes('eperm')
+    || detail.includes('permission denied')
+    || detail.includes('schtasks')
+    || detail.includes('service install failed')
 }
 
 function isSafeAlreadyInstalledManagedPluginInstallError(detail: string): boolean {
@@ -858,8 +911,23 @@ async function safeGatewayHealth(): Promise<GatewayHealthCheckResult> {
   return gatewayHealth().catch(() => createEmptyHealthCheck())
 }
 
+function shouldAcceptGatewayPortFallback(health: GatewayHealthCheckResult): boolean {
+  switch (health.stateCode) {
+    case 'config_invalid':
+    case 'token_mismatch':
+    case 'websocket_1006':
+    case 'auth_missing':
+    case 'plugin_load_failure':
+    case 'network_blocked':
+      return false
+    default:
+      return true
+  }
+}
+
 async function waitForGatewayReady(
-  options: EnsureGatewayRunningOptions
+  options: EnsureGatewayRunningOptions,
+  effectivePort?: number
 ): Promise<{
   running: boolean
   health: GatewayHealthCheckResult
@@ -882,6 +950,25 @@ async function waitForGatewayReady(
         elapsedMs: context.elapsedMs,
       })
       lastHealth = await safeGatewayHealth()
+      if (
+        !lastHealth.running &&
+        Number.isInteger(effectivePort) &&
+        Number(effectivePort) > 0 &&
+        shouldAcceptGatewayPortFallback(lastHealth)
+      ) {
+        const reachable = await probeGatewayPortReachable(Number(effectivePort)).catch(() => false)
+        if (reachable) {
+          lastHealth = {
+            running: true,
+            raw: lastHealth.raw,
+            stderr: lastHealth.stderr,
+            code: lastHealth.code,
+            stateCode: 'healthy',
+            summary:
+              'Gateway port is reachable and the compatibility fallback has confirmed the local runtime is listening.',
+          }
+        }
+      }
       return lastHealth
     },
     isSuccess: (value) => Boolean(value.running),
@@ -934,7 +1021,7 @@ async function restartGatewayAndWait(
   }
 
   recordGatewayAction(context, 'wait-ready')
-  const ready = await waitForGatewayReady(options)
+  const ready = await waitForGatewayReady(options, context.effectivePort)
   return {
     ok: ready.running,
     result: restartResult,
@@ -1523,6 +1610,7 @@ async function ensureGatewayRunningImpl(
   if (startupProbeClassification.stateCode === 'plugin_load_failure') {
     const pluginRepair = await repairIncompatibleExtensionPlugins({
       quarantineOfficialManagedPlugins: true,
+      restoreConfiguredManagedChannels: true,
     }).catch((error) => ({
       ok: false,
       repaired: false,
@@ -1806,6 +1894,60 @@ async function ensureGatewayRunningImpl(
     await gatewayStop().catch(() => undefined)
     const installGatewayResult = await runCli(['gateway', 'install'], undefined, 'gateway')
     if (!installGatewayResult.ok) {
+      if (shouldFallbackToForegroundGatewayRun(installGatewayResult)) {
+        emitGatewayBootstrapState(options, {
+          phase: 'start-command',
+          title: '正在以兼容模式启动 Gateway',
+          detail: '当前 Windows 环境无法安装 Gateway 后台服务，正在回退到当前会话前台运行模式。',
+          progress: 54,
+        })
+        recordGatewayAction(context, 'start-gateway', [
+          'gateway',
+          'run',
+          '--allow-unconfigured',
+          '--port',
+          String(context.effectivePort),
+        ])
+        const foregroundRunResult = await gatewayRunInBackground({
+          port: context.effectivePort,
+          allowUnconfigured: true,
+        })
+        if (foregroundRunResult.ok) {
+          recordGatewayAction(context, 'wait-ready')
+          const foregroundReady = await waitForGatewayReady(options, context.effectivePort)
+          if (foregroundReady.running) {
+            appendGatewayEvidence(context, {
+              source: 'service',
+              message: 'Gateway 后台服务安装失败，已回退到当前会话前台运行模式',
+              detail: combineCliOutput(installGatewayResult) || 'schtasks / 后台服务安装不可用',
+              port: context.effectivePort,
+            })
+            const result = buildGatewayEnsureResult(
+              {
+                ok: true,
+                stdout: foregroundReady.health.raw,
+                stderr: joinNonEmpty([foregroundReady.health.stderr, installGatewayResult.stderr]),
+                code: 0,
+              },
+              {
+                running: true,
+                autoInstalledGatewayService: false,
+                ...installedFlags,
+              },
+              context,
+              {
+                summary: 'Gateway 已通过兼容前台模式启动并完成就绪确认。',
+              }
+            )
+            await persistGatewayRuntimeReconcile({
+              result,
+              summary: 'Gateway 后台服务安装失败，已切换到前台兼容运行模式。',
+            })
+            return result
+          }
+        }
+      }
+
       appendGatewayEvidence(context, {
         source: 'service',
         message: 'Gateway 服务补装失败',
@@ -2023,7 +2165,7 @@ async function ensureGatewayRunningImpl(
   }
 
   recordGatewayAction(context, 'wait-ready')
-  let ready = await waitForGatewayReady(options)
+  let ready = await waitForGatewayReady(options, context.effectivePort)
   if (!ready.running) {
     const readyDiagnosticsBase = {
       lastHealth: ready.health,
@@ -2040,7 +2182,9 @@ async function ensureGatewayRunningImpl(
       portOwner: context.portOwner,
       evidence: context.evidence,
     })
-    const readyControlUiApp = await collectControlUiAppDiagnostics(readyClassification.stateCode)
+    const readyControlUiApp = await collectControlUiAppDiagnostics(readyClassification.stateCode, {
+      force: true,
+    })
     const readyDiagnostics = buildGatewayDiagnosticsWithControlUi(readyDiagnosticsBase, readyControlUiApp)
     if (readyControlUiApp) {
       readyClassification = classifyGatewayRuntimeState({
@@ -2052,6 +2196,61 @@ async function ensureGatewayRunningImpl(
       })
     }
     appendGatewayEvidence(context, readyClassification.evidence)
+
+    if (hasUsableControlUiConnection(readyControlUiApp)) {
+      const controlUiReadyApp = readyControlUiApp as GatewayControlUiAppDiagnostics
+      const controlUiConfirmedHealth: GatewayHealthCheckResult = {
+        running: true,
+        raw: ready.health.raw || startResult.stdout || '',
+        stderr: ready.health.stderr || startResult.stderr || '',
+        code: 0,
+        stateCode: 'healthy',
+        summary: 'OpenClaw Control UI 已确认 Gateway 可用',
+      }
+      const controlUiReadyDiagnostics = {
+        ...readyDiagnostics,
+        lastHealth: controlUiConfirmedHealth,
+      }
+      appendGatewayEvidence(context, {
+        source: 'control-ui-app',
+        message: 'OpenClaw Control UI 已成功连上 Gateway',
+        detail: joinNonEmpty([
+          controlUiReadyApp.lastError,
+          Array.isArray(controlUiReadyApp.appKeys) && controlUiReadyApp.appKeys.length > 0
+            ? `appKeys=${controlUiReadyApp.appKeys.join(',')}`
+            : '',
+        ]).slice(0, 2000),
+      })
+      const result = buildGatewayEnsureResult(
+        {
+          ok: true,
+          stdout: controlUiConfirmedHealth.raw,
+          stderr: controlUiConfirmedHealth.stderr,
+          code: 0,
+        },
+        {
+          running: true,
+          autoInstalledGatewayService,
+          ...installedFlags,
+        },
+        context,
+        {
+          diagnostics: controlUiReadyDiagnostics,
+        }
+      )
+      await persistGatewayRuntimeReconcile({
+        result,
+        summary: 'Gateway 健康探针尚未确认，但 OpenClaw Control UI 已确认网关可用。',
+      })
+      emitGatewayBootstrapState(options, {
+        phase: 'done',
+        title: 'Gateway 已确认可用',
+        detail: '健康探针仍在恢复中，但 Control UI 已确认网关可用，正在进入控制面板。',
+        progress: 100,
+        elapsedMs: ready.elapsedMs,
+      })
+      return result
+    }
 
     if (
       !restartRepairAttempted &&
@@ -2155,6 +2354,51 @@ async function ensureGatewayRunningImpl(
       })
     }
     appendGatewayEvidence(context, finalClassification.evidence)
+
+    if (shouldAcceptLegacyGatewayStartAsDegradedReady({
+      startResult,
+      classification: finalClassification,
+      doctorSummary: doctorFlow.summary,
+    })) {
+      appendGatewayEvidence(context, {
+        source: 'health',
+        message: '旧版 Gateway 健康确认未返回明确 ready，但已按兼容模式放行继续尝试对话',
+        detail: joinNonEmpty([
+          finalClassification.summary,
+          doctorFlow.summary,
+          failedHealth.summary,
+        ]).slice(0, 2000),
+      })
+      const degradedReadyResult = buildGatewayEnsureResult(
+        {
+          ok: true,
+          stdout: combineCliOutput(startResult),
+          stderr: doctorFlow.summary || finalClassification.summary,
+          code: 0,
+        },
+        {
+          running: true,
+          autoInstalledGatewayService,
+          ...installedFlags,
+        },
+        context,
+        {
+          summary: 'Gateway 启动命令已执行；当前版本未完成就绪确认，已按兼容模式继续尝试对话。',
+          diagnostics: finalDiagnostics,
+        }
+      )
+      await persistGatewayRuntimeReconcile({
+        result: degradedReadyResult,
+        summary: '旧版 Gateway 健康确认未给出 ready，已按兼容模式放行到 Direct Chat 继续验证实际对话链路。',
+      })
+      emitGatewayBootstrapState(options, {
+        phase: 'done',
+        title: 'Gateway 已按兼容模式放行',
+        detail: '健康探针仍未返回明确 ready，但启动命令已成功执行，系统将继续放行到对话页验证运行时可用性。',
+        progress: 100,
+      })
+      return degradedReadyResult
+    }
 
     if (context.autoPortMigrated && rollbackConfig) {
       await guardedWriteConfig({

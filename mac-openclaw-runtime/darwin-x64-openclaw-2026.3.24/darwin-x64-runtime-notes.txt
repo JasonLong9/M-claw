@@ -1,0 +1,7 @@
+machine_arch=x86_64
+source_openclaw_bin=/Users/runner/work/openclaw/openclaw/openclaw.mjs
+resolved_openclaw_bin=darwin-x64/bin/openclaw
+runtime_prefix_dir=darwin-x64
+source_version_output=OpenClaw 2026.3.24
+copied_version_output=OpenClaw 2026.3.24
+generated_at=2026-04-08T18:39:45Z

@@ -1812,6 +1812,10 @@ interface ElectronApi {
     ok: boolean
     reachable: boolean
     modelCount?: number
+    models?: Array<{
+      key: string
+      name: string
+    }>
     error?: string
     latencyMs?: number
   }>

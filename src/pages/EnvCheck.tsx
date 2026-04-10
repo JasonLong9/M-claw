@@ -5,6 +5,7 @@ import { ENV_CHECK_UI_POLICY, getEnvCheckSupportActionsForIssueKind, type EnvChe
 import {
   classifyMacGitToolsIssue,
   classifyMacNodeInstallerFailure,
+  classifyWindowsNodeInstallerFailure,
   classifyNodeInstallerDownloadFailure,
   createNodeInstallerIssue,
   type NodeInstallerIssue,
@@ -27,9 +28,12 @@ import {
 import type { OpenClawUpgradeCheckResult } from '../shared/openclaw-phase4'
 import type { OpenClawBackupRootInfo } from '../shared/openclaw-phase3'
 import {
+  buildOpenClawMigrationSmokeSummary,
   MAX_SUPPORTED_OPENCLAW_VERSION,
   MIN_SUPPORTED_OPENCLAW_VERSION,
+  type OpenClawMigrationSmokeSummary,
   PINNED_OPENCLAW_VERSION,
+  resolveOpenClawTargetVersionLabel,
 } from '../shared/openclaw-version-policy'
 import BrandWordmark from '@/components/BrandWordmark'
 import tooltips from '@/constants/tooltips.json'
@@ -44,9 +48,9 @@ const OPENCLAW_NPM_MIRROR_SUMMARY = [
   'npm 官方源',
 ].join('、')
 const OPENCLAW_MANUAL_INSTALL_COMMANDS = [
-  'npm install -g openclaw@2026.3.24 --registry=https://registry.npmmirror.com',
-  'npm install -g openclaw@2026.3.24 --registry=https://mirrors.cloud.tencent.com/npm/',
-  'npm install -g openclaw@2026.3.24 --registry=https://repo.huaweicloud.com/repository/npm/',
+  `npm install -g openclaw@${PINNED_OPENCLAW_VERSION} --registry=https://registry.npmmirror.com`,
+  `npm install -g openclaw@${PINNED_OPENCLAW_VERSION} --registry=https://mirrors.cloud.tencent.com/npm/`,
+  `npm install -g openclaw@${PINNED_OPENCLAW_VERSION} --registry=https://repo.huaweicloud.com/repository/npm/`,
 ]
 const ENV_CHECK_STEP_TOOLTIPS: Record<string, string> = {
   node: ENV_CHECK_TOOLTIPS.nodeRuntime,
@@ -67,6 +71,16 @@ interface CliResultLikeForGuidance {
   }>
 }
 
+interface EnvCheckNodeCheckResultLike {
+  installed: boolean
+  version?: string
+  needsUpgrade: boolean
+  meetsRequirement?: boolean
+  requiredVersion: string
+  targetVersion: string
+  installStrategy?: 'nvm' | 'installer'
+}
+
 function containsAny(text: string, patterns: RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(text))
 }
@@ -83,7 +97,7 @@ export function buildOpenClawInstallFailureGuidance(result: CliResultLikeForGuid
           .filter(Boolean)
       : []
 
-  const lines: string[] = ['OpenClaw 本体释放或环境依赖在线回退部署失败。']
+  const lines: string[] = ['OpenClaw 本地内置本体释放失败，且网络兜底部署也未完成。']
 
   if (attemptedMirrors.length > 0) {
     lines.push(`Mclaw 仅在本地内置载荷不可用时才会触发网络兜底，本次已尝试以下源：${attemptedMirrors.join('、')}。`)
@@ -113,8 +127,9 @@ export function buildOpenClawInstallFailureGuidance(result: CliResultLikeForGuid
     ])
   ) {
     lines.push('检测到目录读写权限异常，这可能是杀毒软件拦截，或此前使用过管理员身份导致了文件所有权错乱。')
-    const isMac = typeof window !== 'undefined' && window.api?.platform === 'darwin'
-    if (isMac) {
+    const platformState =
+      typeof window !== 'undefined' ? resolveEnvCheckPlatformState(window.api?.platform) : null
+    if (platformState?.isMac) {
       lines.push('macOS 下，您可能需要检查对应目录的所有权：')
       lines.push('sudo chown -R $USER ~/.npm ~/.openclaw')
     } else {
@@ -137,7 +152,7 @@ export function buildOpenClawInstallFailureGuidance(result: CliResultLikeForGuid
     lines.push('检测到网络连接失败，请确认当前网络、代理或防火墙没有拦截公共下载请求。')
   }
 
-  lines.push('如反复失败，您依然可以手动补装外部 OpenClaw 运行环境作为兜底方案，完成后重启 Mclaw：')
+  lines.push('如反复失败，您仍可临时手动补装外部 OpenClaw 运行环境作为兜底路径；完成后重启 Mclaw：')
   for (const command of OPENCLAW_MANUAL_INSTALL_COMMANDS) {
     lines.push(command)
   }
@@ -254,21 +269,135 @@ export function resolveEnvInstallProgressStep(options: {
   return null
 }
 
+export function isMacPlatform(platform?: string): boolean {
+  return platform === 'darwin'
+}
+
+export interface EnvCheckPlatformState {
+  platform: string | undefined
+  isMac: boolean
+  shouldPrepareMacDeveloperTools: boolean
+  shouldInspectNodeInstaller: boolean
+}
+
+export interface EnvCheckNodeInstallPlatformBehavior {
+  platform: string | undefined
+  shouldPrepareMacDeveloperTools: boolean
+  shouldInspectNodeInstaller: boolean
+  classifyInstallerFailure: (rawError: string) => NodeInstallerIssue
+  installCompletedDescription: string
+  installedDescription: string
+  refreshDescription: string
+  recheckDescription: string
+  missingAfterInstallError: string
+  missingAfterInstallMessage: string
+}
+
+export function resolveEnvCheckPlatformState(platform?: string): EnvCheckPlatformState {
+  const isMac = isMacPlatform(platform)
+  return {
+    platform,
+    isMac,
+    shouldPrepareMacDeveloperTools: isMac,
+    shouldInspectNodeInstaller: isMac,
+  }
+}
+
+export function resolveNodeInstallPlatformBehavior(
+  platform?: string
+): EnvCheckNodeInstallPlatformBehavior {
+  const platformState = resolveEnvCheckPlatformState(platform)
+  return {
+    platform,
+    shouldPrepareMacDeveloperTools: platformState.shouldPrepareMacDeveloperTools,
+    shouldInspectNodeInstaller: platformState.shouldInspectNodeInstaller,
+    classifyInstallerFailure: (rawError: string) =>
+      classifyNodeInstallerFailureForPlatform(platform, rawError),
+    installCompletedDescription: '安装完成',
+    installedDescription: '已安装',
+    refreshDescription: '刷新环境变量...',
+    recheckDescription: '重新检测 Node.js...',
+    missingAfterInstallError: '安装后仍无法检测到',
+    missingAfterInstallMessage:
+      platform === 'win32'
+        ? 'Node.js 安装后仍无法检测到。请先关闭并重新打开 Mclaw；如果仍然失败，请改为手动安装 Windows 版 Node.js。'
+        : 'Node.js 安装后仍无法检测到。请重启应用或手动安装。',
+  }
+}
+
+export interface EnvCheckOpenClawInstallBehavior {
+  installedDescription: string
+  refreshDescription: string
+  resolveRecheckDescription: (needOpenClawRuntimeRecovery: boolean) => string
+  missingAfterInstallError: string
+  missingAfterInstallMessage: string[]
+}
+
+export interface EnvCheckGatewayBehavior {
+  deferredCheckingDescription: string
+  deferredStepVersion: string
+  deferredReadyDescription: string
+  resolveContinueLabel: (sharedConfigInitialized: boolean) => string
+}
+
+export interface EnvCheckGatewayDeferredStepState
+  extends Pick<Step, 'status' | 'version' | 'description' | 'progress'> {}
+
+export function resolveOpenClawInstallBehavior(): EnvCheckOpenClawInstallBehavior {
+  return {
+    installedDescription: '已安装',
+    refreshDescription: '刷新环境变量...',
+    resolveRecheckDescription: (needOpenClawRuntimeRecovery: boolean) =>
+      needOpenClawRuntimeRecovery ? '正在验证 OpenClaw 运行环境...' : '重新检测 OpenClaw 运行环境...',
+    missingAfterInstallError: '安装后仍无法检测到',
+    missingAfterInstallMessage: [
+      'OpenClaw 运行环境准备流程已执行，但当前仍无法检测到可用命令。',
+      '这通常表示内置本体释放和 PATH 生效之间仍存在异常。',
+      '请先重启 Mclaw 再试一次。',
+      '如果仍失败，可临时在 PowerShell 中手动执行以下命令之一，再重新打开 Mclaw：',
+      ...OPENCLAW_MANUAL_INSTALL_COMMANDS,
+    ],
+  }
+}
+
+export function resolveGatewayBehavior(): EnvCheckGatewayBehavior {
+  return {
+    deferredCheckingDescription: '当前阶段先跳过 Gateway 运行态检查，完成后续配置后会再次自动确认...',
+    deferredStepVersion: '后续确认',
+    deferredReadyDescription: '完成认证和渠道配置后再确认 Gateway 可用性',
+    resolveContinueLabel: (sharedConfigInitialized: boolean) =>
+      sharedConfigInitialized ? '进入控制面板' : '开始配置',
+  }
+}
+
+export function shouldPrepareMacDeveloperTools(platform?: string): boolean {
+  return resolveEnvCheckPlatformState(platform).shouldPrepareMacDeveloperTools
+}
+
+export function shouldInspectNodeInstallerForPlatform(platform?: string): boolean {
+  return resolveEnvCheckPlatformState(platform).shouldInspectNodeInstaller
+}
+
+export function classifyNodeInstallerFailureForPlatform(
+  platform: string | undefined,
+  rawError: string
+): NodeInstallerIssue {
+  if (isMacPlatform(platform)) {
+    return classifyMacNodeInstallerFailure(rawError)
+  }
+
+  if (platform === 'win32') {
+    return classifyWindowsNodeInstallerFailure(rawError)
+  }
+
+  return createNodeInstallerIssue('installer-failed', rawError)
+}
+
 export function shouldRenderStartupIssueInline(
   issue: Pick<NodeInstallerIssue, 'kind'> | null | undefined,
   platform?: string
 ): boolean {
-  return platform === 'darwin' && issue?.kind === 'xcode-clt-pending'
-}
-
-function isMacDeveloperToolsIssue(
-  issue: Pick<NodeInstallerIssue, 'kind'> | null | undefined
-): boolean {
-  return (
-    issue?.kind === 'xcode-clt-pending' ||
-    issue?.kind === 'git-unavailable' ||
-    issue?.kind === 'developer-tools-prepare-failed'
-  )
+  return isMacPlatform(platform) && issue?.kind === 'xcode-clt-pending'
 }
 
 export async function retryOpenClawLatestVersionCheck(
@@ -334,6 +463,7 @@ interface OpenClawVersionGateState {
   discovery: OpenClawDiscoveryResult | null
   activeCandidate: OpenClawInstallCandidate | null
   upgradeCheck: OpenClawUpgradeCheckResult | null
+  migrationSmoke: OpenClawMigrationSmokeSummary | null
   canUpgrade: boolean
   canAutoCorrect: boolean
   blocksContinue: boolean
@@ -455,11 +585,19 @@ export function buildOpenClawGateState(
   upgradeCheck: OpenClawUpgradeCheckResult | null
 ): OpenClawVersionGateState {
   const activeCandidate = resolveActiveOpenClawCandidate(discovery)
+  const migrationSmoke =
+    activeCandidate && upgradeCheck
+      ? buildOpenClawMigrationSmokeSummary({
+          fromVersion: upgradeCheck.currentVersion || activeCandidate.version,
+          toVersion: upgradeCheck.targetVersion,
+        })
+      : null
   if (!activeCandidate || !upgradeCheck) {
     return {
       discovery,
       activeCandidate: activeCandidate || null,
       upgradeCheck,
+      migrationSmoke,
       canUpgrade: false,
       canAutoCorrect: false,
       blocksContinue: false,
@@ -471,6 +609,7 @@ export function buildOpenClawGateState(
   const needsTakeoverNotice = shouldShowTakeoverNotice(activeCandidate)
   const withTakeoverSuffix = (message: string): string =>
     needsTakeoverNotice ? `${message} 原配置数据不会被覆盖，并会额外进行备份接管。` : message
+  const targetVersionLabel = resolveOpenClawTargetVersionLabel(upgradeCheck.targetVersion)
 
   switch (upgradeCheck.enforcement) {
     case 'optional_upgrade':
@@ -478,12 +617,13 @@ export function buildOpenClawGateState(
         discovery,
         activeCandidate,
         upgradeCheck,
+        migrationSmoke,
         canUpgrade: true,
         canAutoCorrect: false,
         blocksContinue: false,
-        statusLabel: `可升级到 ${upgradeCheck.targetVersion || PINNED_OPENCLAW_VERSION}`,
+        statusLabel: `可升级至 ${targetVersionLabel}`,
         message: withTakeoverSuffix(
-          `当前版本受支持，可按需升级到 ${upgradeCheck.targetVersion || PINNED_OPENCLAW_VERSION}`
+          `当前版本受支持，可按需升级至 ${targetVersionLabel}`
         ),
       }
     case 'auto_correct':
@@ -491,17 +631,18 @@ export function buildOpenClawGateState(
         discovery,
         activeCandidate,
         upgradeCheck,
+        migrationSmoke,
         canUpgrade: false,
         canAutoCorrect: true,
         blocksContinue: true,
         statusLabel:
           upgradeCheck.targetAction === 'downgrade'
-            ? `需回退到 ${upgradeCheck.targetVersion || PINNED_OPENCLAW_VERSION}`
-            : `需升级到 ${upgradeCheck.targetVersion || PINNED_OPENCLAW_VERSION}`,
+            ? `需回退至 ${targetVersionLabel}`
+            : `需升级至 ${targetVersionLabel}`,
         message:
           upgradeCheck.targetAction === 'downgrade'
-            ? `检测到超出支持范围的 OpenClaw 版本，正在自动回退到 ${upgradeCheck.targetVersion || PINNED_OPENCLAW_VERSION}`
-            : `检测到不受支持的 OpenClaw 版本，正在自动升级到 ${upgradeCheck.targetVersion || PINNED_OPENCLAW_VERSION}`,
+            ? `检测到超出支持范围的 OpenClaw 版本，正在自动回退至 ${targetVersionLabel}`
+            : `检测到不受支持的 OpenClaw 版本，正在自动升级至 ${targetVersionLabel}`,
       }
     case 'manual_block':
       if (!upgradeCheck.blocksContinue) {
@@ -509,13 +650,14 @@ export function buildOpenClawGateState(
           discovery,
           activeCandidate,
           upgradeCheck,
+          migrationSmoke,
           canUpgrade: false,
           canAutoCorrect: false,
           blocksContinue: false,
-          statusLabel: `如需升级请手动切换到 ${upgradeCheck.targetVersion || PINNED_OPENCLAW_VERSION}`,
+          statusLabel: `如需升级请手动切换至 ${targetVersionLabel}`,
           message:
             upgradeCheck.manualHint ||
-            `当前版本受支持，可继续使用；如需升级到 ${upgradeCheck.targetVersion || PINNED_OPENCLAW_VERSION}，请在原安装环境中手动处理。`,
+            `当前版本受支持，可继续使用；如需升级至 ${targetVersionLabel}，请在原安装环境中手动处理。`,
           manualHint: upgradeCheck.manualHint,
         }
       }
@@ -523,13 +665,14 @@ export function buildOpenClawGateState(
         discovery,
         activeCandidate,
         upgradeCheck,
+        migrationSmoke,
         canUpgrade: false,
         canAutoCorrect: false,
         blocksContinue: true,
-        statusLabel: `需手动调整到 ${upgradeCheck.targetVersion || PINNED_OPENCLAW_VERSION}`,
+        statusLabel: `需手动调整至 ${targetVersionLabel}`,
         message:
           upgradeCheck.manualHint ||
-          `当前 OpenClaw 版本不在支持范围内，且当前安装来源暂不支持程序内自动纠偏，请先手动调整到 ${upgradeCheck.targetVersion || PINNED_OPENCLAW_VERSION}`,
+          `当前 OpenClaw 版本不在支持范围内，且当前安装来源暂不支持程序内自动纠偏，请先手动调整至 ${targetVersionLabel}`,
         manualHint: upgradeCheck.manualHint,
       }
     case 'none':
@@ -538,6 +681,7 @@ export function buildOpenClawGateState(
         discovery,
         activeCandidate,
         upgradeCheck,
+        migrationSmoke,
         canUpgrade: false,
         canAutoCorrect: false,
         blocksContinue: false,
@@ -557,8 +701,7 @@ export function buildOpenClawAutoCorrectionConsentMessage(
     String(gateState?.upgradeCheck?.currentVersion || '').trim() ||
     String(gateState?.activeCandidate?.version || '').trim() ||
     '未知版本'
-  const targetVersion =
-    String(gateState?.upgradeCheck?.targetVersion || '').trim() || PINNED_OPENCLAW_VERSION
+  const targetVersion = resolveOpenClawTargetVersionLabel(gateState?.upgradeCheck?.targetVersion)
   const action = gateState?.upgradeCheck?.targetAction === 'downgrade' ? '回退' : '升级'
 
   return [
@@ -601,18 +744,18 @@ export function resolveOpenClawSourceBadgeState(
       }
     case 'bundled-fallback':
       return {
-        label: '内置回退',
-        title: '当前未命中内置本体，正在使用安装包内置的回退载荷。',
+        label: '内置补位',
+        title: '当前未命中目标内置 runtime，正在使用安装包内置补位载荷；请检查该平台 runtime 是否缺失、损坏或打包不完整。',
       }
     case 'online-fallback':
       return {
-        label: '在线回退',
-        title: '当前未命中本地载荷，已回退到在线补装路径。',
+        label: '在线兜底',
+        title: '当前未命中本地载荷，已进入在线补装兜底路径。',
       }
     case 'external':
       return {
         label: '外部环境',
-        title: '当前使用的是系统中已有的外部 OpenClaw 安装。',
+        title: '当前使用的是系统中已有的 OpenClaw 运行环境。',
       }
     default:
       break
@@ -623,12 +766,12 @@ export function resolveOpenClawSourceBadgeState(
     case 'npm-global':
       return {
         label: '全局 npm',
-        title: '当前使用的是系统全局 npm 安装的 OpenClaw。',
+        title: '当前使用的是系统全局 npm 安装的 OpenClaw 运行环境。',
       }
     case 'homebrew':
       return {
         label: 'Homebrew',
-        title: '当前使用的是 Homebrew 安装的 OpenClaw。',
+        title: '当前使用的是 Homebrew 安装的 OpenClaw 运行环境。',
       }
     case 'nvm':
     case 'fnm':
@@ -642,7 +785,7 @@ export function resolveOpenClawSourceBadgeState(
     case 'custom':
       return {
         label: '自定义安装',
-        title: '当前使用的是用户自定义路径中的 OpenClaw。',
+        title: '当前使用的是用户自定义路径中的 OpenClaw 运行环境。',
       }
     case 'unknown':
       return {
@@ -671,8 +814,8 @@ export function resolveOpenClawDeliveryNoticeState(
 
   return {
     color: currentMode === 'bundled-fallback' && targetMode === 'bundled-runtime' ? 'yellow' : 'blue',
-    title: '当前交付模式',
-    message: `当前 OpenClaw 内置交付模式为 ${currentMode}，目标模式为 ${targetMode}。这通常意味着当前平台仍在使用过渡交付形态，尚未完全切到目标本体模式。`,
+    title: '运行来源',
+    message: `当前 OpenClaw 交付模式为 ${currentMode}，目标模式为 ${targetMode}。这通常表示当前平台没有命中目标本体路径，或当前安装包中的该平台内置 runtime 载荷缺失、损坏或打包不完整。`,
   }
 }
 
@@ -698,21 +841,203 @@ function formatCancelDomainSummary(domains: string[]): string {
 }
 
 const INITIAL_STEPS: Step[] = [
-  { id: 'node', label: 'Node.js 运行时', description: '扫描或补齐系统 Node.js 依赖', status: 'pending' },
-  { id: 'openclaw', label: 'OpenClaw 核心', description: '尝试释放本地内置 OpenClaw 本体', status: 'pending' },
-  { id: 'gateway', label: 'Gateway 服务', description: '记录后续 Gateway 可用性确认时机', status: 'pending' },
+  { id: 'node', label: 'Node.js 运行时', description: '检查或补齐 Node.js 依赖', status: 'pending' },
+  { id: 'openclaw', label: 'OpenClaw 核心', description: '优先释放内置 OpenClaw 本体', status: 'pending' },
+  { id: 'gateway', label: 'Gateway 服务', description: '记录后续 Gateway 确认时机', status: 'pending' },
 ]
 
 function createInitialSteps(): Step[] {
   return INITIAL_STEPS.map((step) => ({ ...step }))
 }
 
-function buildDeferredGatewayStepState(): Pick<Step, 'status' | 'version' | 'description' | 'progress'> {
+export function resolveGatewayDeferredStepState(
+  gatewayBehavior: EnvCheckGatewayBehavior = resolveGatewayBehavior()
+): EnvCheckGatewayDeferredStepState {
   return {
     status: 'ok',
-    version: '后续确认',
-    description: '认证和渠道配置完成后再确认 Gateway 可用性',
+    version: gatewayBehavior.deferredStepVersion,
+    description: gatewayBehavior.deferredReadyDescription,
     progress: 100,
+  }
+}
+
+export function createEnvCheckReadyPayload(options: {
+  hadOpenClawInstalled: boolean
+  installedOpenClawDuringCheck: boolean
+  sharedConfigInitialized: boolean
+  discoveryResult: OpenClawDiscoveryResult | null
+}): EnvCheckReadyPayload {
+  return {
+    hadOpenClawInstalled: options.hadOpenClawInstalled,
+    installedOpenClawDuringCheck: options.installedOpenClawDuringCheck,
+    gatewayRunning: false,
+    sharedConfigInitialized: options.sharedConfigInitialized,
+    discoveryResult: options.discoveryResult,
+  }
+}
+
+export interface EnvCheckNodeCheckState {
+  requiredVersion: string
+  targetVersion: string
+  needNode: boolean
+  nodeNeedsUpgrade: boolean
+}
+
+export function resolveEnvCheckNodeCheckState(
+  nodeResult: EnvCheckNodeCheckResultLike,
+  fallbackRequiredVersion: string = MIN_NODE_VERSION
+): EnvCheckNodeCheckState {
+  return {
+    requiredVersion: nodeResult.requiredVersion || fallbackRequiredVersion,
+    targetVersion: nodeResult.targetVersion || '',
+    needNode: !nodeResult.installed,
+    nodeNeedsUpgrade: nodeResult.installed && nodeResult.needsUpgrade,
+  }
+}
+
+export interface EnvCheckNodeStepState
+  extends Pick<Step, 'status' | 'version' | 'description' | 'progress'> {
+  latestNodeVersion: string
+  blocksContinue: boolean
+}
+
+export interface EnvCheckNodeInstallPrepState
+  extends Pick<Step, 'status' | 'description' | 'progress'> {
+  shouldDownloadInstaller: boolean
+}
+
+export interface EnvCheckNodePostInstallRecheckState {
+  refreshStep: Pick<Step, 'status' | 'description' | 'progress'>
+  recheckStep: Pick<Step, 'status' | 'description' | 'progress'>
+  successStep: Pick<Step, 'status' | 'version' | 'description' | 'progress'>
+  failureStep: Pick<Step, 'status' | 'error'>
+  failureIssueKind: NodeInstallerIssueKind
+  failureMessage: string
+}
+
+export function resolveEnvCheckNodeStepState(options: {
+  nodeResult: Pick<EnvCheckNodeCheckResultLike, 'installed' | 'version'>
+  nodeCheckState: EnvCheckNodeCheckState
+  nodeInstallBehavior?: Pick<EnvCheckNodeInstallPlatformBehavior, 'installedDescription'>
+}): EnvCheckNodeStepState {
+  const nodeInstallBehavior = options.nodeInstallBehavior || resolveNodeInstallPlatformBehavior()
+  const latestNodeVersion = options.nodeCheckState.targetVersion || ''
+
+  if (options.nodeCheckState.needNode) {
+    return {
+      status: 'pending-install',
+      description: '未检测到 Node.js，系统将自动安装官方最新稳定版',
+      progress: 20,
+      latestNodeVersion,
+      blocksContinue: false,
+    }
+  }
+
+  if (options.nodeCheckState.nodeNeedsUpgrade) {
+    return {
+      status: 'pending-install',
+      version: options.nodeResult.version,
+      description: `OpenClaw 需要 Node.js ${options.nodeCheckState.requiredVersion} 或更高版本。当前版本过低，请先手动升级 Node.js 后再继续。`,
+      progress: 20,
+      latestNodeVersion,
+      blocksContinue: true,
+    }
+  }
+
+  return {
+    status: 'ok',
+    version: options.nodeResult.version,
+    description: nodeInstallBehavior.installedDescription,
+    progress: 100,
+    latestNodeVersion: '',
+    blocksContinue: false,
+  }
+}
+
+export function resolveEnvCheckNodeInstallPrepState(options: {
+  needNode: boolean
+  installStrategy?: 'nvm' | 'installer'
+  targetNodeVersion: string
+}): EnvCheckNodeInstallPrepState | null {
+  if (!options.needNode) return null
+
+  const shouldDownloadInstaller = options.installStrategy !== 'nvm'
+  if (shouldDownloadInstaller) {
+    return {
+      status: 'installing',
+      description: `正在下载 Node.js ${options.targetNodeVersion}...`,
+      progress: 35,
+      shouldDownloadInstaller: true,
+    }
+  }
+
+  return {
+    status: 'installing',
+    description: `正在通过 nvm 准备 Node.js ${options.targetNodeVersion}...`,
+    progress: 45,
+    shouldDownloadInstaller: false,
+  }
+}
+
+export function resolveEnvCheckNodePostInstallRecheckState(options: {
+  nodeInstallBehavior?: Pick<
+    EnvCheckNodeInstallPlatformBehavior,
+    'refreshDescription' | 'recheckDescription' | 'installedDescription' | 'missingAfterInstallError' | 'missingAfterInstallMessage'
+  >
+  newNodeResultVersion?: string
+}): EnvCheckNodePostInstallRecheckState {
+  const nodeInstallBehavior = options.nodeInstallBehavior || resolveNodeInstallPlatformBehavior()
+  return {
+    refreshStep: {
+      status: 'checking',
+      description: nodeInstallBehavior.refreshDescription,
+      progress: 80,
+    },
+    recheckStep: {
+      status: 'checking',
+      description: nodeInstallBehavior.recheckDescription,
+      progress: 85,
+    },
+    successStep: {
+      status: 'ok',
+      version: options.newNodeResultVersion,
+      description: nodeInstallBehavior.installedDescription,
+      progress: 90,
+    },
+    failureStep: {
+      status: 'error',
+      error: nodeInstallBehavior.missingAfterInstallError,
+    },
+    failureIssueKind: 'installer-failed',
+    failureMessage: nodeInstallBehavior.missingAfterInstallMessage,
+  }
+}
+
+export interface EnvCheckFinalizeState {
+  gatewayStep: EnvCheckGatewayDeferredStepState
+  progress: number
+  isRunning: boolean
+  readyPayload: EnvCheckReadyPayload
+}
+
+export function resolveEnvCheckFinalizeState(options: {
+  gatewayBehavior?: EnvCheckGatewayBehavior
+  hadOpenClawInstalled: boolean
+  installedOpenClawDuringCheck: boolean
+  sharedConfigInitialized: boolean
+  discoveryResult: OpenClawDiscoveryResult | null
+}): EnvCheckFinalizeState {
+  const gatewayBehavior = options.gatewayBehavior || resolveGatewayBehavior()
+  return {
+    gatewayStep: resolveGatewayDeferredStepState(gatewayBehavior),
+    progress: 100,
+    isRunning: false,
+    readyPayload: createEnvCheckReadyPayload({
+      hadOpenClawInstalled: options.hadOpenClawInstalled,
+      installedOpenClawDuringCheck: options.installedOpenClawDuringCheck,
+      sharedConfigInitialized: options.sharedConfigInitialized,
+      discoveryResult: options.discoveryResult,
+    }),
   }
 }
 
@@ -779,8 +1104,8 @@ function StartupIssueDialog({
   onRestart: () => void
   platform: string
 }) {
-  const showXcodeInstallHint = platform === 'darwin' && issue.kind === 'xcode-clt-pending'
-  const restartLabel = showXcodeInstallHint ? '重试识别' : '继续安装'
+  const showXcodeInstallHint = isMacPlatform(platform) && issue.kind === 'xcode-clt-pending'
+  const restartLabel = showXcodeInstallHint ? '重试识别' : '重新执行准备流程'
   const restartColor = showXcodeInstallHint ? 'brand' : 'red'
 
   return (
@@ -945,6 +1270,11 @@ export default function EnvCheck({
   const openClawDeliveryNotice = resolveOpenClawDeliveryNoticeState(openClawGateState?.discovery)
   const [pluginRepairNoticeVisible, setPluginRepairNoticeVisible] = useState(Boolean(pluginRepairResult?.repaired))
   const [pluginRepairErrorVisible, setPluginRepairErrorVisible] = useState(Boolean(pluginRepairErrorSummary))
+  const currentPlatform = window.api.platform
+  const platformState = resolveEnvCheckPlatformState(currentPlatform)
+  const nodeInstallPlatformBehavior = resolveNodeInstallPlatformBehavior(currentPlatform)
+  const openClawInstallBehavior = resolveOpenClawInstallBehavior()
+  const gatewayBehavior = resolveGatewayBehavior()
 
   useEffect(() => {
     setPluginRepairNoticeVisible(Boolean(pluginRepairResult?.repaired))
@@ -1449,8 +1779,8 @@ export default function EnvCheck({
 
         installerPath = downloadResult.path
 
-        // 3. macOS 安装前校验
-        if (window.api.platform === 'darwin') {
+        // 3. 平台专属安装包校验（当前仅 macOS 需要）
+        if (nodeInstallPlatformBehavior.shouldInspectNodeInstaller) {
           updateStep('node', { description: '正在校验安装包...', progress: 40 })
           const inspection = await window.api.inspectNodeInstaller(installerPath)
           if (!inspection.ok && inspection.issue) {
@@ -1473,11 +1803,17 @@ export default function EnvCheck({
       }
 
       // 5. 刷新环境变量
-      updateStep('node', { description: '正在刷新环境变量...', progress: 80 })
+      updateStep('node', {
+        description: nodeInstallPlatformBehavior.refreshDescription,
+        progress: 80,
+      })
       await window.api.refreshEnvironment()
 
       // 6. 重新检测
-      updateStep('node', { description: '正在验证安装...', progress: 90 })
+      updateStep('node', {
+        description: nodeInstallPlatformBehavior.recheckDescription,
+        progress: 90,
+      })
       const recheckResult = await window.api.checkNode()
       const requiredNodeVersion = recheckResult.requiredVersion || nodeRequiredVersion
 
@@ -1487,7 +1823,7 @@ export default function EnvCheck({
         setIsRunning(false)
         resetEnvCheck(runAttempt)
       } else {
-        throw new Error(`升级后版本仍低于要求（当前: ${recheckResult.version}，要求: >= ${requiredNodeVersion}）`)
+        throw new Error(`升级后版本仍未满足要求（当前: ${recheckResult.version}，要求: >= ${requiredNodeVersion}）`)
       }
     } catch (error) {
       updateStep('node', {
@@ -1534,7 +1870,7 @@ export default function EnvCheck({
 
     try {
       kickoffStartupPluginRepair(onEnsurePluginRepairReady)
-      if (window.api.platform === 'darwin') {
+      if (nodeInstallPlatformBehavior.shouldPrepareMacDeveloperTools) {
         updateStep('node', {
           status: 'checking',
           description: '正在检查 Git 与 Xcode Command Line Tools...',
@@ -1567,11 +1903,12 @@ export default function EnvCheck({
     updateStep('node', { status: 'checking', description: '正在检查 Node.js...', progress: 10 })
     await delay(envCheckTiming.transitionStandardMs)
     const nodeResult = await window.api.checkNode()
-    const requiredNodeVersion = nodeResult.requiredVersion || MIN_NODE_VERSION
+    const nodeCheckState = resolveEnvCheckNodeCheckState(nodeResult, MIN_NODE_VERSION)
+    const requiredNodeVersion = nodeCheckState.requiredVersion
     setNodeRequiredVersion(requiredNodeVersion)
     setNodeInstallStrategy(nodeResult.installStrategy)
-    const nodeNeedsUpgrade = nodeResult.installed && nodeResult.needsUpgrade
-    const needNode = !nodeResult.installed
+    const nodeNeedsUpgrade = nodeCheckState.nodeNeedsUpgrade
+    const needNode = nodeCheckState.needNode
     let nodeInstallPlan = null
     if (needNode) {
       try {
@@ -1584,34 +1921,29 @@ export default function EnvCheck({
         return
       }
     }
-    const targetNodeVersion = nodeInstallPlan?.version || nodeResult.targetVersion
+    const targetNodeVersion = nodeInstallPlan?.version || nodeCheckState.targetVersion
 
     // 显示检测结果（无论是否安装，都先显示检测结果）
-    if (!nodeResult.installed) {
-      setLatestNodeVersion(targetNodeVersion || '')
-      updateStep('node', {
-        status: 'pending-install',
-        description: '未检测到 Node.js，系统将自动安装官方最新稳定版',
-        progress: 20,
-      })
-    } else if (nodeNeedsUpgrade) {
-      setLatestNodeVersion(targetNodeVersion || '')
-      updateStep('node', {
-        status: 'pending-install',
-        version: nodeResult.version,
-        description: `OpenClaw 需要 Node.js ${requiredNodeVersion} 或更高版本。 当前版本过低，请手动升级后再继续。`,
-        progress: 20,
-      })
+    const nodeStepState = resolveEnvCheckNodeStepState({
+      nodeResult,
+      nodeCheckState: {
+        ...nodeCheckState,
+        targetVersion: targetNodeVersion,
+      },
+      nodeInstallBehavior: nodeInstallPlatformBehavior,
+    })
+    setLatestNodeVersion(nodeStepState.latestNodeVersion)
+    updateStep('node', {
+      status: nodeStepState.status,
+      version: nodeStepState.version,
+      description: nodeStepState.description,
+      progress: nodeStepState.progress,
+    })
+    if (nodeStepState.blocksContinue) {
       setIsRunning(false)
       return
-    } else {
-      setLatestNodeVersion('')
-      updateStep('node', {
-        status: 'ok',
-        version: nodeResult.version,
-        description: '已安装',
-        progress: 100
-      })
+    }
+    if (nodeStepState.status === 'ok') {
       setCurrentStep(1)
     }
 
@@ -1655,7 +1987,12 @@ export default function EnvCheck({
         progress: needNode ? 30 : 25,
       })
     } else {
-      updateStep('openclaw', { status: 'ok', version: openclawResult.version, description: '已安装', progress: 100 })
+      updateStep('openclaw', {
+        status: 'ok',
+        version: openclawResult.version,
+        description: openClawInstallBehavior.installedDescription,
+        progress: 100,
+      })
       setCurrentStep(2)
     }
 
@@ -1665,36 +2002,38 @@ export default function EnvCheck({
       await delay(envCheckTiming.transitionStandardMs)
       updateStep('gateway', {
         status: 'checking',
-        description: '当前阶段跳过 Gateway 运行态检查，后续流程会自动确认...',
+        description: gatewayBehavior.deferredCheckingDescription,
         progress: 0,
       })
       await delay(envCheckTiming.transitionStandardMs)
       const sharedConfigInitialized = await readSharedConfigInitialized()
-      updateStep('gateway', buildDeferredGatewayStepState())
-      setProgress(100)
-      await delay(envCheckTiming.transitionSettleMs)
-      setIsRunning(false)
-      setReadyPayload({
+      const finalizeState = resolveEnvCheckFinalizeState({
+        gatewayBehavior,
         hadOpenClawInstalled,
         installedOpenClawDuringCheck: false,
-        gatewayRunning: false,
         sharedConfigInitialized,
         discoveryResult: gateState?.discovery || initialDiscovery || null,
       })
+      updateStep('gateway', finalizeState.gatewayStep)
+      setProgress(finalizeState.progress)
+      await delay(envCheckTiming.transitionSettleMs)
+      setIsRunning(finalizeState.isRunning)
+      setReadyPayload(finalizeState.readyPayload)
       return
     }
 
     // 需要安装，准备安装参数
     let nodeInstallerPath: string | undefined
-    const shouldDownloadNodeInstaller = needNode && nodeResult.installStrategy !== 'nvm'
+    const nodeInstallPrepState = resolveEnvCheckNodeInstallPrepState({
+      needNode,
+      installStrategy: nodeResult.installStrategy,
+      targetNodeVersion,
+    })
+    const shouldDownloadNodeInstaller = nodeInstallPrepState?.shouldDownloadInstaller || false
 
-    if (needNode) {
+    if (nodeInstallPrepState) {
       if (shouldDownloadNodeInstaller) {
-        updateStep('node', {
-          status: 'installing',
-          description: `正在下载 Node.js ${targetNodeVersion}...`,
-          progress: 35,
-        })
+        updateStep('node', nodeInstallPrepState)
         const downloadResult = await window.api.downloadNodeInstaller(nodeInstallPlan || undefined)
         if (!downloadResult.ok) {
           const issue = classifyNodeInstallerDownloadFailure(downloadResult.error || '')
@@ -1706,7 +2045,7 @@ export default function EnvCheck({
         }
         nodeInstallerPath = downloadResult.path
 
-        if (window.api.platform === 'darwin') {
+        if (nodeInstallPlatformBehavior.shouldInspectNodeInstaller) {
           const readiness = await window.api.inspectNodeInstaller(nodeInstallerPath)
           if (!readiness.ok && readiness.issue) {
             updateStep('node', { status: 'error', error: readiness.issue.title })
@@ -1719,11 +2058,7 @@ export default function EnvCheck({
 
         updateStep('node', { status: 'installing', description: '等待安装...', progress: 45 })
       } else {
-        updateStep('node', {
-          status: 'installing',
-          description: `正在通过 nvm 准备 Node.js ${targetNodeVersion}...`,
-          progress: 45,
-        })
+        updateStep('node', nodeInstallPrepState)
       }
     }
 
@@ -1756,10 +2091,7 @@ export default function EnvCheck({
     if (!installResult.ok) {
       const errDetail = installResult.stderr || installResult.stdout || '未知错误'
       if (needNode) {
-        const issue =
-          window.api.platform === 'darwin'
-            ? classifyMacNodeInstallerFailure(errDetail)
-            : createNodeInstallerIssue('installer-failed', errDetail)
+        const issue = nodeInstallPlatformBehavior.classifyInstallerFailure(errDetail)
         updateStep('node', { status: 'error', error: '安装失败' })
         showFatalIssue(issue)
         showStartupIssue(issue)
@@ -1775,57 +2107,71 @@ export default function EnvCheck({
     }
 
     if (installProgressStepId === 'node') {
-      updateStep('node', { status: 'installing', description: '安装完成', progress: 75 })
+      updateStep('node', {
+        status: 'installing',
+        description: nodeInstallPlatformBehavior.installCompletedDescription,
+        progress: 75,
+      })
     }
 
     // 重新检测
     if (needNode) {
+      const nodePostInstallRecheckState = resolveEnvCheckNodePostInstallRecheckState({
+        nodeInstallBehavior: nodeInstallPlatformBehavior,
+      })
       // 先刷新环境变量，获取最新的 PATH
-      updateStep('node', { status: 'checking', description: '刷新环境变量...', progress: 80 })
+      updateStep('node', nodePostInstallRecheckState.refreshStep)
       await window.api.refreshEnvironment()
       await delay(envCheckTiming.transitionStandardMs)
 
-      updateStep('node', { status: 'checking', description: '重新检测 Node.js...', progress: 85 })
+      updateStep('node', nodePostInstallRecheckState.recheckStep)
       const newNodeResult = await window.api.checkNode()
       if (!newNodeResult.installed) {
-        updateStep('node', {
-          status: 'error',
-          error: '安装后仍无法检测到',
-        })
+        updateStep('node', nodePostInstallRecheckState.failureStep)
         showFatalMessage(
-          'Node.js 安装后仍无法检测到。请重启应用或手动安装。',
-          'installer-failed'
+          nodePostInstallRecheckState.failureMessage,
+          nodePostInstallRecheckState.failureIssueKind
         )
         setIsRunning(false)
         return
       }
-      updateStep('node', { status: 'ok', version: newNodeResult.version, description: '已安装', progress: 90 })
+      updateStep('node', {
+        ...nodePostInstallRecheckState.successStep,
+        version: newNodeResult.version,
+      })
       setCurrentStep(1)
     }
 
     if (shouldInstallOpenClawRuntime) {
-      updateStep('openclaw', { status: 'checking', description: '刷新环境变量...', progress: 85 })
+      updateStep('openclaw', {
+        status: 'checking',
+        description: openClawInstallBehavior.refreshDescription,
+        progress: 85,
+      })
       await window.api.refreshEnvironment()
       await delay(envCheckTiming.transitionStandardMs)
 
       updateStep('openclaw', {
         status: 'checking',
-        description: needOpenClawRuntimeRecovery ? '正在验证 OpenClaw 运行环境...' : '重新检测 OpenClaw 运行环境...',
+        description: openClawInstallBehavior.resolveRecheckDescription(needOpenClawRuntimeRecovery),
         progress: 90,
       })
       const newOpenclawResult = await window.api.checkOpenClaw()
       if (!newOpenclawResult.installed) {
-        updateStep('openclaw', { status: 'error', error: '安装后仍无法检测到' })
-        showFatalMessage([
-          'OpenClaw 运行环境准备流程已执行，但当前仍无法检测到可用命令。',
-          '请先重启 Mclaw 再试一次。',
-          '如果仍失败，请在 PowerShell 中手动执行以下命令之一后重新打开 Mclaw：',
-          ...OPENCLAW_MANUAL_INSTALL_COMMANDS,
-        ].join('\n'))
+        updateStep('openclaw', {
+          status: 'error',
+          error: openClawInstallBehavior.missingAfterInstallError,
+        })
+        showFatalMessage(openClawInstallBehavior.missingAfterInstallMessage.join('\n'))
         setIsRunning(false)
         return
       }
-      updateStep('openclaw', { status: 'ok', version: newOpenclawResult.version, description: '已安装', progress: 95 })
+      updateStep('openclaw', {
+        status: 'ok',
+        version: newOpenclawResult.version,
+        description: openClawInstallBehavior.installedDescription,
+        progress: 95,
+      })
       setCurrentStep(2)
     }
 
@@ -1849,24 +2195,25 @@ export default function EnvCheck({
     // 第三步：记录 Gateway 会在后续配置完成后再确认
     updateStep('gateway', {
       status: 'checking',
-      description: '当前阶段跳过 Gateway 运行态检查，后续流程会自动确认...',
+      description: gatewayBehavior.deferredCheckingDescription,
       progress: 0,
     })
     await delay(envCheckTiming.transitionStandardMs)
 
     const sharedConfigInitialized = await readSharedConfigInitialized()
-    updateStep('gateway', buildDeferredGatewayStepState())
-
-    setProgress(100)
-    await delay(envCheckTiming.transitionSettleMs)
-    setIsRunning(false)
-    setReadyPayload({
+    const finalizeState = resolveEnvCheckFinalizeState({
+      gatewayBehavior,
       hadOpenClawInstalled,
       installedOpenClawDuringCheck: shouldInstallOpenClawRuntime,
-      gatewayRunning: false,
       sharedConfigInitialized,
       discoveryResult: finalDiscoveryResult,
     })
+    updateStep('gateway', finalizeState.gatewayStep)
+
+    setProgress(finalizeState.progress)
+    await delay(envCheckTiming.transitionSettleMs)
+    setIsRunning(finalizeState.isRunning)
+    setReadyPayload(finalizeState.readyPayload)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       showFatalMessage(`环境检测过程中发生异常：${message}`)
@@ -1876,7 +2223,8 @@ export default function EnvCheck({
 
   const fatalSupportActions = getEnvCheckSupportActionsForIssueKind(fatalIssue?.issueKind)
   const startupSupportActions = getEnvCheckSupportActionsForIssueKind(startupIssuePrompt?.kind)
-  const showInlineStartupIssue = shouldRenderStartupIssueInline(startupIssuePrompt, window.api.platform)
+  const showInlineStartupIssue = shouldRenderStartupIssueInline(startupIssuePrompt, currentPlatform)
+  const openClawMigrationSmoke = openClawGateState?.migrationSmoke || null
   const StatusIcon = ({ status }: { status: StepStatus }) => {
     switch (status) {
       case 'pending':
@@ -1958,7 +2306,7 @@ export default function EnvCheck({
           color="yellow"
           variant="light"
           mb="sm"
-          title="已自动隔离坏插件"
+        title="已自动隔离异常插件"
           withCloseButton
           onClose={() => setPluginRepairNoticeVisible(false)}
         >
@@ -1973,7 +2321,7 @@ export default function EnvCheck({
           color="red"
           variant="light"
           mb="sm"
-          title="坏插件环境修复失败"
+        title="插件环境修复失败"
           withCloseButton
           onClose={() => setPluginRepairErrorVisible(false)}
         >
@@ -2124,7 +2472,7 @@ export default function EnvCheck({
         <div className="mb-4 rounded-lg p-3" style={{ backgroundColor: 'var(--app-bg-inset)', border: '1px solid var(--mantine-color-red-5)' }}>
           {openClawSourceBadge && (
             <Text size="xs" c="dimmed" mb="xs">
-              当前来源：{openClawSourceBadge.label}
+              OpenClaw 来源：{openClawSourceBadge.label}
             </Text>
           )}
           <Text size="xs" c="red">{openClawUpgradeError}</Text>
@@ -2135,12 +2483,12 @@ export default function EnvCheck({
         <Alert
           color="yellow"
           variant="light"
-          title="OpenClaw 需要手动调整版本"
+          title="OpenClaw 需要手动处理版本"
           mb="sm"
         >
           {openClawSourceBadge && (
             <Text size="xs" c="dimmed" mb="xs">
-              当前来源：{openClawSourceBadge.label}
+              OpenClaw 来源：{openClawSourceBadge.label}
             </Text>
           )}
           <Text size="xs" c="dimmed">{openClawGateState.manualHint}</Text>
@@ -2158,6 +2506,35 @@ export default function EnvCheck({
         </Alert>
       )}
 
+      {!isRunning && !fatalIssue && !startupIssuePrompt && readyPayload && openClawMigrationSmoke && (
+        <Alert
+          color={openClawMigrationSmoke.requiresConservativeMode ? 'yellow' : 'blue'}
+          variant="light"
+          title="OpenClaw 迁移 Smoke"
+          mb="sm"
+        >
+          {openClawSourceBadge && (
+            <Text size="xs" c="dimmed" mb="xs">
+              OpenClaw 来源：{openClawSourceBadge.label}
+            </Text>
+          )}
+          <Text size="xs" c="dimmed">
+            迁移路径：{openClawMigrationSmoke.migrationPath}；baseline backup：
+            {openClawMigrationSmoke.needsBaselineBackup ? '需要' : '不需要'}；保守兼容模式：
+            {openClawMigrationSmoke.requiresConservativeMode ? '需要' : '不需要'}。
+          </Text>
+          <Text size="xs" c="dimmed" mt="xs">
+            记忆目录审计：{openClawMigrationSmoke.memoryAuditRequired ? '需要' : '不需要'}；Agent 协同审计：
+            {openClawMigrationSmoke.agentAuditRequired ? '需要' : '不需要'}。
+          </Text>
+          {openClawMigrationSmoke.recommendedChecks.map((item) => (
+            <Text key={item} size="xs" c="dimmed" mt="xs">
+              {item}
+            </Text>
+          ))}
+        </Alert>
+      )}
+
       {showInlineStartupIssue && startupIssuePrompt && (
         <div
           className="mb-4 rounded-lg p-3"
@@ -2168,11 +2545,6 @@ export default function EnvCheck({
         >
           <Text size="sm" fw={500}>{startupIssuePrompt.title}</Text>
           <Text size="xs" c="dimmed" mt="xs">{startupIssuePrompt.message}</Text>
-          {window.api.platform !== 'darwin' && isMacDeveloperToolsIssue(startupIssuePrompt) && (
-            <Text size="xs" c="yellow" mt="xs">
-              当前问题属于 macOS 专属开发者工具预检；在 Windows 上不应进入该分支，请继续检查平台条件分流。
-            </Text>
-          )}
           <div className="mt-3 flex flex-wrap gap-2">
             <Button size="sm" color="brand" radius="md" onClick={handleRestartEnvCheck}>
               重试识别
@@ -2209,7 +2581,7 @@ export default function EnvCheck({
         <div className="rounded-lg p-3" style={{ backgroundColor: 'var(--app-bg-inset)', border: '1px solid var(--mantine-color-red-5)' }}>
           {openClawSourceBadge && (
             <Text size="xs" c="dimmed" mb="xs">
-              当前来源：{openClawSourceBadge.label}
+              OpenClaw 来源：{openClawSourceBadge.label}
             </Text>
           )}
           <Text size="xs" c="red" mb="xs">{fatalIssue.message}</Text>
@@ -2223,7 +2595,7 @@ export default function EnvCheck({
             color="red"
             radius="md"
           >
-            继续安装
+            重新执行准备流程
           </Button>
           {historyOnlyRecoveryFailure && (
             <Button
@@ -2263,7 +2635,7 @@ export default function EnvCheck({
           supportActions={startupSupportActions}
           onClose={closeStartupIssue}
           onRestart={handleRestartEnvCheck}
-          platform={window.api.platform}
+          platform={currentPlatform}
         />
       )}
 
@@ -2281,7 +2653,7 @@ export default function EnvCheck({
         >
           <div className="space-y-4">
             <Text size="sm">
-              请确认你已经完成手动备份，再继续恢复历史 OpenClaw 运行环境。
+              请确认你已经完成手动备份，再继续恢复并接管历史 OpenClaw 运行环境。
             </Text>
             <Text size="xs" c="dimmed">
               {formatTakeoverFailureManualBackupWarning(historyOnlyRecoveryFailure.failure)}
@@ -2313,20 +2685,20 @@ export default function EnvCheck({
         <Alert
           color="yellow"
           variant="light"
-          title="历史 OpenClaw 自动备份失败"
+          title="历史 OpenClaw 备份失败"
           mb="sm"
           styles={{ title: { fontSize: 'var(--mantine-font-size-sm)' } }}
         >
           {openClawSourceBadge && (
             <Text size="xs" c="dimmed" mb="xs">
-              当前来源：{openClawSourceBadge.label}
+              OpenClaw 来源：{openClawSourceBadge.label}
             </Text>
           )}
           <Text size="xs" c="dimmed">
             {formatTakeoverFailureManualBackupWarning(activeTakeoverFailure)}
           </Text>
           <Text size="xs" c="dimmed" mt="xs">
-            为了避免在没有兜底备份的情况下直接接管旧安装，Mclaw 先阻止进入控制面板。你可以重试自动备份；如果已经按上面的路径完成手动备份，也可以继续接管。
+            为了避免在没有兜底备份的情况下直接接管旧安装，Mclaw 暂时阻止进入控制面板。你可以先重试自动备份；如果已经按上面的路径完成手动备份，也可以继续接管。
           </Text>
           {activeTakeoverFailure.message && activeTakeoverFailure.message !== '自动备份失败，请稍后重试。' && (
             <Text size="xs" c="yellow" mt="xs">
@@ -2342,7 +2714,7 @@ export default function EnvCheck({
               loading={retryingTakeoverCandidateId === activeTakeoverFailure.candidateId}
               disabled={acknowledgingManualBackup}
             >
-              重试备份
+              重新备份
             </Button>
             <Button
               size="xs"
@@ -2351,7 +2723,7 @@ export default function EnvCheck({
               loading={acknowledgingManualBackup}
               disabled={retryingTakeoverCandidateId === activeTakeoverFailure.candidateId}
             >
-              我已手动备份，继续
+              我已手动备份，继续接管
             </Button>
           </div>
         </Alert>
@@ -2366,7 +2738,7 @@ export default function EnvCheck({
           radius="md"
           disabled={!canContinueWithOpenClawGate(openClawGateState, activeTakeoverBackupBlocked)}
         >
-          {readyPayload.sharedConfigInitialized ? '进入控制面板' : '开始配置'}
+          {gatewayBehavior.resolveContinueLabel(readyPayload.sharedConfigInitialized)}
         </Button>
       )}
 

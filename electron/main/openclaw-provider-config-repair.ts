@@ -10,6 +10,8 @@ function cloneJsonValue<T>(value: T): T {
 const MINIMAX_PORTAL_PROVIDER_ID = 'minimax-portal'
 const MINIMAX_PORTAL_PROVIDER_API = 'anthropic-messages'
 const MINIMAX_PORTAL_PROVIDER_API_JSON_PATH = '$.models.providers.minimax-portal.api'
+const CUSTOM_OPENAI_PROVIDER_ID = 'custom-openai'
+const CUSTOM_OPENAI_ENABLED_JSON_PATH = '$.models.providers.custom-openai.enabled'
 
 export interface OpenClawProviderConfigRepairResult {
   changed: boolean
@@ -28,36 +30,55 @@ export function repairKnownProviderConfigGaps(
     }
   }
 
-  const providerConfig = config.models?.providers?.[MINIMAX_PORTAL_PROVIDER_ID]
-  if (!isPlainObject(providerConfig)) {
+  let changed = false
+  let nextConfig: Record<string, any> = config
+  const repairedJsonPaths: string[] = []
+
+  const minimaxProviderConfig = config.models?.providers?.[MINIMAX_PORTAL_PROVIDER_ID]
+  if (isPlainObject(minimaxProviderConfig)) {
+    const currentApi = String(minimaxProviderConfig.api || '').trim()
+    if (!currentApi) {
+      nextConfig = changed ? nextConfig : cloneJsonValue(config)
+      nextConfig.models = isPlainObject(nextConfig.models) ? nextConfig.models : {}
+      nextConfig.models.providers = isPlainObject(nextConfig.models.providers) ? nextConfig.models.providers : {}
+      nextConfig.models.providers[MINIMAX_PORTAL_PROVIDER_ID] = {
+        ...minimaxProviderConfig,
+        api: MINIMAX_PORTAL_PROVIDER_API,
+      }
+      changed = true
+      repairedJsonPaths.push(MINIMAX_PORTAL_PROVIDER_API_JSON_PATH)
+    }
+  }
+
+  const customOpenAiProviderConfig = config.models?.providers?.[CUSTOM_OPENAI_PROVIDER_ID]
+  if (
+    isPlainObject(customOpenAiProviderConfig)
+    && Object.prototype.hasOwnProperty.call(customOpenAiProviderConfig, 'enabled')
+  ) {
+    nextConfig = changed ? nextConfig : cloneJsonValue(config)
+    nextConfig.models = isPlainObject(nextConfig.models) ? nextConfig.models : {}
+    nextConfig.models.providers = isPlainObject(nextConfig.models.providers) ? nextConfig.models.providers : {}
+    const nextCustomOpenAiProviderConfig = {
+      ...nextConfig.models.providers[CUSTOM_OPENAI_PROVIDER_ID],
+    }
+    delete nextCustomOpenAiProviderConfig.enabled
+    nextConfig.models.providers[CUSTOM_OPENAI_PROVIDER_ID] = nextCustomOpenAiProviderConfig
+    changed = true
+    repairedJsonPaths.push(CUSTOM_OPENAI_ENABLED_JSON_PATH)
+  }
+
+  if (!changed) {
     return {
       changed: false,
       config,
       repairedJsonPaths: [],
     }
-  }
-
-  const currentApi = String(providerConfig.api || '').trim()
-  if (currentApi) {
-    return {
-      changed: false,
-      config,
-      repairedJsonPaths: [],
-    }
-  }
-
-  const nextConfig = cloneJsonValue(config)
-  nextConfig.models = isPlainObject(nextConfig.models) ? nextConfig.models : {}
-  nextConfig.models.providers = isPlainObject(nextConfig.models.providers) ? nextConfig.models.providers : {}
-  nextConfig.models.providers[MINIMAX_PORTAL_PROVIDER_ID] = {
-    ...providerConfig,
-    api: MINIMAX_PORTAL_PROVIDER_API,
   }
 
   return {
     changed: true,
     config: nextConfig,
-    repairedJsonPaths: [MINIMAX_PORTAL_PROVIDER_API_JSON_PATH],
+    repairedJsonPaths,
   }
 }
 
@@ -74,4 +95,3 @@ export async function repairKnownProviderConfigGapsOnDisk(params: {
   await params.writeConfig(repairResult.config)
   return repairResult
 }
-

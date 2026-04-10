@@ -25,7 +25,7 @@ export interface FeishuInstallTutorialStep {
 export const FEISHU_INSTALL_TUTORIAL_STEPS: FeishuInstallTutorialStep[] = [
   {
     title: '第 1 步：进入渠道配置',
-    description: '在 Qclaw Lite 向导中进入「连接 IM 渠道」步骤，点击顶部「飞书」标签页。',
+    description: '在 Mclaw 向导中进入「连接 IM 渠道」步骤，点击顶部「飞书」标签页。',
     images: [
       {
         alt: '飞书步骤 1 图 1：进入 IM 渠道页并点击添加渠道',
@@ -93,12 +93,12 @@ export const FEISHU_INSTALL_TUTORIAL_STEPS: FeishuInstallTutorialStep[] = [
     note: '如果审核需要较长时间，可以先跳过，之后再回来完成配对。',
   },
   {
-    title: '第 6 步：完成配置',
-    description: '回到 Qclaw Lite，点击「完成配置」按钮。',
+    title: '第 6 步：完成机器人配置',
+    description: '回到 Mclaw，点击「完成机器人配置」按钮。',
     images: [
       {
-        alt: '飞书步骤 6：在 Qclaw Lite 中点击完成配置',
-        caption: '确认安装器输出正常后，点击右下角「完成配置」。',
+        alt: '飞书步骤 6：在 Mclaw 中点击完成机器人配置',
+        caption: '确认安装器输出正常后，点击右下角「完成机器人配置」。',
         src: feishuStep6Finish,
       },
     ],

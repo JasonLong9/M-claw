@@ -112,6 +112,47 @@ describe('models page state helpers', () => {
     expect(providers.find((provider) => provider.id === 'openai')).toBeUndefined()
   })
 
+  it('shows a saved custom-openai provider card and model list from local config snapshots alone', () => {
+    const state = resolveModelsPageCatalogState({
+      catalog: [],
+      envVars: null,
+      config: {
+        models: {
+          providers: {
+            'custom-openai': {
+              enabled: true,
+              baseUrl: 'https://gateway.example.com/v1',
+              models: [
+                {
+                  id: 'gpt-4.1-mini',
+                  name: 'gpt-4.1-mini',
+                },
+              ],
+            },
+          },
+        },
+      },
+      statusData: null,
+      mode: 'all',
+    })
+
+    expect(state.configuredProviders).toEqual([
+      expect.objectContaining({
+        id: 'custom-openai',
+      }),
+    ])
+    expect(state.visibleCatalog).toEqual([
+      {
+        key: 'custom-openai/gpt-4.1-mini',
+        provider: 'custom-openai',
+        name: 'gpt-4.1-mini',
+        available: false,
+        verificationState: 'unverified',
+        tags: ['configured'],
+      },
+    ])
+  })
+
   it('falls back to config/env provider snapshots when status has no configured providers', () => {
     const providers = buildModelsPageConfiguredProviders({
       envVars: null,

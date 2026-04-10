@@ -21,6 +21,7 @@ export interface LocalConnectionTestResult {
   ok: boolean
   reachable: boolean
   modelCount?: number
+  models?: Array<{ key: string; name: string }>
   error?: string
   latencyMs?: number
 }
@@ -133,18 +134,39 @@ export async function testLocalConnection(
     }
 
     let modelCount: number | undefined
+    let models: Array<{ key: string; name: string }> | undefined
     try {
       const body = await response.json()
       if (provider === 'ollama' && Array.isArray(body?.models)) {
         modelCount = body.models.length
+        models = body.models
+          .map((item: any) => {
+            const key = String(item?.name || item?.model || '').trim()
+            if (!key) return null
+            return {
+              key,
+              name: key,
+            }
+          })
+          .filter((item: { key: string; name: string } | null): item is { key: string; name: string } => Boolean(item))
       } else if (Array.isArray(body?.data)) {
         modelCount = body.data.length
+        models = body.data
+          .map((item: any) => {
+            const key = String(item?.id ?? item?.name ?? item?.model ?? '').trim()
+            if (!key) return null
+            return {
+              key,
+              name: String(item?.name ?? item?.id ?? item?.model ?? key).trim() || key,
+            }
+          })
+          .filter((item: { key: string; name: string } | null): item is { key: string; name: string } => Boolean(item))
       }
     } catch {
       // JSON parse failure is fine — reachability is confirmed
     }
 
-    return { ok: true, reachable: true, modelCount, latencyMs }
+    return { ok: true, reachable: true, modelCount, models, latencyMs }
   } catch (err: any) {
     const latencyMs = Date.now() - start
     const message = err?.name === 'AbortError'

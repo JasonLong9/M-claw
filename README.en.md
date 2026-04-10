@@ -63,8 +63,8 @@
 - **Operations dashboard** — Monitor gateway status in real time, restart services, and repair runtime issues in one place
 - **Skills management** — Manage skills from different sources
 - **Backup support** — Includes automatic backup and manual backup flows
-- **Cross-platform direction** — Supports macOS today, Windows is in progress, and Linux is planned
-- **Update support** — Supports the latest OpenClaw releases
+- **Cross-platform support** — Supports macOS and Windows today, with Linux planned later
+- **Version update support** — Includes OpenClaw version checks, upgrade guidance, and controlled upgrade flows
 
 ## Why This Project Exists
 
@@ -212,7 +212,7 @@ build/              App icons and packaging resources
 ## Supported Platforms
 
 - macOS 11 (Big Sur)+
-- Windows 10+ (x64), currently in active development
+- Windows 10+ (x64)
 - Linux, planned
 
 ## Contributing

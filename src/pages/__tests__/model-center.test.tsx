@@ -4,6 +4,7 @@ import {
   DEFAULT_PROVIDER_CONFIG_EXPANDED,
   appendRetryRefreshHint,
   type OpenClawCapabilities,
+  buildLocalProviderConfigSnapshotForSubmit,
   buildLocalProviderEnvUpdatesForSubmit,
   buildCapabilitiesLoadingDisplay,
   refreshModelCapabilitiesData,
@@ -39,6 +40,7 @@ import {
   methodRequiresBrowser,
   methodRequiresExtraOption,
   methodRequiresSecret,
+  normalizeLocalDiscoveredModelOptions,
   shouldPreferRuntimeModelSignalsAfterAuth,
   shouldDeferPostAuthDefaultModelApply,
   shouldRequireBlockingPostAuthVerification,
@@ -1709,7 +1711,7 @@ describe('buildBusyStateDisplay', () => {
 
 describe('getLocalDiscoveryDisplay', () => {
   it('prompts the user to fill Base URL before discovery', () => {
-    expect(getLocalDiscoveryDisplay({ testing: false }, false, null, false)).toEqual({
+    expect(getLocalDiscoveryDisplay({ testing: false }, false, null, false, 'ollama')).toEqual({
       buttonColor: 'brand',
       message: '填写 Base URL 后可获取本地模型',
       messageColor: 'dimmed',
@@ -1717,7 +1719,7 @@ describe('getLocalDiscoveryDisplay', () => {
   })
 
   it('shows scanning progress while local model discovery is running', () => {
-    expect(getLocalDiscoveryDisplay({ testing: false }, true, null, true)).toEqual({
+    expect(getLocalDiscoveryDisplay({ testing: false }, true, null, true, 'ollama')).toEqual({
       buttonColor: 'brand',
       message: '正在扫描模型...',
       messageColor: 'dimmed',
@@ -1730,7 +1732,8 @@ describe('getLocalDiscoveryDisplay', () => {
         { testing: false, result: { ok: true, reachable: true, latencyMs: 32 } },
         false,
         { ok: true, modelCount: 3, models: [{ key: 'ollama/qwen3', name: 'qwen3' }] },
-        true
+        true,
+        'ollama'
       )
     ).toEqual({
       buttonColor: 'teal',
@@ -1745,7 +1748,8 @@ describe('getLocalDiscoveryDisplay', () => {
         { testing: false, result: { ok: true, reachable: true } },
         false,
         { ok: false, error: '模型扫描失败' },
-        true
+        true,
+        'ollama'
       )
     ).toEqual({
       buttonColor: 'red',
@@ -1778,6 +1782,130 @@ describe('buildLocalProviderEnvUpdatesForSubmit', () => {
     ).toEqual({
       OLLAMA_HOST: 'http://127.0.0.1:11434',
       OLLAMA_API_KEY: undefined,
+    })
+  })
+})
+
+describe('buildLocalProviderConfigSnapshotForSubmit', () => {
+  it('normalizes direct connection discovery results into provider-scoped model keys for custom-openai', () => {
+    expect(
+      normalizeLocalDiscoveredModelOptions(
+        [
+          { key: 'deepseek-chat', name: 'DeepSeek Chat' },
+          { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner' },
+        ],
+        'custom-openai'
+      )
+    ).toEqual([
+      { key: 'custom-openai/deepseek-chat', name: 'DeepSeek Chat' },
+      { key: 'custom-openai/deepseek-reasoner', name: 'DeepSeek Reasoner' },
+    ])
+  })
+
+  it('persists a custom-openai provider snapshot without the legacy enabled flag, while keeping baseUrl and stripped model id', () => {
+    expect(
+      buildLocalProviderConfigSnapshotForSubmit({
+        currentConfig: {
+          defaultModel: 'custom-openai/gpt-4.1-mini',
+        },
+        providerId: 'custom-openai',
+        baseUrl: 'https://gateway.example.com/v1',
+        selectedModel: 'custom-openai/gpt-4.1-mini',
+      })
+    ).toMatchObject({
+      defaultModel: 'custom-openai/gpt-4.1-mini',
+      models: {
+        providers: {
+          'custom-openai': {
+            baseUrl: 'https://gateway.example.com/v1',
+            models: [
+              {
+                id: 'gpt-4.1-mini',
+                name: 'gpt-4.1-mini',
+              },
+            ],
+          },
+        },
+      },
+    })
+  })
+
+  it('drops a stale custom-openai enabled flag when refreshing the local provider snapshot', () => {
+    expect(
+      buildLocalProviderConfigSnapshotForSubmit({
+        currentConfig: {
+          models: {
+            providers: {
+              'custom-openai': {
+                enabled: true,
+                baseUrl: 'https://gateway.example.com/v1',
+                models: [
+                  {
+                    id: 'deepseek-chat',
+                    name: 'deepseek-chat',
+                  },
+                ],
+              },
+            },
+          },
+        },
+        providerId: 'custom-openai',
+        baseUrl: 'https://gateway.example.com/v1',
+        selectedModel: 'custom-openai/deepseek-chat',
+      })
+    ).toEqual({
+      models: {
+        providers: {
+          'custom-openai': {
+            baseUrl: 'https://gateway.example.com/v1',
+            models: [
+              {
+                id: 'deepseek-chat',
+                name: 'deepseek-chat',
+              },
+            ],
+          },
+        },
+      },
+    })
+  })
+
+  it('keeps existing provider models while avoiding duplicate entries', () => {
+    expect(
+      buildLocalProviderConfigSnapshotForSubmit({
+        currentConfig: {
+          models: {
+            providers: {
+              ollama: {
+                enabled: true,
+                models: [
+                  {
+                    id: 'qwen3:8b',
+                    name: 'Qwen3 8B',
+                  },
+                ],
+              },
+            },
+          },
+        },
+        providerId: 'ollama',
+        baseUrl: 'http://127.0.0.1:11434',
+        selectedModel: 'ollama/qwen3:8b',
+      })
+    ).toMatchObject({
+      models: {
+        providers: {
+          ollama: {
+            enabled: true,
+            models: [
+              {
+                id: 'qwen3:8b',
+                name: 'Qwen3 8B',
+              },
+            ],
+          },
+        },
+      },
     })
   })
 })

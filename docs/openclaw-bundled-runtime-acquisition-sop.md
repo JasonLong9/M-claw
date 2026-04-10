@@ -77,6 +77,17 @@
 
 推荐分别在 Apple Silicon 与 Intel Mac 来源机上独立获取。
 
+若当前目标是补齐 `Intel Mac / darwin-x64`，为了避免再次靠口头交接，建议直接配套使用：
+
+1. 对外发起索包消息：
+   - [darwin-x64-runtime-request-message-template.md](./darwin-x64-runtime-request-message-template.md)
+2. 发给来源同事的导出说明：
+   - [darwin-x64-runtime-handoff.md](./darwin-x64-runtime-handoff.md)
+3. 收包后的验收清单：
+   - [darwin-x64-runtime-receipt-checklist.md](./darwin-x64-runtime-receipt-checklist.md)
+4. 实际接包命令顺序：
+   - [darwin-x64-runtime-intake-command-sheet.md](./darwin-x64-runtime-intake-command-sheet.md)
+
 推荐流程：
 
 1. 在来源机上完成 OpenClaw 安装。
@@ -177,10 +188,29 @@
 
 切换规则：
 
-1. 若只拿到单平台真实 runtime，不切换 `defaultDeliveryMode`。
+1. 若仓库默认模式尚未切换，且只拿到单平台真实 runtime，不切换 `defaultDeliveryMode`。
 2. 若双平台真实 runtime 都已入库并完成实机验证，才把：
    - `defaultDeliveryMode` 从 `bundled-fallback`
    - 切换为 `bundled-runtime`
+3. 若仓库已提前切换到 `bundled-runtime`，仍必须以：
+   - `npm run check:openclaw:bundle:strict`
+   - `npm run check:openclaw:phase2-exit`
+   - 双平台真机验证
+   共同作为最终成立条件。
+
+当前补充说明：
+
+1. 截至 `2026-04-09`，仓库已经处于：
+   - `defaultDeliveryMode = bundled-runtime`
+   - `targetDeliveryMode = bundled-runtime`
+   的主线状态。
+2. 当前三平台 runtime artifact 均已入库：
+   - `windows-x64`
+   - `darwin-arm64`
+   - `darwin-x64`
+3. 后续再执行本 SOP，主要场景不再是“首次补齐某个平台”，而是：
+   - 替换现有主线 runtime
+   - 或验证 `2026.4.x` 候选 runtime
 
 ## 9. 入库后的仓库验证顺序
 
@@ -204,7 +234,8 @@
    - macOS：对应打包命令
 8. 断网首启实机验证：
    - Windows
-   - macOS
+   - macOS Apple Silicon
+   - macOS Intel
 
 ## 10. 禁止事项
 
@@ -232,8 +263,17 @@
 
 当前项目的下一步不是继续改 fallback 逻辑，而是：
 
-1. 获取 Windows x64 真实 runtime。
-2. 获取 macOS arm64 真实 runtime。
-3. 如目标包含 Intel Mac，再获取 macOS x64 真实 runtime。
-4. 逐个平台完成本 SOP 的三次验证。
-5. 通过后再进入下一轮端到端打包与断网验证。
+1. 维持 `windows-x64`、`darwin-arm64`、`darwin-x64` 三平台 runtime 与 pinned baseline `2026.3.24` 一致。
+2. 在替换任一平台 runtime 时，重复执行本 SOP 的三次验证。
+3. 继续补齐真实机器上的断网首启验证记录：
+   - Windows
+   - macOS Apple Silicon
+   - macOS Intel
+4. 若后续收到 `2026.4.x` 包，则转入候选迁移与回退验证链。
+
+补充说明：
+
+1. 若本轮拿到的真实版本不是 pinned baseline `2026.3.24`，则先按候选线处理，不直接改主线 manifest。
+2. 版本分流与候选迁移判断，统一参考：
+   - [openclaw-version-strategy.md](./openclaw-version-strategy.md)
+   - [openclaw-upgrade-migration-smoke-runbook.md](./openclaw-upgrade-migration-smoke-runbook.md)

@@ -3,9 +3,13 @@ import { describe, expect, it } from 'vitest'
 import {
   collectProviderBoundEnvKeysFromStatus,
   detectResidualProviderConfiguration,
+  hasSavedModelsPageSnapshot,
+  isCliUnavailableStatusMessage,
+  isProviderMutationLocked,
   removeResolvedErrorMessages,
   removeProviderFromConfig,
   removeProviderFromStatus,
+  shouldSuppressCliUnavailableStatusError,
   verifyProviderRemovalState,
 } from '../ModelsPage'
 
@@ -680,5 +684,86 @@ describe('models-page provider cleanup', () => {
         missing: [],
       },
     ])
+  })
+
+  it('keeps add-provider actions locked until background cleanup fully completes', () => {
+    expect(
+      isProviderMutationLocked({
+        removingProviderId: '',
+        cleanupProviderId: 'custom-openai',
+      })
+    ).toBe(true)
+
+    expect(
+      isProviderMutationLocked({
+        removingProviderId: 'openai',
+        cleanupProviderId: '',
+      })
+    ).toBe(true)
+
+    expect(
+      isProviderMutationLocked({
+        removingProviderId: '',
+        cleanupProviderId: '',
+      })
+    ).toBe(false)
+  })
+
+  it('detects the CLI-unavailable status banner text emitted by command probing', () => {
+    expect(
+      isCliUnavailableStatusMessage('OpenClaw CLI command is unavailable. Complete CLI installation in Env Check and try again.')
+    ).toBe(true)
+    expect(isCliUnavailableStatusMessage('模型状态刷新失败')).toBe(false)
+  })
+
+  it('recognizes saved model snapshots that can safely render without CLI status fallback', () => {
+    expect(
+      hasSavedModelsPageSnapshot({
+        envVars: null,
+        config: {
+          models: {
+            providers: {
+              'custom-openai': {
+                enabled: true,
+                models: [{ id: 'gpt-4.1-mini', name: 'GPT-4.1 Mini' }],
+              },
+            },
+          },
+        },
+        modelStatus: null,
+        catalog: [],
+      })
+    ).toBe(true)
+  })
+
+  it('suppresses CLI-unavailable model status errors when a saved provider snapshot already exists', () => {
+    expect(
+      shouldSuppressCliUnavailableStatusError({
+        message: 'OpenClaw CLI command is unavailable. Complete CLI installation in Env Check and try again.',
+        envVars: null,
+        config: {
+          models: {
+            providers: {
+              'custom-openai': {
+                enabled: true,
+                models: [{ id: 'gpt-4.1-mini', name: 'GPT-4.1 Mini' }],
+              },
+            },
+          },
+        },
+        modelStatus: null,
+        catalog: [],
+      })
+    ).toBe(true)
+
+    expect(
+      shouldSuppressCliUnavailableStatusError({
+        message: 'OpenClaw CLI command is unavailable. Complete CLI installation in Env Check and try again.',
+        envVars: null,
+        config: null,
+        modelStatus: null,
+        catalog: [],
+      })
+    ).toBe(false)
   })
 })

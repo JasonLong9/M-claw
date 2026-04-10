@@ -271,6 +271,50 @@ describe('openclaw chat service', () => {
     expect(availability.reason).toBe('no-configured-model')
   })
 
+  it('keeps chat sendable when legacy OpenClaw lacks models status --json but saved models are known', () => {
+    const availability = buildDashboardChatAvailabilityFromStatus({
+      gatewayRunning: true,
+      modelStatus: {
+        ok: false,
+        action: 'status',
+        command: ['models', 'status', '--json'],
+        stdout: '',
+        stderr: 'This OpenClaw build does not support models status --json.',
+        code: 1,
+        message: 'This OpenClaw build does not support models status --json.',
+      } as any,
+      connectedModelsOverride: ['custom-openai/deepseek-chat'],
+      defaultModelOverride: 'custom-openai/deepseek-chat',
+    })
+
+    expect(availability.state).toBe('degraded')
+    expect(availability.canSend).toBe(true)
+    expect(availability.connectedModels).toEqual(['custom-openai/deepseek-chat'])
+    expect(availability.defaultModel).toBe('custom-openai/deepseek-chat')
+    expect(availability.message).toContain('已按已保存模型配置继续')
+  })
+
+  it('still reports offline when legacy OpenClaw lacks models status --json and the gateway is not running', () => {
+    const availability = buildDashboardChatAvailabilityFromStatus({
+      gatewayRunning: false,
+      modelStatus: {
+        ok: false,
+        action: 'status',
+        command: ['models', 'status', '--json'],
+        stdout: '',
+        stderr: 'This OpenClaw build does not support models status --json.',
+        code: 1,
+        message: 'This OpenClaw build does not support models status --json.',
+      } as any,
+      connectedModelsOverride: ['custom-openai/deepseek-chat'],
+      defaultModelOverride: 'custom-openai/deepseek-chat',
+    })
+
+    expect(availability.state).toBe('offline')
+    expect(availability.canSend).toBe(false)
+    expect(availability.connectedModels).toEqual(['custom-openai/deepseek-chat'])
+  })
+
   it('treats openai-codex auth provider as compatible with openai/* model keys', () => {
     const availability = buildDashboardChatAvailabilityFromStatus({
       gatewayRunning: true,
@@ -407,6 +451,113 @@ describe('openclaw chat service', () => {
     expect(availability.connectedModels).toEqual([])
     expect(availability.canSend).toBe(false)
     expect(availability.defaultModel).toBe('google/gemini-3-pro-preview')
+  })
+
+  it('reuses saved configured snapshot models for chat availability when legacy models status is unsupported', async () => {
+    gatewayHealthMock.mockResolvedValue({ running: true, raw: 'running' })
+    readConfigMock.mockResolvedValue({
+      agents: {
+        defaults: {
+          model: {
+            primary: 'custom-openai/deepseek-chat',
+          },
+        },
+      },
+      models: {
+        providers: {
+          'custom-openai': {
+            enabled: true,
+            baseUrl: 'https://api.deepseek.com/v1',
+            models: [{ id: 'deepseek-chat', name: 'DeepSeek Chat' }],
+          },
+        },
+      },
+    })
+    getModelStatusMock.mockResolvedValue({
+      ok: false,
+      action: 'status',
+      command: ['models', 'status', '--json'],
+      stdout: '',
+      stderr: 'This OpenClaw build does not support models status --json.',
+      code: 1,
+      message: 'This OpenClaw build does not support models status --json.',
+    })
+    getModelCatalogMock.mockResolvedValue({
+      total: 0,
+      items: [],
+      providers: [],
+      updatedAt: '2026-03-26T00:00:00.000Z',
+      source: 'cache',
+      stale: false,
+    })
+
+    const availability = await getDashboardChatAvailability()
+
+    expect(availability.state).toBe('degraded')
+    expect(availability.canSend).toBe(true)
+    expect(availability.connectedModels).toEqual(['custom-openai/deepseek-chat'])
+    expect(availability.defaultModel).toBe('custom-openai/deepseek-chat')
+  })
+
+  it('uses the saved configured default model when creating a direct chat session and legacy models status is unsupported', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-legacy-default-model')
+    const callGatewayRpc = vi.fn(async () => ({
+      sessionId: 'remote-legacy-session',
+      sessionKey: 'agent:main:remote-legacy-session',
+      agentId: 'main',
+      model: 'custom-openai/deepseek-chat',
+    }))
+
+    readConfigMock.mockResolvedValue({
+      agents: {
+        defaults: {
+          model: {
+            primary: 'custom-openai/deepseek-chat',
+          },
+        },
+      },
+      models: {
+        providers: {
+          'custom-openai': {
+            enabled: true,
+            models: [{ id: 'deepseek-chat', name: 'DeepSeek Chat' }],
+          },
+        },
+      },
+    })
+
+    const session = await createChatSession({
+      discoverOpenClaw,
+      ensureGateway: async () => ({
+        ok: true,
+        stdout: '',
+        stderr: '',
+        code: 0,
+        running: true,
+      }),
+      readModelStatus: async () =>
+        ({
+          ok: false,
+          action: 'status',
+          command: ['models', 'status', '--json'],
+          stdout: '',
+          stderr: 'This OpenClaw build does not support models status --json.',
+          code: 1,
+          message: 'This OpenClaw build does not support models status --json.',
+        }) as any,
+      callGatewayRpc,
+    })
+
+    expect(callGatewayRpc).toHaveBeenCalledWith(
+      'sessions.create',
+      {
+        agentId: 'main',
+        model: 'custom-openai/deepseek-chat',
+      },
+      20_000
+    )
+    expect(session.model).toBe('custom-openai/deepseek-chat')
+    expect(session.selectedModel).toBe('custom-openai/deepseek-chat')
   })
 
   it('returns a conservative phase 0 chat capability snapshot', async () => {
@@ -1757,6 +1908,68 @@ describe('openclaw chat service', () => {
     })
 
     expect(sessions).toEqual([])
+  })
+
+  it('continues direct chat send when gateway ensure is stale but a health recheck is already healthy', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-gateway-health-recheck')
+    const transportRun = vi.fn(async () => ({
+      ok: true,
+      stdout: JSON.stringify({
+        response: {
+          text: '健康复检后发送成功',
+        },
+        model: 'custom-openai/deepseek-chat',
+      }),
+      stderr: '',
+      code: 0,
+      streamedText: '健康复检后发送成功',
+      streamedModel: 'custom-openai/deepseek-chat',
+    }))
+    const getGatewayHealth = vi.fn(async () => ({
+      running: true,
+      raw: '{"ok":true}',
+    }))
+
+    const result = await sendChatMessage(
+      {
+        sessionId: 'gateway-health-recheck-session',
+        text: '请继续',
+      },
+      {
+        discoverOpenClaw,
+        readModelStatus: async () => createModelStatus('custom-openai/deepseek-chat'),
+        runCommand: async () => ({
+          ok: true,
+          stdout: JSON.stringify({ sessions: [] }),
+          stderr: '',
+          code: 0,
+        }),
+        ensureGateway: async () => ({
+          ok: false,
+          stdout: '',
+          stderr: 'Gateway 启动命令已执行，但系统仍未确认网关已经准备完成',
+          code: 1,
+          running: false,
+        }),
+        getGatewayHealth,
+        callGatewayRpc: async (method) => {
+          expect(method).toBe('sessions.create')
+          return {
+            sessionId: 'upstream-session-gateway-health-recheck',
+            sessionKey: 'gateway-health-recheck-key',
+            agentId: 'main',
+            model: 'custom-openai/deepseek-chat',
+          }
+        },
+        chatTransport: {
+          run: transportRun,
+        },
+      }
+    )
+
+    expect(result.ok).toBe(true)
+    expect(getGatewayHealth).toHaveBeenCalledTimes(1)
+    expect(transportRun).toHaveBeenCalledTimes(1)
   })
 
   it('falls back to CLI send for a local shell when gateway ensure fails', async () => {

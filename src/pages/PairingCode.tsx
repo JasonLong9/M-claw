@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { TextInput, Button, Alert, Text, Stack, Group, Card, Badge, Loader, Transition } from '@mantine/core'
+import { Textarea, Button, Alert, Text, Stack, Group, Card, Badge, Loader, Transition } from '@mantine/core'
 import { parsePairingInput, shouldUseAllowFromFallback, buildPairingApprovalFeedback, isPairingCodeReady } from './pairing-utils'
 import { UI_RUNTIME_DEFAULTS } from '../shared/runtime-policies'
 import { toUserFacingCliFailureMessage } from '../lib/user-facing-cli-feedback'
@@ -77,6 +77,11 @@ export default function PairingCode({
   const parsedInput = parsePairingInput(code)
   const canPair = isPairingCodeReady(parsedInput.code)
   const approvalCountdownSeconds = UI_RUNTIME_DEFAULTS.pairing.approvalCountdownSeconds
+  const pairingTitle = channel === 'feishu' ? '输入飞书配对码' : '输入配对码'
+  const pairingPlaceholder =
+    channel === 'feishu' ? '粘贴飞书机器人完整回复或直接输入配对码...' : '输入配对码...'
+  const shouldSuggestFullReply =
+    channel === 'feishu' && status === 'error' && code.trim().length > 0 && !parsedInput.feishuOpenId
 
   const doPair = async () => {
     setStatus('pairing')
@@ -181,7 +186,7 @@ export default function PairingCode({
 
   return (
     <Stack gap="sm" w="100%">
-      <Text size="lg" fw={600}>输入配对码</Text>
+      <Text size="lg" fw={600}>{pairingTitle}</Text>
       {channel === 'feishu' && feishuBotLabel && (
         <Alert color="blue" variant="light" title="当前正在配对的 Bot">
           {accountId ? `飞书 Bot：${feishuBotLabel}（accountId: ${accountId}）` : `飞书 Bot：${feishuBotLabel}`}
@@ -193,18 +198,41 @@ export default function PairingCode({
 
       {(status === 'input' || status === 'error') && (
         <Stack gap="sm">
-          <TextInput
-            label="配对码"
+          <Textarea
+            label={channel === 'feishu' ? '配对信息 / 配对码' : '配对码'}
             value={code}
             onChange={(e) => setCode(e.currentTarget.value)}
-            placeholder="输入配对码..."
+            placeholder={pairingPlaceholder}
             size="md"
-            styles={{ input: { textAlign: 'center', letterSpacing: '0.2em', fontFamily: 'var(--mantine-font-family-monospace)' } }}
+            autosize
+            minRows={channel === 'feishu' ? 4 : 2}
+            maxRows={channel === 'feishu' ? 8 : 4}
+            styles={{
+              input: {
+                fontFamily: 'var(--mantine-font-family-monospace)',
+                lineHeight: 1.6,
+                whiteSpace: 'pre-wrap',
+              },
+            }}
             autoFocus
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && canPair) doPair()
+              if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && canPair) doPair()
             }}
           />
+          <Text size="xs" c="dimmed">
+            {channel === 'feishu'
+              ? '支持直接粘贴飞书机器人完整回复；如需快捷提交，可按 Ctrl/Cmd + Enter。'
+              : '也可以直接粘贴完整配对信息；如需快捷提交，可按 Ctrl/Cmd + Enter。'}
+          </Text>
+
+          {channel === 'feishu' && parsedInput.feishuOpenId && (
+            <Alert color="teal" variant="light" title="已识别飞书用户 ID">
+              <Text size="xs" c="dimmed">
+                当前输入里已识别到用户 ID：<Text span ff="monospace" c="teal">{parsedInput.feishuOpenId}</Text>
+                。如果当前实例里找不到待审批请求，Mclaw 会自动尝试按这个用户 ID 做兜底授权。
+              </Text>
+            </Alert>
+          )}
 
           <Transition mounted={!!error} transition="slide-down" duration={200}>
             {(styles) => (
@@ -214,6 +242,15 @@ export default function PairingCode({
               </Alert>
             )}
           </Transition>
+
+          {shouldSuggestFullReply && (
+            <Alert color="blue" variant="light" title="建议直接粘贴机器人完整回复">
+              <Text size="xs" c="dimmed">
+                只输入配对码时，跨实例场景下无法自动兜底。把飞书机器人返回的完整消息一起粘贴进来，
+                Mclaw 就能额外识别用户 ID，提高配对成功率。
+              </Text>
+            </Alert>
+          )}
 
           <Card padding="sm" withBorder>
             <Text size="xs" c="dimmed" style={{ lineHeight: 1.8 }}>

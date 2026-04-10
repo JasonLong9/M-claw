@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Alert, Button, Group, Loader, Modal, Paper, SimpleGrid, Stack, Text, Title } from '@mantine/core'
 import type { OpenClawUpgradeCheckResult, OpenClawUpgradeRunResult } from '../shared/openclaw-phase4'
+import {
+  buildOpenClawMigrationSmokeSummary,
+  resolveOpenClawTargetVersionLabel,
+} from '../shared/openclaw-version-policy'
 
 export default function OpenClawUpgradeDialog({
   open,
@@ -38,6 +42,13 @@ export default function OpenClawUpgradeDialog({
 
   if (!open) return null
 
+  const targetVersion = resolveOpenClawTargetVersionLabel(check?.targetVersion)
+  const migrationSmoke = check
+    ? buildOpenClawMigrationSmokeSummary({
+        fromVersion: check.currentVersion,
+        toVersion: check.targetVersion,
+      })
+    : null
   const canRun = Boolean(
     check &&
       check.enforcement === 'optional_upgrade' &&
@@ -75,7 +86,7 @@ export default function OpenClawUpgradeDialog({
               </Text>
               <Stack gap={8} mt="md">
                 <Text size="sm">当前版本：{check.currentVersion || '未知'}</Text>
-                <Text size="sm">目标版本：{check.targetVersion || '未知'}</Text>
+                <Text size="sm">目标版本：{targetVersion}</Text>
                 <Text size="sm">安装来源：{check.activeCandidate?.installSource || '未知'}</Text>
                 <Text size="sm" style={{ wordBreak: 'break-all' }}>
                   当前路径：{check.activeCandidate?.binaryPath || '未检测到'}
@@ -98,6 +109,22 @@ export default function OpenClawUpgradeDialog({
             </Paper>
           </SimpleGrid>
 
+          {migrationSmoke && (
+            <Paper withBorder radius="xl" p="md" mt="md">
+              <Text size="xs" c="dimmed" tt="uppercase" fw={600} style={{ letterSpacing: '0.2em' }}>
+                迁移 Smoke 诊断
+              </Text>
+              <Stack gap={8} mt="md">
+                <Text size="sm">迁移路径：{migrationSmoke.migrationPath}</Text>
+                <Text size="sm">baseline backup：{migrationSmoke.needsBaselineBackup ? '需要' : '不需要'}</Text>
+                <Text size="sm">保守兼容模式：{migrationSmoke.requiresConservativeMode ? '需要' : '不需要'}</Text>
+                <Text size="sm">doctor 自检优先：{migrationSmoke.doctorFixPriority ? '是' : '否'}</Text>
+                <Text size="sm">记忆目录审计：{migrationSmoke.memoryAuditRequired ? '需要' : '不需要'}</Text>
+                <Text size="sm">Agent 协同审计：{migrationSmoke.agentAuditRequired ? '需要' : '不需要'}</Text>
+              </Stack>
+            </Paper>
+          )}
+
           {check.policyState === 'supported_target' && (
             <Alert color="green" variant="light" mt="md">
               当前 OpenClaw 已是受支持上限版本，无需再升级。
@@ -106,13 +133,13 @@ export default function OpenClawUpgradeDialog({
 
           {check.policyState === 'supported_not_target' && (
             <Alert color="blue" variant="light" mt="md">
-              当前版本受支持，可按需升级到 {check.targetVersion || '2026.3.24'}。
+              当前版本受支持，可按需升级至 {targetVersion}。
             </Alert>
           )}
 
           {check.enforcement === 'auto_correct' && (
             <Alert color="yellow" variant="light" mt="md">
-              当前版本超出受支持策略，请先回到环境检查页，由启动阶段完成备份后再自动纠偏到 {check.targetVersion || '2026.3.24'}。
+              当前版本超出受支持策略，请先回到环境检查页，由启动阶段完成备份后再自动纠偏至 {targetVersion}。
             </Alert>
           )}
 
@@ -125,6 +152,23 @@ export default function OpenClawUpgradeDialog({
               ))}
               {check.manualHint && <Text size="sm" lh={1.6}>{check.manualHint}</Text>}
               {error && <Text size="sm" lh={1.6}>{error}</Text>}
+            </Alert>
+          )}
+
+          {migrationSmoke && migrationSmoke.recommendedChecks.length > 0 && (
+            <Alert
+              color={migrationSmoke.requiresConservativeMode ? 'yellow' : 'blue'}
+              variant="light"
+              mt="md"
+            >
+              <Text size="sm" fw={500}>
+                升级前建议先完成以下检查：
+              </Text>
+              {migrationSmoke.recommendedChecks.map((item) => (
+                <Text key={item} size="sm" lh={1.6}>
+                  {item}
+                </Text>
+              ))}
             </Alert>
           )}
 

@@ -27,6 +27,7 @@ describe('openclaw upgrade compatibility', () => {
     expect(detectOpenClawVersionBand('2026.3.22')).toBe('openclaw_2026_3_22')
     expect(detectOpenClawVersionBand('2026.3.23')).toBe('openclaw_2026_3_23_to_2026_3_24')
     expect(detectOpenClawVersionBand('2026.3.24')).toBe('openclaw_2026_3_23_to_2026_3_24')
+    expect(detectOpenClawVersionBand('2026.4.6')).toBe('openclaw_2026_4_candidate')
   })
 
   it('marks unaudited future versions as conservative mode', () => {
@@ -38,7 +39,13 @@ describe('openclaw upgrade compatibility', () => {
 
     expect(assessment.status).toBe('unknown_future_version')
     expect(assessment.conservativeMode).toBe(true)
-    expect(assessment.warningCodes).toEqual(['version_unknown_future'])
+    expect(assessment.currentBand).toBe('openclaw_2026_4_candidate')
+    expect(assessment.warningCodes).toEqual(['version_candidate_2026_4', 'version_unknown_future'])
+    expect(assessment.summary).toContain('已进入候选版本线')
+    expect(assessment.summary).toContain('2026.4.x 候选线')
+    expect(assessment.summary).toContain('当前仍按保守兼容模式处理')
+    expect(assessment.summary).toContain('迁移 smoke：路径=candidate-upgrade')
+    expect(assessment.summary).toContain('记忆目录审计=需要')
   })
 
   it('captures upgrade transitions for later reconcile flows', () => {
@@ -60,6 +67,8 @@ describe('openclaw upgrade compatibility', () => {
     expect(assessment.warningCodes).toContain('official_doctor_fix_migration_prioritized_in_2026_3_22')
     expect(assessment.summary).toContain('不能把 alias 漂移误判成单一 gateway 故障')
     expect(assessment.summary).toContain('doctor --fix')
+    expect(assessment.summary).toContain('迁移 smoke：路径=in-range-upgrade')
+    expect(assessment.summary).toContain('baseline backup=需要')
   })
 
   it('treats the pinned 2026.3.24 target as an audited downgrade destination', () => {
@@ -76,5 +85,6 @@ describe('openclaw upgrade compatibility', () => {
     expect(assessment.summary).toContain('2026.3.25')
     expect(assessment.summary).toContain('2026.3.24')
     expect(assessment.summary).toContain('doctor --fix')
+    expect(assessment.summary).toContain('迁移 smoke：路径=rollback-to-pinned')
   })
 })

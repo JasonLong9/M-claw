@@ -5,6 +5,39 @@ const crypto = process.getBuiltinModule('node:crypto') as typeof import('node:cr
 const { mkdir, open, readFile, rename, rm } = fs.promises
 const { randomBytes } = crypto
 
+/** Windows transient file-lock retry delays (ms). Empty on non-Windows. */
+const RENAME_RETRY_DELAYS_MS = process.platform === 'win32' ? [50, 150, 400] : []
+
+async function renameWithRetry(
+  renameFn: typeof rename,
+  tempPath: string,
+  targetPath: string
+): Promise<void> {
+  let lastError: unknown
+  try {
+    await renameFn(tempPath, targetPath)
+    return
+  } catch (error) {
+    lastError = error
+  }
+
+  for (const delay of RENAME_RETRY_DELAYS_MS) {
+    const code = (lastError as NodeJS.ErrnoException)?.code
+    if (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY') {
+      break
+    }
+    await new Promise((resolve) => setTimeout(resolve, delay))
+    try {
+      await renameFn(tempPath, targetPath)
+      return
+    } catch (error) {
+      lastError = error
+    }
+  }
+
+  throw lastError
+}
+
 type OpenFileHandle = Awaited<ReturnType<typeof open>>
 
 export interface AtomicWriteFileOptions {
@@ -111,7 +144,7 @@ export async function atomicWriteFile(
   await closeHandle(handle)
 
   try {
-    await renameFn(tempPath, targetPath)
+    await renameWithRetry(renameFn, tempPath, targetPath)
     await syncParentDirectory(targetPath, openFn)
   } catch (error) {
     await cleanupTempFile(tempPath, rmFn)

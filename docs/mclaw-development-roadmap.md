@@ -178,7 +178,7 @@
       - `defaultDeliveryMode = bundled-runtime`
       - `win32-x64` 与 `darwin-arm64` 均已具备可执行 runtime 包体与 manifest 声明
 
-   **当前阶段结论（截至 2026-04-02）**：
+   **当前阶段结论（截至 2026-04-09）**：
 
    1. Windows 开发目录打包链路已打通，`win-unpacked`可稳定生成；
 
@@ -199,40 +199,52 @@
 
       
 
-   4. 当前仓库的实际包体状态仍为：
+   4. 当前仓库的实际包体状态为：
 
       - 已存在`resources/openclaw-bundle/openclaw-2026.3.24.tgz`
-      - 暂不存在`resources/openclaw-bundle/runtime/<platform-arch>/...`的真实 runtime 包体
+      - 已存在`resources/openclaw-bundle/runtime/windows-x64/...`
+      - 已存在`resources/openclaw-bundle/runtime/darwin-arm64/...`
+      - 已存在`resources/openclaw-bundle/runtime/darwin-x64/...`
 
       
 
    5. 近期失败验证已确认：仅从 npm tgz 解压得到的包体不能视为 “真实 runtime 包体”，因其运行时依赖未闭环；
 
-   6. 因此项目实际仍处于 Phase 2，但已不是 “纯规划阶段”，而是 “代码逻辑基本完成、runtime 目录结构已验证，但真实可运行包体仍缺失” 的状态；
+   6. 因此项目实际已不再停留在 Phase 2 阻塞态，而是进入 “三平台 bundled-runtime 主线已成型，可正式切回 Phase 5 飞书官方接入闭环” 的状态；
 
-   7. Phase 2 仍未退出，核心原因明确：
+   7. 当前 Phase 2 的状态拆分为：
 
-      - 仓库未放入真实可运行的 Windows/macOS runtime 包体
-      - 暂未完成 Windows/macOS 带真实包体的端到端真机验证
-      - 暂未将`defaultDeliveryMode`正式切换为`bundled-runtime`
-      - macOS 侧仍可能需根据真实包体部署补充权限 / 签名 / 路径细节
+      - Windows 主线：已命中 `bundled-runtime`
+      - macOS Apple Silicon 主线：已命中 `bundled-runtime`
+      - macOS Intel 主线：已命中 `bundled-runtime`
 
-      
+   8. 当前主线校验也拆分为两层：
 
-   8. 当前 Phase 2 的核心执行动作已进一步收敛为：
+      - Windows 当前推进检查：`npm run check:openclaw:phase2-exit:win`
+      - 三平台当前退出检查：`npm run check:openclaw:phase2-exit`
 
-      - 先按`docs/openclaw-bundled-runtime-acquisition-sop.md`获取真实 runtime
-      - 再做真机验证、严格校验、打包和断网测试
-      - 最后再切换默认分发模式
+   9. 当前主线后续应以 `win32-x64 + darwin-arm64 + darwin-x64` 三平台 runtime 一致性为准，不再保留 `darwin-x64` 作为主线挂起项。
 
-   9. 自 2026-04-03 起，Phase 2 是否可退出不再只靠文档描述，统一以
+   10. 截至 `2026-04-08`，OpenClaw 主线基线继续锁定 `2026.3.24`；外部提到的 `2026.4.6/2026.4.7` 统一先作为 `2026.4.x` 候选线，不直接打断当前 `Phase 2` 主线。
 
-      - `npm run check:openclaw:phase2-exit`
+   11. `OpenClaw` 受控升级/回退继续作为当前主线能力保留，用于后续从 `2026.3.24` 平滑迁移到 `2026.4.x`；`Mclaw` 应用自动更新仍延后至 `v1.5`。
+   12. 自 `2026-04-09` 起，后续主线开发重心应从 runtime 收口切换到 `Phase 5`：
+      - 飞书官方插件安装闭环
+      - 飞书扫码 / 手动绑定闭环
+      - 飞书配对与诊断闭环
 
-      为准；当前仓库实测仍未通过，直接阻塞点是：
+   13. 后续若替换 `darwin-x64` 或接收新的 Intel Mac 候选包，统一不再口头处理，直接按以下文档链推进：
+       - `docs/darwin-x64-runtime-request-message-template.md`
+       - `docs/darwin-x64-runtime-handoff.md`
+       - `docs/darwin-x64-runtime-receipt-checklist.md`
+       - `docs/darwin-x64-runtime-intake-command-sheet.md`
+       - `docs/openclaw-upgrade-migration-smoke-runbook.md`
 
-      - `defaultDeliveryMode` 仍为 `bundled-fallback`
-      - 缺少必需的 `darwin-arm64` runtime artifact
+   14. 截至 `2026-04-10`，Windows + `OpenClaw 2026.3.24` 的当前主阻塞不再是“是否先上 gateway 看门狗”，而是 legacy readiness 假阴性会把 Direct Chat 挡在首条消息发送之前。
+
+   15. 因此进入飞书 IM 主线前，必须先补完本地验证闭环：`模型已保存 -> 启动网关 -> Direct Chat 可发送首条消息 -> 返回真实成功/失败`。
+
+   16. `Phase 6` 看门狗可以继续做文档与设计预案，但不应用来掩盖 `Phase 5` 的状态判定/发送门禁问题；只有本地直聊 smoke 稳定后，才进入正式实现。
 
       
 
@@ -282,6 +294,10 @@
    8. 真实 runtime 的获取、复核与入库规则见：
 
       - `docs/openclaw-bundled-runtime-acquisition-sop.md`
+
+   9. 当前 `2026.3.24` 主线与 `2026.4.x` 候选迁移策略见：
+
+      - `docs/openclaw-version-strategy.md`
 
       
 
@@ -340,6 +356,11 @@
    1. 将 “程序内连接飞书” 做为主流程能力；
    2. 保证 Windows/macOS 的飞书接入体验尽量一致。
 
+   **当前前置结论（2026-04-10）**：
+
+   1. 飞书 IM 接入前，必须先确保本地 Direct Chat 在 legacy `2026.3.24` runtime 下能发送首条真实消息；
+   2. 若本地聊天仍被 `Gateway 尚未完成就绪确认` 一类假阴性挡住，则不应跳过该问题直接进入看门狗或渠道对接。
+
    **任务**：
 
    1. 审视当前飞书接入页面与首次启动流程的衔接；
@@ -354,6 +375,11 @@
    2. 插件异常时可触发修复。
 
    ### Phase 6 gateway 看门狗与自动恢复
+
+   **前置条件**：
+
+   1. 必须先完成 `Phase 5` 的本地 Direct Chat 验证闭环；
+   2. 看门狗不能替代 legacy runtime 的 readiness / send gate 修复，只能在主链可发送后承担自动恢复职责。
 
    **目标**：
 
@@ -401,7 +427,7 @@
    **任务**：
 
    1. 验证 Electron Builder 双平台产物；
-   2. 验证手动下载更新与升级回滚提示（自动更新延后至 v1.5）；
+   2. 验证 OpenClaw 受控升级/回退、手动下载更新与升级回滚提示（`Mclaw` 应用自动更新延后至 `v1.5`）；
    3. 验证安装、卸载、保留数据规范；
    4. 执行双平台 smoke test 与回归测试；
    5. 配置正式更新源 URL（当前`publish.url`为`example.invalid`占位）。
@@ -435,8 +461,11 @@
    1. Docker + 桌面程序交付验证；
    2. 支付与企业支付集成方案；
    3. 内测码和分销模式；
-   4. MemOS/DeerFlow 接入路线；
-   5. 360 安全技术预埋机制。
+   4. OpenClaw `2026.4.x` / MemOS / Claude Code / DeerFlow 接入路线；
+   5. 基于 `2026.3.24 -> 2026.4.x` 的升级/回退迁移方案；
+      - 迁移前统一先跑 `report:openclaw:migration-smoke`
+      - 迁移评估中必须显式覆盖记忆目录、Agent 协同与回退演练
+   6. 360 安全技术预埋机制。
 
    **退出标准**：
 

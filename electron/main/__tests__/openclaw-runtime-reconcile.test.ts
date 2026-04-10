@@ -148,6 +148,25 @@ describe('openclaw runtime reconcile store', () => {
     )
   })
 
+  it('lets conservative compatibility assessment override otherwise healthy gateway state', () => {
+    expect(
+      resolveGatewayBlockingReasonFromState({
+        gatewayStateCode: 'healthy',
+        compatibility: {
+          status: 'unknown_future_version',
+          currentVersion: '2026.4.6',
+          currentBand: 'openclaw_2026_4_candidate',
+          previousVersion: '2026.3.24',
+          previousBand: 'openclaw_2026_3_23_to_2026_3_24',
+          conservativeMode: true,
+          warningCodes: ['version_candidate_2026_4', 'version_unknown_future'],
+          summary: 'OpenClaw 版本 2026.4.6 已进入候选版本线。2026.4.6 已落在 2026.4.x 候选线，应先完成记忆目录、Agent 协同与升级回退迁移验证。 当前仍按保守兼容模式处理。',
+          assessedAt: '2026-04-08T00:00:00.000Z',
+        },
+      })
+    ).toBe('unknown_future_version')
+  })
+
   it('recovers cleanly when the persisted json is invalid', async () => {
     const storePath = resolveOpenClawRuntimeReconcileStorePath()
     await fs.mkdir(path.dirname(storePath), { recursive: true })

@@ -44,6 +44,10 @@ import {
   formatOpenClawVersionLabel,
   normalizeOpenClawVersionDisplay,
 } from './shared/openclaw-version-display'
+import {
+  buildOpenClawCompatibilityBlockingReasonLabel,
+  buildOpenClawConservativeCompatibilityGuidance,
+} from './shared/openclaw-version-policy'
 import BrandWordmark from '@/components/BrandWordmark'
 
 type SetupStep = 'api-keys' | 'channel-connect' | 'pairing-code'
@@ -105,6 +109,13 @@ function resolveOpenClawNoticeTitleBase(
   return formatOpenClawVersionLabel(currentVersion)
 }
 
+function buildFutureCandidateNoticeMessage(
+  currentVersion: string | null | undefined
+): string {
+  const displayVersion = normalizeOpenClawVersionDisplay(currentVersion) || '当前版本'
+  return `${buildOpenClawConservativeCompatibilityGuidance(displayVersion)} 进入 Dashboard 前请优先确认记忆目录、Agent 协同与升级回退链路。`
+}
+
 function isHealthDerivedRuntimeBlock(reason: GatewayBlockingReason): boolean {
   return (
     reason === 'upgrade_incompatible_config' ||
@@ -131,7 +142,10 @@ function describeRuntimeStateCode(stateCode: RuntimeReconcileStateCode): string 
   }
 }
 
-function describeBlockingReason(reason: GatewayBlockingReason): string {
+function describeBlockingReason(
+  reason: GatewayBlockingReason,
+  currentVersion?: string | null
+): string {
   switch (reason) {
     case 'upgrade_incompatible_config':
       return '升级后的配置尚未完全兼容'
@@ -148,7 +162,7 @@ function describeBlockingReason(reason: GatewayBlockingReason): string {
     case 'legacy_env_alias_detected':
       return '仍存在 legacy env alias 漂移'
     case 'unknown_future_version':
-      return '当前 OpenClaw 版本超出已审计范围'
+      return buildOpenClawCompatibilityBlockingReasonLabel(currentVersion)
     case 'unknown_runtime_state':
       return '运行时状态仍无法可靠确认'
     default:
@@ -170,6 +184,7 @@ export function buildOpenClaw322Notice(
 
   const displayVersion = normalizeOpenClawVersionDisplay(compatibility?.currentVersion)
   const is322Band = compatibility?.currentBand === 'openclaw_2026_3_22'
+  const is2026_4Candidate = compatibility?.currentBand === 'openclaw_2026_4_candidate'
   const titleBase = resolveOpenClawNoticeTitleBase(displayVersion, is322Band)
   const shouldSuppressStaleRuntimeAttention = Boolean(
     gatewayRunning && runtime && isHealthDerivedRuntimeBlock(runtime.blockingReason)
@@ -184,13 +199,22 @@ export function buildOpenClaw322Notice(
   const authRegistryDegraded = Boolean(
     capabilities && (!capabilities.authRegistry.ok || String(capabilities.authRegistry.message || '').trim())
   )
+  const candidateNeedsAttention = Boolean(is2026_4Candidate && compatibility?.conservativeMode)
 
-  if (!is322Band && !runtimeNeedsAttention && !authRegistryDegraded) {
+  if (!is322Band && !candidateNeedsAttention && !runtimeNeedsAttention && !authRegistryDegraded) {
     return null
   }
 
   if (displayVersion) {
     messageParts.push(`当前检测到 OpenClaw ${displayVersion}。`)
+  }
+
+  if (candidateNeedsAttention) {
+    messageParts.push(buildFutureCandidateNoticeMessage(displayVersion))
+    if (!runtimeNeedsAttention && !authRegistryDegraded) {
+      title = `${titleBase} 候选线兼容提示`
+      color = 'yellow'
+    }
   }
 
   if (runtimeNeedsAttention && runtime) {
@@ -215,7 +239,7 @@ export function buildOpenClaw322Notice(
     if (runtime.blockingReason !== 'none') {
       const blockingDetail = describeGatewayRuntimeReasonDetail(runtime.blockingDetail)
       messageParts.push(
-        `当前归因：${blockingDetail || describeBlockingReason(runtime.blockingReason)}。`
+        `当前归因：${blockingDetail || describeBlockingReason(runtime.blockingReason, displayVersion)}。`
       )
     }
   }

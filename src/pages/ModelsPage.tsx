@@ -250,9 +250,74 @@ export function applyOptimisticConfiguredProviderState(params: {
   }
 }
 
+export function isProviderMutationLocked(params: {
+  removingProviderId?: string | null
+  cleanupProviderId?: string | null
+}): boolean {
+  return Boolean(String(params.removingProviderId || '').trim() || String(params.cleanupProviderId || '').trim())
+}
+
 const MODELS_PAGE_CACHE_TTL_MS = 60 * 1000
 const modelsPageCache = createPageDataCache<ModelsPageSnapshot>({ ttlMs: MODELS_PAGE_CACHE_TTL_MS })
 const MODELS_RESERVED_KEYS = new Set(['mode', 'providers', 'allow', 'deny', 'fallbacks', 'imageFallbacks', 'aliases'])
+
+function hasKnownProviderEnvValue(envVars: Record<string, string> | null): boolean {
+  if (!envVars || typeof envVars !== 'object') {
+    return false
+  }
+
+  return Object.entries(envVars).some(([envKey, value]) => {
+    if (!String(value || '').trim()) {
+      return false
+    }
+    return listKnownProvidersForEnvKey(envKey).length > 0
+  })
+}
+
+export function hasSavedModelsPageSnapshot(params: {
+  envVars: Record<string, string> | null
+  config: Record<string, any> | null
+  modelStatus: Record<string, any> | null
+  catalog: CatalogItem[]
+}): boolean {
+  if (hasKnownProviderEnvValue(params.envVars)) {
+    return true
+  }
+
+  if (extractConfiguredProviderIds({ config: params.config, modelStatus: params.modelStatus }).length > 0) {
+    return true
+  }
+
+  return Array.isArray(params.catalog)
+    && params.catalog.some((item) => Boolean(String(item?.key || '').trim()))
+}
+
+export function isCliUnavailableStatusMessage(value: unknown): boolean {
+  const text = String(value || '').trim()
+  if (!text) {
+    return false
+  }
+
+  return /openclaw cli command is unavailable/i.test(text)
+    || /complete cli installation in env check/i.test(text)
+    || /openclaw cli command probing is unavailable/i.test(text)
+}
+
+export function shouldSuppressCliUnavailableStatusError(params: {
+  message: unknown
+  envVars: Record<string, string> | null
+  config: Record<string, any> | null
+  modelStatus: Record<string, any> | null
+  catalog: CatalogItem[]
+}): boolean {
+  return isCliUnavailableStatusMessage(params.message)
+    && hasSavedModelsPageSnapshot({
+      envVars: params.envVars,
+      config: params.config,
+      modelStatus: params.modelStatus,
+      catalog: params.catalog,
+    })
+}
 
 function normalizeProviderId(value: unknown): string {
   return String(value || '').trim().toLowerCase()
@@ -996,6 +1061,7 @@ export default function ModelsPage() {
   const [loading, setLoading] = useState(!initialSnapshot)
   const [switching, setSwitching] = useState('')
   const [removingProviderId, setRemovingProviderId] = useState('')
+  const [cleanupProviderId, setCleanupProviderId] = useState('')
   const [catalogMode, setCatalogMode] = useState<ModelCatalogDisplayMode>('all')
   const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set())
   const [error, setError] = useState('')
@@ -1010,10 +1076,17 @@ export default function ModelsPage() {
     verificationRecordsRef.current = verificationRecords
   }, [verificationRecords])
 
+  useEffect(() => {
+    if (!cleanupProviderId) return
+    setShowAddForm(false)
+  }, [cleanupProviderId])
+
   const loadData = useCallback(async (options?: { background?: boolean; forceRefresh?: boolean; allowCliStatusFallback?: boolean }) => {
     const background = Boolean(options?.background)
     const forceRefresh = Boolean(options?.forceRefresh)
     const allowCliStatusFallback = options?.allowCliStatusFallback !== false
+    const fallbackModelStatus = modelStatusRef.current
+    const fallbackCatalog = latestCatalogRef.current
     if (!background) {
       setLoading(true)
     }
@@ -1064,12 +1137,25 @@ export default function ModelsPage() {
           resolvedModelStatus = ((statusResult.data || null) as Record<string, any> | null)
           setModelStatus(resolvedModelStatus)
         } else {
-          resolvedModelStatus = null
-          setModelStatus(null)
-          nextErrors.push(statusResult.message || statusResult.stderr || '模型状态刷新失败，正在显示配置快照')
+          const statusErrorMessage = statusResult.message || statusResult.stderr || ''
+          const shouldSuppressStatusError = shouldSuppressCliUnavailableStatusError({
+            message: statusErrorMessage,
+            envVars: env,
+            config: cfg,
+            modelStatus: fallbackModelStatus,
+            catalog: fallbackCatalog,
+          })
+          if (shouldSuppressStatusError) {
+            resolvedModelStatus = fallbackModelStatus
+            setModelStatus(fallbackModelStatus)
+          } else {
+            resolvedModelStatus = null
+            setModelStatus(null)
+            nextErrors.push(statusErrorMessage || '模型状态刷新失败，正在显示配置快照')
+          }
         }
       } else {
-        resolvedModelStatus = modelStatusRef.current
+        resolvedModelStatus = fallbackModelStatus
       }
 
       let resolvedVerificationRecords = verificationRecordsRef.current
@@ -1163,6 +1249,13 @@ export default function ModelsPage() {
     fullCatalog: effectiveCatalog,
   })
   const hasConfigured = configuredProviders.length > 0
+  const providerMutationLocked = isProviderMutationLocked({
+    removingProviderId,
+    cleanupProviderId,
+  })
+  const addProviderBlockedReason = cleanupProviderId
+    ? '正在完成上一条删除清理，请等待完成后再重新添加供应商。'
+    : ''
 
   const handleSwitchModel = async (modelKey: string) => {
     setSwitching(modelKey)
@@ -1221,7 +1314,10 @@ export default function ModelsPage() {
       })
     }
     setShowAddForm(false)
-    void loadData({ background: true })
+    void loadData({
+      background: true,
+      allowCliStatusFallback: !Boolean(context?.providerId),
+    })
   }
 
   const handleManualRefresh = async () => {
@@ -1329,6 +1425,7 @@ export default function ModelsPage() {
     if (!confirmed) return
 
     setRemovingProviderId(provider.id)
+    setCleanupProviderId(provider.id)
     setError('')
     setCleanupNotice({
       tone: 'info',
@@ -1434,27 +1531,29 @@ export default function ModelsPage() {
             }
           }
         }
+
         if (fallbackAuthOrderChanged) {
           setCleanupNotice({
             tone: 'info',
             message: `清理中：服务商「${providerDisplayName}」已删除，正在完成后台清理...`,
           })
           void (async () => {
-            const deferredIssues: string[] = []
             try {
-              const reloadResult = await window.api.reloadGatewayAfterModelChange()
-              if (!reloadResult?.ok) {
-                deferredIssues.push(
-                  `服务商已删除，但 Gateway 重载失败：${reloadResult?.stderr || reloadResult?.stdout || '请稍后手动重载'}`
-                )
-              }
-            } catch (error: any) {
-              deferredIssues.push(`服务商已删除，但 Gateway 重载失败：${error?.message || '请稍后手动重载'}`)
-            }
+              const deferredIssues: string[] = []
 
-            try {
+              try {
+                const reloadResult = await window.api.reloadGatewayAfterModelChange()
+                if (!reloadResult?.ok) {
+                  deferredIssues.push(
+                    `服务商已删除，但 Gateway 重载失败：${reloadResult?.stderr || reloadResult?.stdout || '请稍后手动重载'}`
+                  )
+                }
+              } catch (error: any) {
+                deferredIssues.push(`服务商已删除，但 Gateway 重载失败：${error?.message || '请稍后手动重载'}`)
+              }
+
               await loadData({ background: true, forceRefresh: true, allowCliStatusFallback: false })
-            } finally {
+
               let verification = await verifyProviderRemoval(provider, deletionAuthStorePath)
               const firstResidualAuthStorePath = verification.authStorePath
               if (!verification.ok && firstResidualAuthStorePath) {
@@ -1468,6 +1567,7 @@ export default function ModelsPage() {
                   verification = await verifyProviderRemoval(provider, repairResult.authStorePath || deletionAuthStorePath)
                 }
               }
+
               if (!verification.ok && verification.authStorePath) {
                 const externalCleanup = await cleanupExternalProviderAuthSource(provider, verification.authStorePath)
                 if (externalCleanup.verification) {
@@ -1480,6 +1580,7 @@ export default function ModelsPage() {
               if (!verification.ok && verification.message) {
                 deferredIssues.push(verification.message)
               }
+
               if (deferredIssues.length > 0) {
                 setError((prev) => {
                   const existing = String(prev || '').trim()
@@ -1495,10 +1596,15 @@ export default function ModelsPage() {
               } else {
                 setCleanupNotice(null)
               }
+            } catch {
+              // 后台补偿流程失败时不打断页面主交互。
+            } finally {
+              setCleanupProviderId((current) => (current === provider.id ? '' : current))
             }
           })()
           return
         }
+
         if (envWarning) {
           throw new Error(envWarning)
         }
@@ -1625,11 +1731,14 @@ export default function ModelsPage() {
           }
         } catch {
           // 后台补偿流程失败时不打断页面主交互
+        } finally {
+          setCleanupProviderId((current) => (current === provider.id ? '' : current))
         }
       })()
     } catch (e: any) {
       setError(e?.message || '删除服务商失败')
       setCleanupNotice(null)
+      setCleanupProviderId((current) => (current === provider.id ? '' : current))
     } finally {
       setRemovingProviderId('')
     }
@@ -1700,8 +1809,11 @@ export default function ModelsPage() {
       {cleanupNotice && (
         <Alert
           color={cleanupNotice.tone === 'success' ? 'green' : 'blue'}
-          withCloseButton
-          onClose={() => setCleanupNotice(null)}
+          withCloseButton={!cleanupProviderId}
+          onClose={() => {
+            if (cleanupProviderId) return
+            setCleanupNotice(null)
+          }}
         >
           {cleanupNotice.message}
         </Alert>
@@ -1878,17 +1990,20 @@ export default function ModelsPage() {
 
           {/* 添加供应商 */}
           {!showAddForm && (
-            <Button
-              variant="default"
-              size="xs"
-              fullWidth
-              leftSection={<IconPlus size={14} />}
-              onClick={() => setShowAddForm(true)}
-              className="cursor-pointer"
-              styles={{ root: { borderStyle: 'dashed' } }}
-            >
-              添加供应商
-            </Button>
+            <Tooltip label={addProviderBlockedReason || '添加新供应商'} withArrow disabled={!addProviderBlockedReason}>
+              <Button
+                variant="default"
+                size="xs"
+                fullWidth
+                leftSection={<IconPlus size={14} />}
+                onClick={() => setShowAddForm(true)}
+                className="cursor-pointer"
+                styles={{ root: { borderStyle: 'dashed' } }}
+                disabled={providerMutationLocked}
+              >
+                添加供应商
+              </Button>
+            </Tooltip>
           )}
         </div>
       )}
@@ -1930,6 +2045,7 @@ export default function ModelsPage() {
             leftSection={<IconPlus size={14} />}
             onClick={() => setShowAddForm(true)}
             className="cursor-pointer"
+            disabled={providerMutationLocked}
           >
             添加供应商
           </Button>

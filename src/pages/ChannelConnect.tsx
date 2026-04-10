@@ -308,7 +308,19 @@ export function buildChannelConnectCompletionCopy(
     return `${channel.name} 渠道已就绪，可以开始使用了。`
   }
 
-  return `现在请在 ${channel.name} 中给机器人发一条消息，获取配对码。`
+  if (channel.id === 'feishu') {
+    return '现在请先在飞书里给机器人发一条消息，拿到配对信息后，建议直接粘贴机器人完整回复；然后点击“下一步：输入飞书配对码”继续完成接入。'
+  }
+
+  return `现在请在 ${channel.name} 中给机器人发一条消息，获取配对码；然后点击“下一步：输入配对码”继续完成接入。`
+}
+
+export function buildChannelConnectConnectedActionLabel(
+  channel: Pick<NonNullable<ReturnType<typeof getChannelDefinition>>, 'id' | 'skipPairing'> | null | undefined
+): string {
+  if (!channel || channel.skipPairing) return '完成配置'
+  if (channel.id === 'feishu') return '下一步：输入飞书配对码'
+  return '下一步：输入配对码'
 }
 
 export function shouldShowChannelConnectSkipButton(params: {
@@ -481,6 +493,7 @@ export function mergeFeishuCreateModeBots(params: {
       name: credentials.name || bot.name,
       appId: credentials.appId,
       appSecret: credentials.appSecret,
+      provisionSource: 'created',
     })
     nextConfig = added.nextConfig
     const matchedBot = listFeishuBots(nextConfig).find((candidate) => candidate.accountId === added.accountId)
@@ -629,7 +642,7 @@ export function resolveFeishuManualBindingPreparationCopy(
   if (phase === 'syncing') {
     return {
       title: '正在同步飞书插件配置',
-      description: '检测到官方插件已存在，正在补齐 Qclaw 需要的配置，随后直接进入手动绑定。',
+      description: '检测到官方插件已存在，正在补齐 Mclaw 需要的配置，随后直接进入手动绑定。',
     }
   }
 
@@ -923,6 +936,24 @@ export default function ChannelConnect({
     selectedChannel?.id === 'feishu' &&
     feishuBotSetupMode === 'link' &&
     Boolean(error)
+  const feishuCreatePathStatus = finishingFeishuSetup
+    ? { color: 'blue' as const, label: '收尾中', detail: '正在把新建机器人的结果写回 Mclaw。' }
+    : feishuBotsOrdered.length > 0
+      ? { color: 'success' as const, label: '已检测到机器人', detail: '已经发现可用的飞书机器人，当前可以点击“完成机器人配置”。' }
+      : feishuInstallerRunning
+        ? { color: 'warning' as const, label: '创建流程进行中', detail: '官方安装器正在运行，请继续完成扫码、命名或确认步骤。' }
+        : feishuInstallerOutput.trim()
+          ? { color: 'blue' as const, label: '等待确认结果', detail: '已经有安装器输出，请结合日志和刷新状态判断是否已创建完成。' }
+          : { color: 'gray' as const, label: '未开始', detail: '点击“新建机器人”后开始官方安装器创建流程。' }
+  const feishuLinkPathStatus = finishingFeishuSetup
+    ? { color: 'blue' as const, label: '绑定收尾中', detail: '正在把已有机器人的配置写回 Mclaw。' }
+    : preparingFeishuManualBinding
+      ? { color: 'warning' as const, label: '准备中', detail: '正在检查或补齐官方插件，准备进入手动绑定。' }
+      : feishuManualCredentialsReady
+        ? { color: 'success' as const, label: '可直接绑定', detail: 'App ID / App Secret 已满足要求，可以点击“完成机器人配置”。' }
+        : feishuHasManualCredentialInput
+          ? { color: 'blue' as const, label: '待补全字段', detail: '已经开始填写已有机器人参数，请先补齐必填字段。' }
+          : { color: 'gray' as const, label: '未开始', detail: '点击“关联已有机器人”后，Mclaw 会先检查插件，再开放手动绑定。' }
 
   const applyFeishuInstallerSnapshot = useCallback(
     (snapshot: Awaited<ReturnType<typeof window.api.getFeishuInstallerState>>) => {
@@ -1017,7 +1048,7 @@ export default function ChannelConnect({
           setError('')
           setShowFieldErrors(false)
           setFeishuInstallerNotice(
-            '已刷新到最新状态，飞书官方插件已经可用，现在可以手动绑定已有机器人。'
+            '已刷新到最新状态，飞书官方插件已就绪，现在可以手动绑定已有机器人；完成机器人配置后，再继续输入飞书配对码。'
           )
           void cancelBackgroundFeishuPluginInstall()
           return true
@@ -1034,14 +1065,14 @@ export default function ChannelConnect({
           if (recoveryTarget === 'recover-create') {
             void stopBackgroundFeishuInstaller()
             setFeishuInstallerNotice(
-              '已刷新到最新配置，检测到飞书机器人信息，Qclaw 会停止后台安装器；现在可以直接点击“完成配置”。'
+              '已刷新到最新配置，检测到飞书机器人信息，Mclaw 会停止后台安装器；现在可以直接点击“完成机器人配置”，随后继续输入飞书配对码。'
             )
           } else if (setupState.pluginState.installedOnDisk) {
             setFeishuInstallerNotice(
-              '已检测到飞书官方插件已经落盘；如果页面还没自动切换，可以继续点击“刷新状态”重新确认。'
+              '已检测到飞书官方插件已落盘；如果页面还没自动切换，可以继续点击“刷新状态”重新确认。'
             )
           } else {
-            setFeishuInstallerNotice('已刷新当前状态，飞书官方插件仍在安装中，请稍后再试。')
+            setFeishuInstallerNotice('已刷新当前状态，飞书官方插件仍在安装中；如安装器仍在运行，请稍后再试。')
           }
         }
 
@@ -1133,7 +1164,7 @@ export default function ChannelConnect({
         setFeishuBotSetupMode('link')
         setError('')
         setShowFieldErrors(false)
-        setFeishuInstallerNotice('已自动检测到飞书官方插件就绪，现在可以手动绑定已有机器人。')
+        setFeishuInstallerNotice('已自动检测到飞书官方插件已就绪，现在可以手动绑定已有机器人；完成机器人配置后，再继续输入飞书配对码。')
         void cancelBackgroundFeishuPluginInstall()
         return
       }
@@ -1141,7 +1172,7 @@ export default function ChannelConnect({
       if (result.value.recoveryTarget === 'recover-create') {
         void stopBackgroundFeishuInstaller()
         setFeishuInstallerNotice(
-          '已自动检测到飞书机器人配置，Qclaw 会停止后台安装器；现在可以直接点击“完成配置”。'
+          '已自动检测到飞书机器人配置，Mclaw 会停止后台安装器；现在可以直接点击“完成机器人配置”，随后继续输入飞书配对码。'
         )
       }
     }
@@ -1243,8 +1274,8 @@ export default function ChannelConnect({
     feishuInstallerPromptAutoReplyKeyRef.current = promptKey
     setFeishuInstallerNotice(
       feishuBotSetupMode === 'link'
-        ? '检测到官方安装器询问是否复用已存在的飞书机器人，Qclaw 已自动回复 “Y”。'
-        : '检测到官方安装器询问是否复用已存在的飞书机器人，Qclaw 已自动回复 “n”，继续走新建机器人流程。'
+        ? '检测到官方安装器询问是否复用已有飞书机器人，Mclaw 已自动回复 “Y”。'
+        : '检测到官方安装器询问是否复用已有飞书机器人，Mclaw 已自动回复 “n”，继续走新建机器人流程。'
     )
 
     void sendFeishuInstallerInput(`${autoReply}\n`).then((ok) => {
@@ -1384,8 +1415,8 @@ export default function ChannelConnect({
       }
       setWeixinInstallerOutput((current) =>
         current.trimEnd()
-          ? `${current.replace(/\s*$/, '')}\n\n[Qclaw] 已请求终止个人微信安装器，正在停止...\n`
-          : '[Qclaw] 已请求终止个人微信安装器，正在停止...\n'
+          ? `${current.replace(/\s*$/, '')}\n\n[Mclaw] 已请求终止个人微信安装器，正在停止...\n`
+          : '[Mclaw] 已请求终止个人微信安装器，正在停止...\n'
       )
     } finally {
       setWeixinInstallerBusy(false)
@@ -1488,8 +1519,8 @@ export default function ChannelConnect({
           setFeishuBotSetupMode('link')
           setFeishuInstallerNotice(
             initialState.configChanged
-              ? '已同步飞书官方插件配置，现在可以手动绑定已有机器人。'
-              : '已确认飞书官方插件可用，现在可以手动绑定已有机器人。'
+              ? '已同步飞书官方插件配置，现在可以手动绑定已有机器人；完成机器人配置后，再继续输入飞书配对码。'
+              : '已确认飞书官方插件可用，现在可以手动绑定已有机器人；完成机器人配置后，再继续输入飞书配对码。'
           )
           void refreshFeishuBotsFromConfig().catch(() => {
             // Keep the manual binding form available even if background refresh fails.
@@ -1516,8 +1547,8 @@ export default function ChannelConnect({
       setFeishuBotSetupMode('link')
       setFeishuInstallerNotice(
         ensureResult.installedThisRun
-          ? '已自动补装飞书官方插件，现在可以手动绑定已有机器人。'
-          : '已确认飞书官方插件可用，现在可以手动绑定已有机器人。'
+          ? '已自动补装飞书官方插件，现在可以手动绑定已有机器人；完成机器人配置后，再继续输入飞书配对码。'
+          : '已确认飞书官方插件可用，现在可以手动绑定已有机器人；完成机器人配置后，再继续输入飞书配对码。'
       )
       void refreshFeishuBotsFromConfig().catch(() => {
         // Keep the manual binding form available even if background refresh fails.
@@ -1578,6 +1609,7 @@ export default function ChannelConnect({
             name: String(formData.name || '').trim() || '飞书 Bot',
             appId: channelValidation.values.appId,
             appSecret: channelValidation.values.appSecret,
+            provisionSource: 'linked',
           })
           nextConfig = added.nextConfig
           pairingTarget = {
@@ -1586,6 +1618,9 @@ export default function ChannelConnect({
           }
         } else {
           nextConfig = applyChannelConfig(config, 'feishu', channelValidation.values)
+          if (nextConfig.channels?.feishu) {
+            nextConfig.channels.feishu.mclawProvisionSource = 'linked'
+          }
           const matchedBot = listFeishuBots(nextConfig).find(
             (bot) => bot.appId.trim().toLowerCase() === channelValidation.values.appId.trim().toLowerCase()
           )
@@ -1649,6 +1684,15 @@ export default function ChannelConnect({
       }
 
       await refreshFeishuBotsFromConfig()
+      const resolvedFeishuAccountName = pairingTarget?.accountName || (feishuBotSetupMode === 'create' ? '新建飞书机器人' : '已有飞书机器人')
+      notifications.show({
+        color: 'teal',
+        title: feishuBotSetupMode === 'create' ? '新建机器人已接入' : '已有机器人已绑定',
+        message:
+          feishuBotSetupMode === 'create'
+            ? `已检测到并接入飞书 Bot「${resolvedFeishuAccountName}」。接下来会继续进入后续确认步骤。`
+            : `已完成飞书 Bot「${resolvedFeishuAccountName}」的绑定校验。接下来会继续进入飞书配对步骤。`,
+      })
       onNext({
         channelId: 'feishu',
         accountId: pairingTarget?.accountId,
@@ -2115,6 +2159,32 @@ export default function ChannelConnect({
 
               {selectedChannel.id === 'feishu' ? (
                 <div className="space-y-4">
+                  <div className="rounded-xl border app-border bg-black/20 px-4 py-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="space-y-1">
+                        <Text size="sm" fw={600}>飞书联调两条路径都要验</Text>
+                        <Text size="xs" c="dimmed">
+                          `Mclaw` 当前需要同时覆盖两条接入路径：一条是“新建机器人”，一条是“关联已有机器人”。
+                        </Text>
+                      </div>
+                      <Badge size="xs" variant="light" color="blue">双路径联调</Badge>
+                    </div>
+                    <div className="mt-3 grid gap-2 md:grid-cols-2">
+                      <div className="rounded-lg border app-border-light app-bg-tertiary px-3 py-2">
+                        <Text size="xs" fw={600}>路径 A：新建机器人</Text>
+                        <Text size="xs" c="dimmed" mt={4}>
+                          验证官方安装器、扫码创建、自动回填和新建完成后的收尾状态。
+                        </Text>
+                      </div>
+                      <div className="rounded-lg border app-border-light app-bg-tertiary px-3 py-2">
+                        <Text size="xs" fw={600}>路径 B：关联已有机器人</Text>
+                        <Text size="xs" c="dimmed" mt={4}>
+                          验证插件就绪检查、手填 App ID / App Secret、已有机器人绑定和后续配对流程。
+                        </Text>
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="flex flex-wrap gap-2">
                     <Button
                       variant={feishuBotSetupMode === 'create' ? 'filled' : 'light'}
@@ -2166,6 +2236,38 @@ export default function ChannelConnect({
                     >
                       刷新状态
                     </Button>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <Card withBorder radius="md" padding="md" className="app-bg-secondary">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <Text size="sm" fw={600}>路径 A：新建机器人</Text>
+                          <Text size="xs" c="dimmed" mt={4}>
+                            适合验证官方安装器、扫码创建、自动回填和新建后的收尾。
+                          </Text>
+                        </div>
+                        <Badge size="xs" variant="light" color={feishuCreatePathStatus.color}>
+                          {feishuCreatePathStatus.label}
+                        </Badge>
+                      </div>
+                      <Text size="xs" mt="sm">{feishuCreatePathStatus.detail}</Text>
+                    </Card>
+
+                    <Card withBorder radius="md" padding="md" className="app-bg-secondary">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <Text size="sm" fw={600}>路径 B：关联已有机器人</Text>
+                          <Text size="xs" c="dimmed" mt={4}>
+                            适合验证插件就绪检查、手动填写凭证、已有机器人绑定和后续配对。
+                          </Text>
+                        </div>
+                        <Badge size="xs" variant="light" color={feishuLinkPathStatus.color}>
+                          {feishuLinkPathStatus.label}
+                        </Badge>
+                      </div>
+                      <Text size="xs" mt="sm">{feishuLinkPathStatus.detail}</Text>
+                    </Card>
                   </div>
 
                   <Card withBorder radius="md" padding="md" className="app-bg-secondary">
@@ -2237,8 +2339,13 @@ export default function ChannelConnect({
                         <div>
                           <Text size="sm" fw={600}>建议准备飞书官方 CLI (lark-cli)</Text>
                           <Text size="xs" c="dimmed">
-                            这是飞书官方推荐的底层环境依赖，可用于后续的扫码登录、权限分配和 API 调试。它与 Mclaw 内置的机器人适配器完美兼容。
+                            这是飞书官方推荐的底层 CLI，可用于后续的扫码登录、权限分配和 API 调试；它不会替代当前页面里的官方插件安装器。
                           </Text>
+                        </div>
+                        <div className="flex justify-end">
+                          <Button size="xs" variant="light" color="blue" onClick={loadFeishuOfficialCliStatus}>
+                            安装后刷新状态
+                          </Button>
                         </div>
                         <div className="rounded-md bg-black/40 flex items-center justify-between pl-3 pr-1 py-1 font-mono text-[11px] text-gray-300">
                           <code>npm install -g @larksuite/cli</code>
@@ -2308,6 +2415,47 @@ export default function ChannelConnect({
                     </Card>
                   )}
 
+                  {feishuOfficialCliStatus && feishuOfficialCliStatus.available && feishuOfficialCliStatus.authState === 'error' && (
+                    <Card withBorder radius="md" padding="md" className="app-bg-secondary" style={{ borderColor: 'var(--mantine-color-red-6)' }}>
+                      <div className="space-y-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <Text size="sm" fw={600} c="red">官方 CLI 状态读取失败</Text>
+                            <Text size="xs" c="dimmed">
+                              当前已经检测到 `lark-cli`，但读取授权状态失败。建议先在终端复核一次，再回到这里刷新状态。
+                            </Text>
+                          </div>
+                          <Button size="xs" variant="light" color="red" onClick={loadFeishuOfficialCliStatus}>
+                            重新读取
+                          </Button>
+                        </div>
+                        <div className="rounded-md bg-black/40 flex items-center justify-between pl-3 pr-1 py-1 font-mono text-[11px] text-gray-300">
+                          <code>lark-cli auth status</code>
+                          <CopyButton value="lark-cli auth status" timeout={2000}>
+                            {({ copied, copy }) => (
+                              <Tooltip label={copied ? '已复制' : '复制命令'}>
+                                <ActionIcon variant="subtle" color={copied ? 'teal' : 'gray'} onClick={copy}>
+                                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                                </ActionIcon>
+                              </Tooltip>
+                            )}
+                          </CopyButton>
+                        </div>
+                      </div>
+                    </Card>
+                  )}
+
+                  {feishuOfficialCliStatus && feishuOfficialCliStatus.available && feishuOfficialCliStatus.authState === 'unknown' && (
+                    <Card withBorder radius="md" padding="md" className="app-bg-secondary">
+                      <div className="space-y-2">
+                        <Text size="sm" fw={600}>官方 CLI 状态暂未判定</Text>
+                        <Text size="xs" c="dimmed">
+                          当前已经检测到 `lark-cli`，但还不能可靠判断是否已登录。建议先手动执行 `lark-cli auth status` 复核；复核完成后回到这里点击“刷新状态”。
+                        </Text>
+                      </div>
+                    </Card>
+                  )}
+
                   {preparingFeishuManualBinding ? (
                     <div className="rounded-xl border app-border bg-black/20 px-4 py-4">
                       <div className="flex items-start gap-3">
@@ -2323,7 +2471,7 @@ export default function ChannelConnect({
                             </Text>
                           )}
                           <Text size="xs" c="dimmed">
-                            Qclaw 会自动轮询插件状态；如果插件其实已经装好、但页面还没切换，也可以点击上方“刷新状态”立即重试。
+                            Mclaw 会自动轮询插件状态；如果插件其实已经装好、但页面还没切换，也可以点击上方“刷新状态”立即重试。
                           </Text>
                         </div>
                       </div>
@@ -2376,7 +2524,7 @@ export default function ChannelConnect({
                       )}
 
                       <div className="space-y-2 text-xs leading-6 app-text-tertiary">
-                        <p className="font-medium app-text-secondary">选择“新建机器人”</p>
+                        <p className="font-medium app-text-secondary">新建机器人</p>
                         <p>使用飞书扫码创建新的官方机器人即可。</p>
                         <a
                           href={FEISHU_OFFICIAL_GUIDE_URL}
@@ -2388,14 +2536,14 @@ export default function ChannelConnect({
                         </a>
                         <p className="text-[11px] leading-5 app-text-muted">
                           如果你已经在飞书开放平台创建好了机器人，请点击上方“关联已有机器人”，
-                          Qclaw 会先确认飞书官方插件真实可用；缺失时会先自动补装，再开放手动绑定。
+                          Mclaw 会先确认飞书官方插件真实可用；缺失时会先自动补装，再开放手动绑定。
                         </p>
                       </div>
                     </div>
                   ) : (
                     <div className="space-y-3">
                       <Text size="xs" c="dimmed">
-                        已确认飞书官方插件可用，现在可以手动填写已有机器人的 App ID / App Secret。
+                        已确认飞书官方插件可用，现在可以手动填写已有机器人的 App ID / App Secret；完成机器人配置后，再继续输入飞书配对码。
                       </Text>
                       <div className="rounded-xl border app-border bg-black/20 px-3 py-3">
                         <div className="mb-2 flex items-center justify-between gap-2">
@@ -2410,7 +2558,7 @@ export default function ChannelConnect({
                         </div>
                         <p className="mb-3 text-[11px] leading-5 app-text-muted">
                           如果你已经拿到了已有飞书机器人的 App ID / App Secret，可以直接在这里输入，
-                          然后点击下方“完成配置”。
+                          然后点击下方“完成机器人配置”。
                         </p>
                         <div className="space-y-2">
                           <TextInput
@@ -2503,9 +2651,13 @@ export default function ChannelConnect({
                         </Button>
                       </div>
 
+                      <Text size="xs" c="dimmed" mb="sm">
+                        如果安装器停在等待输入，请优先看上方提示卡和下方日志末尾；完成登录、选项确认或机器人命名后，再继续刷新当前状态。
+                      </Text>
+
                       <ScrollArea.Autosize mah={220} type="auto" offsetScrollbars>
                         <pre className="rounded-lg bg-black/40 p-3 font-mono text-[11px] leading-6 text-zinc-200 whitespace-pre-wrap break-words">
-                          {feishuInstallerOutput.trim() || '安装器已启动，正在等待输出...'}
+                          {feishuInstallerOutput.trim() || '安装器已启动；如果暂时没有输出，请继续等待或按提示完成当前步骤。'}
                         </pre>
                       </ScrollArea.Autosize>
 
@@ -2515,7 +2667,7 @@ export default function ChannelConnect({
                           className="flex-1"
                           value={feishuInstallerInput}
                           onChange={(e) => setFeishuInstallerInput(e.currentTarget.value)}
-                          placeholder="向官方安装器发送自定义输入，例如机器人名称或回车"
+                          placeholder="向官方安装器发送输入，例如机器人名称或回车"
                           disabled={!feishuInstallerRunning}
                         />
                         <Button
@@ -2537,7 +2689,7 @@ export default function ChannelConnect({
                   )}
 
                   {feishuInstallerNotice && (
-                    <Alert color="blue" variant="light" title="已跳过重复安装">
+                    <Alert color="blue" variant="light" title="飞书安装提示">
                       {feishuInstallerNotice}
                     </Alert>
                   )}
@@ -2545,7 +2697,7 @@ export default function ChannelConnect({
               ) : selectedChannel.id === 'openclaw-weixin' ? (
                 <div className="space-y-3">
                   <Text size="sm" c="dimmed">
-                    点击“开始连接”后，Qclaw 会安装个人微信插件，并在下方命令输出里直接展示二维码。请使用微信扫码并在手机上确认授权。
+                    点击“开始连接”后，Mclaw 会安装个人微信插件，并在下方命令输出里直接展示二维码。请使用微信扫码并在手机上确认授权。
                   </Text>
                   <Text size="xs" c="dimmed">
                     如果二维码过期，安装器会自动刷新；连接成功后，账号会自动同步到控制面板中。当前版本暂不支持给其他微信用户做配对授权，仅扫码登录的这个微信账号可直接使用。
@@ -2728,7 +2880,7 @@ export default function ChannelConnect({
                 size="sm"
                 className="flex-1"
               >
-                完成配置
+                完成机器人配置
               </Button>
             ) : selectedChannel?.id === 'openclaw-weixin' ? (
               <Button
@@ -2805,7 +2957,7 @@ export default function ChannelConnect({
               size="sm"
               fullWidth
             >
-              {selectedChannel?.skipPairing ? '完成配置' : '下一步：输入配对码'}
+              {buildChannelConnectConnectedActionLabel(selectedChannel)}
             </Button>
           )}
 

@@ -4,7 +4,7 @@
 
 本清单用于 `Phase 2` 的真实 runtime 载荷接入验证。
 
-与 [docs/mclaw-windows-smoke-checklist.md](C:\Users\James\Desktop\Mclaw\docs\mclaw-windows-smoke-checklist.md) 的区别是：
+与 [mclaw-windows-smoke-checklist.md](./mclaw-windows-smoke-checklist.md) 的区别是：
 
 1. 该清单专门验证 `bundled-runtime` 是否真正生效。
 2. 该清单同时覆盖 Windows 与 macOS。
@@ -26,8 +26,18 @@
    - 或在真实本体进仓后执行 `npm run check:openclaw:bundle:strict`
 5. 建议同时执行：
    - `npm run report:openclaw:bundle`
-   以确认 Windows / macOS 当前会命中 `bundled-runtime`、`bundled-fallback` 还是 `online-fallback`
-6. 载荷获取过程已满足 [docs/openclaw-bundled-runtime-acquisition-sop.md](C:\Users\James\Desktop\Mclaw\docs\openclaw-bundled-runtime-acquisition-sop.md) 的三次验证规则。
+   以确认：
+   - `win32-x64`
+   - `darwin-arm64`
+   - `darwin-x64`
+   当前是否都命中 `bundled-runtime`
+6. 载荷获取过程已满足 [openclaw-bundled-runtime-acquisition-sop.md](./openclaw-bundled-runtime-acquisition-sop.md) 的三次验证规则。
+7. 若本轮接入的是 `darwin-x64 / Intel Mac`，建议同时打开以下文档，避免只按 arm64 经验操作：
+   - [darwin-x64-runtime-receipt-checklist.md](./darwin-x64-runtime-receipt-checklist.md)
+   - [darwin-x64-runtime-intake-command-sheet.md](./darwin-x64-runtime-intake-command-sheet.md)
+   - [darwin-x64-offline-first-launch-runbook.md](./darwin-x64-offline-first-launch-runbook.md)
+   - [openclaw-version-strategy.md](./openclaw-version-strategy.md)
+   - [openclaw-upgrade-migration-smoke-runbook.md](./openclaw-upgrade-migration-smoke-runbook.md)
 
 ## 3. 载荷预检查
 
@@ -116,11 +126,11 @@
 只有以下条件全部满足，才视为 `Phase 2` 可申请退出：
 
 1. Windows 断网首启通过。
-2. macOS 断网首启通过。
-3. 两个平台都实际命中 `bundled-runtime`。
-4. 两个平台都完成 `--version` 探测。
-5. fallback 仍可用，但不再是默认主路径。
-6. 双平台 runtime 都符合获取 SOP 的来源与复验要求。
+2. macOS Apple Silicon 断网首启通过。
+3. macOS Intel 断网首启通过，或已有明确 runbook / 待执行记录且当前仓库侧验收完备。
+4. `win32-x64`、`darwin-arm64`、`darwin-x64` 都实际命中 `bundled-runtime`。
+5. 三平台 runtime 都完成来源与仓库侧的 `--version` / probe 验证。
+6. fallback 仍可用，但不再是默认主路径。
 
 ## 8. 当前阶段结论模板
 
@@ -143,3 +153,11 @@
    - macOS:
 6. 是否允许退出 `Phase 2`：
    - 是 / 否
+
+补充建议：
+
+1. 若版本属于 `2026.4.x`，本段结论应明确写成“candidate 验证通过/未通过”，不要写成主线已切换。
+2. 若平台是 `darwin-x64`，建议同时回填：
+   - 是否已按 receipt checklist 验收
+   - 是否已追加 migration smoke 记录
+   - 是否已按 offline first-launch runbook 执行或排期

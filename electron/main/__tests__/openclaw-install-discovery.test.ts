@@ -402,7 +402,9 @@ describe('discoverOpenClawInstallations', () => {
     expect(result.bundledRuntimeBinaryPath).toBeNull()
     expect(result.candidates[0]?.ownershipState).toBe('qclaw-installed')
     expect(result.candidates[0]?.deliveryMode).toBe('bundled-fallback')
-    expect(result.warnings).toContain('当前 OpenClaw 内置交付模式为 bundled-fallback，目标模式为 bundled-runtime。')
+    expect(result.warnings).toContain(
+      '当前 OpenClaw 内置交付模式为 bundled-fallback，目标模式为 bundled-runtime；请检查当前平台载荷是否缺失、损坏或在安装包中打包不完整。'
+    )
   })
 
   it('reports history-only when only historical state files exist', async () => {

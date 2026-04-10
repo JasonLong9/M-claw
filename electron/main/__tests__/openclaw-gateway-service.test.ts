@@ -11,8 +11,10 @@ const {
   checkOpenClawMock,
   confirmRuntimeReconcileMock,
   findAvailableLoopbackPortMock,
+  probeGatewayPortReachableMock,
   gatewayRestartMock,
   gatewayHealthMock,
+  gatewayRunInBackgroundMock,
   gatewayStopMock,
   guardedWriteConfigMock,
   installPluginMock,
@@ -43,8 +45,10 @@ const {
   checkOpenClawMock: vi.fn(),
   confirmRuntimeReconcileMock: vi.fn(),
   findAvailableLoopbackPortMock: vi.fn(),
+  probeGatewayPortReachableMock: vi.fn(),
   gatewayRestartMock: vi.fn(),
   gatewayHealthMock: vi.fn(),
+  gatewayRunInBackgroundMock: vi.fn(),
   gatewayStopMock: vi.fn(),
   guardedWriteConfigMock: vi.fn(),
   installPluginMock: vi.fn(),
@@ -96,6 +100,7 @@ vi.mock('../cli', () => ({
   gatewayStop: gatewayStopMock,
   getOpenClawPaths: getOpenClawPathsMock,
   gatewayStart: gatewayStartMock,
+  gatewayRunInBackground: gatewayRunInBackgroundMock,
   installEnv: installEnvMock,
   installPlugin: installPluginMock,
   installPluginNpx: installPluginNpxMock,
@@ -137,6 +142,7 @@ vi.mock('../openclaw-runtime-reconcile', () => ({
 vi.mock('../openclaw-gateway-probes', () => ({
   findAvailableLoopbackPort: findAvailableLoopbackPortMock,
   probeGatewayPortOwner: probeGatewayPortOwnerMock,
+  probeGatewayPortReachable: probeGatewayPortReachableMock,
 }))
 
 vi.mock('../../../src/shared/polling', () => ({
@@ -167,8 +173,10 @@ describe('openclaw gateway service', () => {
     checkOpenClawMock.mockReset()
     confirmRuntimeReconcileMock.mockReset()
     findAvailableLoopbackPortMock.mockReset()
+    probeGatewayPortReachableMock.mockReset()
     gatewayRestartMock.mockReset()
     gatewayHealthMock.mockReset()
+    gatewayRunInBackgroundMock.mockReset()
     gatewayStopMock.mockReset()
     guardedWriteConfigMock.mockReset()
     installPluginMock.mockReset()
@@ -1375,7 +1383,7 @@ describe('openclaw gateway service', () => {
     expect(gatewayStartMock).not.toHaveBeenCalled()
   })
 
-  it('quarantines incompatible plugins and re-checks health when the initial probe reports plugin_load_failure', async () => {
+  it('quarantines incompatible plugins, restores configured managed channels, and re-checks health when the initial probe reports plugin_load_failure', async () => {
     gatewayHealthMock
       .mockResolvedValueOnce({
         running: false,
@@ -1416,12 +1424,8 @@ describe('openclaw gateway service', () => {
 
     expect(repairIncompatibleExtensionPluginsMock).toHaveBeenCalledWith({
       quarantineOfficialManagedPlugins: true,
+      restoreConfiguredManagedChannels: true,
     })
-    expect(repairIncompatibleExtensionPluginsMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        restoreConfiguredManagedChannels: true,
-      })
-    )
     expect(gatewayHealthMock).toHaveBeenCalledTimes(2)
     expect(gatewayStartMock).not.toHaveBeenCalled()
     expect(result.ok).toBe(true)
@@ -1545,6 +1549,47 @@ describe('openclaw gateway service', () => {
       ['gateway', 'install'],
     ])
     expect(result.stderr).toContain('permission denied')
+  })
+
+  it('accepts the Windows foreground compatibility fallback when the port becomes reachable', async () => {
+    gatewayStartMock.mockResolvedValueOnce({
+      ok: false,
+      stdout: '',
+      stderr: 'Gateway service not loaded.',
+      code: 1,
+    })
+    runCliMock.mockResolvedValueOnce({
+      ok: false,
+      stdout: '',
+      stderr: 'Gateway service install failed: Error: spawn EPERM',
+      code: 1,
+    })
+    gatewayRunInBackgroundMock.mockResolvedValueOnce({
+      ok: true,
+      stdout: '',
+      stderr: 'Gateway foreground compatibility logs: C:\\temp\\gateway.log',
+      code: 0,
+    })
+    gatewayHealthMock.mockResolvedValueOnce({
+      running: false,
+      raw: '',
+      stderr: 'EPERM: operation not permitted, open C:\\Users\\James\\.openclaw\\identity\\device.json',
+      code: 1,
+      stateCode: 'unknown_runtime_failure',
+      summary: 'OpenClaw health command is blocked by a local permission issue',
+    })
+    probeGatewayPortReachableMock.mockResolvedValueOnce(true)
+
+    const result = await ensureGatewayRunning()
+
+    expect(result.ok).toBe(true)
+    expect(result.running).toBe(true)
+    expect(result.summary).toContain('兼容')
+    expect(result.attemptedCommands).toEqual([
+      ['gateway', 'start'],
+      ['gateway', 'install'],
+      ['gateway', 'run', '--allow-unconfigured', '--port', '18789'],
+    ])
   })
 
   it('restarts the gateway once when readiness evidence shows token mismatch', async () => {

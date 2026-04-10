@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { assessRuntimeIntakeDecision } from './openclaw-runtime-intake-decision.mjs'
 
 const repoRoot = process.cwd()
 
@@ -131,6 +132,11 @@ const artifact = {
   directoryName,
   version: versionArg,
 }
+const decision = assessRuntimeIntakeDecision({
+  runtimeDir,
+  expectedVersion: versionArg,
+  packageManifestPath,
+})
 
 info(`runtimeDir=${path.relative(repoRoot, runtimeDir)}`)
 info(`platform=${platformArg}`)
@@ -138,6 +144,19 @@ info(`arch=${archArg}`)
 info(`directoryName=${directoryName}`)
 info(`binary=${path.relative(repoRoot, binaryPath)}`)
 info(`packageManifest=${path.relative(repoRoot, packageManifestPath)}`)
+info(`packageVersion=${decision.packageVersion || 'unknown'}`)
+if (decision.notes) {
+  info(`notes=${path.relative(repoRoot, decision.notes.path)}`)
+  info(`notes.sourceVersion=${decision.sourceVersion || 'unknown'}`)
+  info(`notes.copiedVersion=${decision.copiedVersion || 'unknown'}`)
+} else {
+  info('notes=missing')
+}
+info(`pinnedVersion=${decision.pinnedVersion || 'unknown'}`)
+info(`intakeDecision=${decision.intakeDecision}`)
+for (const reason of decision.decisionReasons) {
+  info(`decisionReason=${reason}`)
+}
 info(`files=${stats.fileCount}`)
 info(`directories=${stats.dirCount}`)
 info(`totalBytes=${stats.totalBytes}`)

@@ -53,6 +53,7 @@ interface ChannelInfo {
   accountName?: string
   agentId?: string
   isFeishuBot?: boolean
+  provisionSource?: 'created' | 'linked' | 'unknown'
   runtimeState?: FeishuRuntimeStatusState
   runtimeSummary?: string
   runtimeIssues?: string[]
@@ -85,6 +86,35 @@ function getRuntimeLabel(state: FeishuRuntimeStatusState | undefined): string {
   if (state === 'degraded') return '待修复'
   if (state === 'disabled') return '已禁用'
   return '离线'
+}
+
+function getPairingStateBadgeColor(state: ChannelInfo['pairingState']): string {
+  if (state === 'paired') return 'teal'
+  if (state === 'pending') return 'yellow'
+  return 'gray'
+}
+
+function getPairingStateBadgeLabel(channel: ChannelInfo): string {
+  if (!channel.pairingRequired) return '无需配对'
+  if (channel.channelId === 'feishu') {
+    return channel.pairingState === 'paired' ? '已接入并已配对' : '已接入，待配对'
+  }
+  if (channel.channelId === 'openclaw-weixin') {
+    return channel.pairingState === 'paired' ? '已授权其他用户' : '待配对授权'
+  }
+  return channel.pairingState === 'paired' ? '已配对' : '待配对'
+}
+
+function getFeishuProvisionSourceBadgeColor(source: ChannelInfo['provisionSource']): string {
+  if (source === 'created') return 'blue'
+  if (source === 'linked') return 'grape'
+  return 'gray'
+}
+
+function getFeishuProvisionSourceBadgeLabel(source: ChannelInfo['provisionSource']): string {
+  if (source === 'created') return '来源：新建机器人'
+  if (source === 'linked') return '来源：关联已有'
+  return '来源：待确认'
 }
 
 export function getChannelEnabledLabel(enabled: boolean): string {
@@ -233,6 +263,7 @@ export default function ChannelsPage() {
               pairingAccountId: bot.accountId,
               agentId: bot.agentId,
               isFeishuBot: true,
+              provisionSource: bot.provisionSource,
               runtimeState: feishuRuntimeStatus[bot.accountId]?.runtimeState,
               runtimeSummary: feishuRuntimeStatus[bot.accountId]?.summary,
               runtimeIssues: feishuRuntimeStatus[bot.accountId]?.issues || [],
@@ -257,6 +288,7 @@ export default function ChannelsPage() {
               pairingAccountId: bot.accountId,
               agentId: bot.agentId,
               isFeishuBot: true,
+              provisionSource: bot.provisionSource,
               runtimeState: feishuRuntimeStatus[bot.accountId]?.runtimeState,
               runtimeSummary: feishuRuntimeStatus[bot.accountId]?.summary,
               runtimeIssues: feishuRuntimeStatus[bot.accountId]?.issues || [],
@@ -796,6 +828,22 @@ export default function ChannelsPage() {
                           <Badge variant="light" size="sm" color={channel.enabled ? 'teal' : 'gray'}>
                             {getChannelEnabledLabel(channel.enabled)}
                           </Badge>
+                          <Badge
+                            variant="light"
+                            size="sm"
+                            color={getPairingStateBadgeColor(channel.pairingState)}
+                          >
+                            {getPairingStateBadgeLabel(channel)}
+                          </Badge>
+                          {channel.channelId === 'feishu' && (
+                            <Badge
+                              variant="light"
+                              size="sm"
+                              color={getFeishuProvisionSourceBadgeColor(channel.provisionSource)}
+                            >
+                              {getFeishuProvisionSourceBadgeLabel(channel.provisionSource)}
+                            </Badge>
+                          )}
                           {channel.channelId === 'feishu' && (
                             <Badge
                               variant="light"
@@ -810,11 +858,28 @@ export default function ChannelsPage() {
                           {channel.pairingRequired
                             ? channel.channelId === 'openclaw-weixin'
                               ? '点击卡片可为这个个人微信账号批准其他用户的配对授权。'
-                              : '点击卡片可进入这个 Bot 的配对管理。'
+                              : channel.pairingState === 'paired'
+                                ? '这个飞书 Bot 已接入并已有用户完成配对；点击卡片可继续管理更多配对。'
+                                : '这个飞书 Bot 已接入，但还没有用户完成配对；点击卡片可继续进入配对管理。'
                             : channel.channelId === 'openclaw-weixin'
                               ? '当前个人微信仅支持扫码登录的这个微信账号使用，暂不支持给其他微信用户做配对授权。'
-                            : `${platformInfo.name} 渠道接入后无需额外配对。`}
+                              : `${platformInfo.name} 渠道接入后无需额外配对。`}
                         </Text>
+                      {channel.channelId === 'feishu' && (
+                          <Text size="xs" c="dimmed" mt={6}>
+                            {channel.provisionSource === 'created'
+                              ? '这个 Bot 来自 Mclaw 内的新建机器人路径。'
+                              : channel.provisionSource === 'linked'
+                                ? '这个 Bot 来自“关联已有机器人”路径。'
+                                : '这个 Bot 的接入来源暂未记录，可能是旧配置或较早版本创建。'}
+                          </Text>
+                        )}
+                        {channel.channelId === 'feishu' && channel.provisionSource === 'unknown' && (
+                          <Alert color="yellow" variant="light" mt="sm" title="来源待确认">
+                            这个飞书 Bot 来自旧配置或较早版本，当前只能确认它已经接入，
+                            但还不能可靠判断它最初是“新建机器人”还是“关联已有机器人”。
+                          </Alert>
+                        )}
                         {channel.channelId === 'feishu' && channel.runtimeSummary && (
                           <Text size="xs" c="dimmed" mt={6}>
                             运行状态：{channel.runtimeSummary}

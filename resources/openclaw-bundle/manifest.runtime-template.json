@@ -31,7 +31,8 @@
     ]
   },
   "notes": [
-    "Switch defaultDeliveryMode to bundled-runtime only after real runtime payloads are present and validated.",
-    "Keep tgz as controlled bundled-fallback rather than the primary delivery path."
+    "All declared runtime artifacts should stay aligned with the pinned OpenClaw version.",
+    "Keep tgz as controlled bundled-fallback rather than the primary delivery path.",
+    "If darwin-x64 is replaced with a candidate runtime, validate via intake/probe/migration-smoke before changing mainline manifest."
   ]
 }

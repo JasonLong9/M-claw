@@ -2813,3 +2813,4031 @@ Phase 4：跨平台首次启动与环境检查主流程实现，统一欢迎页�
 - 相关核心测试（`feishu-official-cli-state`、`preload/index`）：✅ 6/6 通过
 - 存量遗留失败文件数：约 21 个（均为预存在遗留，与近期改动无因果关系）
 
+---
+
+## 2026-04-07（第 51 次更新）
+
+### 本次目标
+
+继续收口 `Phase 3 / Phase 4` 的用户可见文案，优先统一：
+
+1. README 对外状态口径
+2. `EnvCheck` 首次启动提示
+3. `OpenClaw` 来源标签与降级提示
+
+### 已完成动作
+
+1. 更新 `README.md`：
+   - 将 Windows 平台状态从“开发中”调整为更符合当前仓库实际状态的表述
+   - 将“自动更新”改为“版本更新支持”，避免对外承诺超过当前路线图
+2. 更新 `README.en.md`：
+   - 同步调整 Windows 平台状态表述
+   - 将 `Update support` 改为更贴近现状的 `Version update support`
+3. 更新 `src/shared/env-check-policy.ts`：
+   - 将 loading tips 中残留的 `Qclaw` 文案切换为 `Mclaw`
+   - 将“请确保网络连接正常”改为更符合 `runtime-first` 状态的提示
+4. 更新 `src/pages/EnvCheck.tsx`：
+   - 将在线兜底失败提示改为“本地内置本体释放失败，且网络兜底部署也未完成”
+   - 将 `bundled-fallback` 的来源标签从“内置回退”调整为“内置降级”
+   - 将 “当前交付模式” 调整为 “当前运行来源”
+   - 将多处 “当前来源” 明确为 “当前 OpenClaw 来源”
+
+### 当前结论
+
+1. `Phase 4` 当前这轮改动没有触碰安装逻辑，只聚焦在用户可见文案与状态说明。
+2. 启动页和异常页现在更贴近当前真实交付状态：
+   - 优先内置本体
+   - 网络安装只是兜底
+   - 当前来源与降级状态更容易被用户理解
+3. 这类收口不能替代 `Phase 2` 的 mac runtime 接入，但能降低后续真机验证时的误解成本。
+
+### 下一步
+
+1. 继续检查 `EnvCheck` 里剩余的边缘提示，尤其是来源 badge、手动升级提示与失败态辅助说明。
+2. 等 `darwin-arm64` runtime 包体到位后，立即切回 `Phase 2` 接入与退出检查。
+
+---
+
+## 2026-04-07（第 52 次更新）
+
+### 本次目标
+
+继续细化 `Phase 4` 的 `EnvCheck` 边缘异常提示，统一：
+
+1. OpenClaw 来源 badge
+2. 降级 / 兜底路径文案
+3. delivery notice 提示语义
+4. 相关测试断言
+
+### 已完成动作
+
+1. 更新 `src/pages/EnvCheck.tsx`：
+   - 将 `online-fallback` 的 badge 从“在线回退”调整为“在线兜底”
+   - 将 `online-fallback` 提示改为“已进入在线补装兜底路径”
+   - 将 `external`、`npm-global`、`homebrew`、`custom` 的说明统一为“OpenClaw 运行环境”
+   - 将 delivery notice 的说明从“过渡交付形态”进一步明确为“降级、兜底或过渡状态”
+   - 将“OpenClaw 需要手动调整版本”改为“OpenClaw 需要手动处理版本”
+2. 更新 `src/pages/__tests__/env-check-state.test.ts`：
+   - 同步更新来源 badge 与 delivery notice 的断言文本
+
+### 当前结论
+
+1. `EnvCheck` 当前这轮异常提示已经比之前更接近产品真实状态，不再把“在线 fallback”表达成默认主流程，而是明确成兜底路径。
+2. 用户在启动页看到的来源标签现在更统一：
+   - 内置本体
+   - 内置降级
+   - 在线兜底
+   - 外部环境
+3. 这轮仍然属于 `Phase 4` 的展示层收口，不改变安装判定逻辑，也不替代 `Phase 2` 的 runtime 接入工作。
+
+### 下一步
+
+1. 若继续推进 `Phase 4`，下一轮应优先检查：
+   - Node 手动升级提示
+   - Gateway 跳过检查提示
+   - 安装后仍检测不到 OpenClaw 时的兜底说明
+2. 若 `darwin-arm64` 包体先到，则立即中断这条线，切回 `Phase 2` 接包验证。
+
+---
+
+## 2026-04-07（第 53 次更新）
+
+### 本次目标
+
+继续推进 `Phase 4` 的启动页异常提示收口，聚焦：
+
+1. Node 手动升级提示
+2. Gateway 延后确认提示
+3. OpenClaw 准备后仍检测不到命令时的兜底说明
+
+### 已完成动作
+
+1. 更新 `src/pages/EnvCheck.tsx`：
+   - 将 Node 手动升级失败提示从“版本仍低于要求”调整为“版本仍未满足要求”
+   - 将 Node 版本过低说明调整为“请先手动升级 Node.js 后再继续”
+   - 将 Gateway 提示从“后续流程会自动确认”调整为“完成后续配置后会再次自动确认”
+   - 在“安装后仍无法检测到 OpenClaw”场景中补充：
+     - 这通常表示内置本体释放和 PATH 生效之间仍存在异常
+     - 手动命令属于临时兜底路径，而不是默认主路径
+
+### 当前结论
+
+1. `EnvCheck` 当前这轮提示已经比之前更少“模糊说法”，更强调当前异常大致落在哪个层面：
+   - Node 版本门槛
+   - Gateway 延后确认
+   - OpenClaw 本体释放 / PATH 生效异常
+2. 这一轮仍然只处理展示层，不改变安装器执行顺序，也不改变 `runtime-first` 的主路径决策。
+
+### 下一步
+
+1. 若继续推进 `Phase 4`，可继续检查：
+   - takeover 备份失败提示
+   - fatal issue 按钮文案
+   - startup issue 分支提示是否还存在平台歧义
+2. 若 `darwin-arm64` runtime 包体先到，则立即转回 `Phase 2` 接包校验链路。
+
+---
+
+## 2026-04-07（第 54 次更新）
+
+### 本次目标
+
+继续推进 `Phase 4` 的边缘交互提示收口，聚焦：
+
+1. startup issue 分支按钮文案
+2. fatal issue 重试按钮文案
+3. takeover 手动备份确认按钮文案
+4. 平台歧义提示语
+
+### 已完成动作
+
+1. 更新 `src/pages/EnvCheck.tsx`：
+   - 将 startup issue 非 Xcode 场景下的按钮文案从“继续安装”调整为“重新执行准备流程”
+   - 将 fatal issue 主按钮文案从“继续安装”调整为“重新执行准备流程”
+   - 将 takeover 手动备份确认按钮从“我已手动备份，继续”调整为“我已手动备份，继续接管”
+   - 将平台歧义提示从“请继续检查平台条件分流”改为更明确的“说明平台分流仍需继续排查”
+
+### 当前结论
+
+1. `EnvCheck` 当前这轮按钮文案已经比之前更准确，不再把失败后的恢复动作表述成“继续安装”，而是明确为“重新执行准备流程”。
+2. takeover 分支也更清楚地区分了：
+   - 手动备份已完成
+   - 接下来执行的是“继续接管”，而不是普通重试
+3. 这轮依旧只涉及展示层收口，没有改动状态机或恢复逻辑。
+
+### 下一步
+
+1. 若继续推进 `Phase 4`，下一轮可检查：
+   - 插件修复提示与坏插件环境文案
+   - 历史 OpenClaw 接管失败提示的冗余程度
+   - 版本门禁与来源 badge 的组合展示是否还可再压缩
+2. 若 `darwin-arm64` runtime 包体到位，则立即切回 `Phase 2` 接包验证。
+
+---
+
+## 2026-04-07（第 55 次更新）
+
+### 本次目标
+
+继续压缩 `Phase 4` 的恢复类提示文案，聚焦：
+
+1. 插件环境修复提示
+2. 历史 OpenClaw 备份失败提示
+3. takeover 手动备份确认文案
+
+### 已完成动作
+
+1. 更新 `src/pages/EnvCheck.tsx`：
+   - 将“已自动隔离坏插件”调整为“已自动隔离异常插件”
+   - 将“坏插件环境修复失败”调整为“插件环境修复失败”
+   - 将“历史 OpenClaw 自动备份失败”压缩为“历史 OpenClaw 备份失败”
+   - 将 takeover 手动确认说明调整为“继续恢复并接管历史 OpenClaw 运行环境”
+   - 将“重试备份”按钮调整为“重新备份”
+   - 将控制面板阻断说明从“先阻止进入控制面板”改为“暂时阻止进入控制面板”，语义更温和但仍明确
+
+### 当前结论
+
+1. 这一轮改动继续压缩了 `EnvCheck` 中的恢复类提示，使异常插件、历史备份失败和接管流程的语义更一致。
+2. 当前用户在启动页看到的恢复动作已经更接近实际操作意图：
+   - 先隔离异常插件
+   - 先补备份
+   - 再继续接管
+3. 这轮仍然没有改动恢复逻辑本身，只在展示层减少噪音和误导。
+
+### 下一步
+
+1. 若继续推进 `Phase 4`，可以开始检查：
+   - loading tips 是否还存在不必要噪音
+   - 首次启动步骤描述是否仍能再压缩
+   - 版本门禁区块是否需要进一步合并提示
+2. 若 `darwin-arm64` runtime 包体到位，则立即切回 `Phase 2` 接包验证。
+
+---
+
+## 2026-04-07（第 56 次更新）
+
+### 本次目标
+
+继续做 `Phase 4` 的轻量去噪，聚焦：
+
+1. loading tips 压缩
+2. 首次启动步骤描述压缩
+3. 版本门禁提示措辞统一
+
+### 已完成动作
+
+1. 更新 `src/shared/env-check-policy.ts`：
+   - 将“安装、配置过程可能会输入电脑密码”调整为“准备过程中可能需要系统授权或管理员密码”
+2. 更新 `src/pages/EnvCheck.tsx`：
+   - 将首次启动步骤描述调整为更短的版本：
+     - `Node.js`：从“扫描或补齐系统 Node.js 依赖”压缩为“检查或补齐 Node.js 依赖”
+     - `OpenClaw`：从“尝试释放本地内置 OpenClaw 本体”压缩为“优先释放内置 OpenClaw 本体”
+     - `Gateway`：从“记录后续 Gateway 可用性确认时机”压缩为“记录后续 Gateway 确认时机”
+   - 将延后确认说明从“认证和渠道配置完成后再确认 Gateway 可用性”调整为“完成认证和渠道配置后再确认 Gateway 可用性”
+   - 将版本门禁提示中的“切换到 / 升级到”统一为“切换至 / 升级至”
+
+### 当前结论
+
+1. 这一轮属于纯展示层去噪，没有改变任何启动流程或状态判断。
+2. `EnvCheck` 当前首页步骤说明已经更短，更适合首启时快速扫描。
+3. 版本门禁提示现在更统一，减少了同一页面内近义表达不一致的问题。
+
+### 下一步
+
+1. 若继续推进 `Phase 4`，可以再检查：
+   - loading tips 是否还要进一步精简
+   - 版本门禁区块和来源 badge 是否能再减少重复信息
+   - `EnvCheck` 中是否还有残留的“安装中 / 开发中”类旧语义
+2. 若 `darwin-arm64` runtime 包体到位，则立即切回 `Phase 2` 接包验证。
+
+---
+
+## 2026-04-07（第 57 次更新）
+
+### 本次目标
+
+继续做 `Phase 4` 的小范围压缩，聚焦：
+
+1. 版本门禁措辞统一
+2. 来源区块标题去重
+3. 测试断言同步
+
+### 已完成动作
+
+1. 更新 `src/pages/EnvCheck.tsx`：
+   - 将“可升级到”统一为“可升级至”
+   - 将“需手动调整到”统一为“需手动调整至”
+   - 将“请先手动调整到”统一为“请先手动调整至”
+   - 将 delivery notice 标题从“当前运行来源”压缩为“运行来源”
+   - 将多处“当前 OpenClaw 来源”压缩为“OpenClaw 来源”
+2. 更新 `src/pages/__tests__/env-check-state.test.ts`：
+   - 同步更新 delivery notice 标题断言
+
+### 当前结论
+
+1. 这轮属于 `Phase 4` 的最后一类细颗粒度去重，重点不是新增信息，而是减少同义重复。
+2. `EnvCheck` 当前的版本门禁和来源说明已经比前几轮更短、更统一，用户在首屏阅读时负担更低。
+3. 这轮依旧没有触碰任何安装、恢复或状态判定逻辑。
+
+### 下一步
+
+1. 若继续推进 `Phase 4`，下一步可以转向：
+   - 检查是否还存在明显的旧语义残留
+   - 评估 `EnvCheck` 首页是否已经达到“边际收益下降”的停止点
+2. 若 `darwin-arm64` runtime 包体到位，则立即切回 `Phase 2` 接包验证。
+
+---
+
+## 2026-04-07（第 58 次更新）
+
+### 本次目标
+
+完成 `Phase 4` 文案收口线的最后一轮统一，并判断是否已接近停止点。
+
+### 已完成动作
+
+1. 更新 `src/pages/EnvCheck.tsx`：
+   - 将自动纠偏分支中的：
+     - `需回退到` 统一为 `需回退至`
+     - `需升级到` 统一为 `需升级至`
+     - `正在自动回退到` 统一为 `正在自动回退至`
+     - `正在自动升级到` 统一为 `正在自动升级至`
+
+### 当前结论
+
+1. `EnvCheck` 当前这条 `Phase 4` 文案收口线已经接近边际收益停止点。
+2. 经过最近多轮收口后，当前首屏和异常提示已经基本满足：
+   - 品牌统一
+   - 交付路径统一
+   - 降级/兜底语义统一
+   - 恢复动作命名统一
+   - 版本门禁措辞统一
+3. 继续在这条线上深挖，收益已经明显低于等待 `darwin-arm64` runtime 到位后回到 `Phase 2` 主阻塞。
+
+### 下一步
+
+1. `Phase 4` 文案线先降优先级，除非后续真机验证再暴露新的明显误导文案。
+2. 当前最有价值的下一步仍然是：
+   - 等待 `darwin-arm64` runtime 包体
+   - 收包验收
+   - 切回 `Phase 2` 接包验证链路
+
+---
+
+## 2026-04-07（第 59 次更新）
+
+### 本次目标
+
+在不阻塞 `Phase 2` 的前提下，恢复推进 `Phase 5`，优先补齐飞书官方 CLI 授权层与现有官方插件安装器之间的闭环引导。
+
+### 已完成动作
+
+1. 更新 `electron/main/feishu-official-cli-state.ts`：
+   - 当本机未安装 `lark-cli` 时，推荐动作里显式给出：
+     - `npm install -g @larksuite/cli`
+   - 当授权状态异常或未知时，推荐动作补充：
+     - 复核后返回页面点击“刷新状态”
+2. 更新 `src/pages/ChannelConnect.tsx`：
+   - 在“建议准备飞书官方 CLI (lark-cli)”卡片里补充“安装后刷新状态”按钮
+   - 将该卡片说明改成更直接的表述：
+     - `lark-cli` 是官方底层 CLI
+     - 它不会替代当前页面里的官方插件安装器
+   - 清理飞书链路中的品牌残留，将多处 `Qclaw` 提示切换为 `Mclaw`
+
+### 当前结论
+
+1. `Phase 5` 现在已经重新开始推进，但推进方式仍然受控：
+   - 不重写现有安装器
+   - 不替代既有主链
+   - 只补“官方 CLI 授权层”的闭环引导
+2. 这轮之后，飞书连接页对三种情况的过渡更顺了：
+   - 未安装 `lark-cli`
+   - 已安装但未登录
+   - 已登录可继续安装官方插件
+3. 当前这条线仍然适合作为 `Phase 2` 等包期间的并行工作，不会影响后续 runtime 接入。
+
+### 下一步
+
+1. 若继续推进 `Phase 5`，优先检查：
+   - `lark-cli` 状态未知 / 探测失败时的页面提示是否还可增强
+   - 飞书安装器输出区是否还需要更明确的下一步引导
+   - `ChannelConnect` 中飞书链路是否还残留旧品牌或旧职责描述
+2. 若 `darwin-arm64` runtime 包体到位，则立即中断该线，切回 `Phase 2` 接包验证。
+
+---
+
+## 2026-04-07（第 60 次更新）
+
+### 本次目标
+
+继续推进 `Phase 5` 的飞书闭环，补齐：
+
+1. `lark-cli` 状态未知 / 读取失败时的页面级引导
+2. 飞书官方安装器输出区的下一步提示
+
+### 已完成动作
+
+1. 更新 `src/pages/ChannelConnect.tsx`：
+   - 新增 `lark-cli` `authState === error` 时的专门卡片：
+     - 明确提示“官方 CLI 状态读取失败”
+     - 提供 `lark-cli auth status` 一键复制
+     - 提供“重新读取”按钮
+   - 新增 `lark-cli` `authState === unknown` 时的专门卡片：
+     - 明确提示当前还不能可靠判断是否已登录
+     - 引导用户先手动执行 `lark-cli auth status` 再回页刷新
+   - 在飞书官方安装器输出区上方补充下一步提示：
+     - 如果卡在等待输入，优先参考提示卡与日志末尾
+     - 完成登录、选项确认或机器人命名后，再刷新当前状态
+
+### 当前结论
+
+1. `Phase 5` 当前这轮已经从“有 CLI 状态展示”推进到“不同 CLI 状态下有不同恢复动作”。
+2. 现在飞书连接页对四类状态都有了更完整的页面级说明：
+   - 未安装
+   - 已安装但未登录
+   - 状态未知 / 读取失败
+   - 已登录可继续安装官方插件
+3. 这一步继续强化了“官方 CLI 授权层”和“官方插件安装层”之间的衔接，但仍未触碰现有安装器主链路。
+
+### 下一步
+
+1. 若继续推进 `Phase 5`，下一轮可优先检查：
+   - 飞书安装器 notice 文案是否还能再统一
+   - “关联已有机器人”与“新建机器人”两条路径的收口提示是否还存在旧品牌或重复提示
+2. 若 `darwin-arm64` runtime 包体到位，则立即中断这条线，切回 `Phase 2` 接包验证。
+
+---
+
+## 2026-04-07（第 61 次更新）
+
+### 本次目标
+
+继续推进 `Phase 5`，统一飞书安装器 notice 文案，并压缩“新建机器人 / 关联已有机器人”两条路径的提示语。
+
+### 已完成动作
+
+1. 更新 `src/pages/ChannelConnect.tsx`：
+   - 将多处飞书插件就绪提示统一为更短的“已就绪 / 已落盘 / 仍在安装中”风格
+   - 将安装中提示补充为：
+     - “如安装器仍在运行，请稍后再试”
+   - 将官方安装器自动回复提示里的“已存在的飞书机器人”压缩为“已有飞书机器人”
+   - 将“选择‘新建机器人’”压缩为更直接的标题“新建机器人”
+   - 将官方安装器输入框 placeholder 从“发送自定义输入”压缩为“发送输入”
+
+### 当前结论
+
+1. `Phase 5` 当前这轮继续提升了飞书连接页的可读性，尤其是安装器 notice 区不再反复使用长句重复表达同一状态。
+2. “新建机器人”和“关联已有机器人”两条路径的提示现在更短，也更像同一套产品语气。
+3. 这轮依旧只做闭环增强和文案压缩，没有改动飞书安装器控制逻辑。
+
+### 下一步
+
+1. 若继续推进 `Phase 5`，下一轮可以检查：
+   - 是否要为飞书安装器结束态补充更明确的成功 / 失败收尾提示
+   - `ChannelConnect` 飞书路径里是否还残留不必要的长说明
+2. 若 `darwin-arm64` runtime 包体到位，则立即中断该线，切回 `Phase 2` 接包验证。
+
+---
+
+## 2026-04-07（第 62 次更新）
+
+### 本次目标
+
+继续收口 `Phase 5` 飞书安装器的结束态提示，避免固定标题和空输出占位误导用户。
+
+### 已完成动作
+
+1. 更新 `src/pages/ChannelConnect.tsx`：
+   - 将飞书官方安装器输出区的空白占位从：
+     - “安装器已启动，正在等待输出...”
+     调整为：
+     - “安装器已启动；如果暂时没有输出，请继续等待或按提示完成当前步骤。”
+   - 将飞书安装 notice 区的固定标题从：
+     - “已跳过重复安装”
+     调整为：
+     - “飞书安装提示”
+
+### 当前结论
+
+1. 这轮修复的是一个明显的页面语义问题：
+   - `feishuInstallerNotice` 并不总是“跳过重复安装”
+   - 因此固定标题会误导用户
+2. 现在 notice 区已经回到中性表达，更适合承载：
+   - 已就绪
+   - 已刷新
+   - 已自动回复
+   - 安装中
+   - 其它状态提示
+3. 输出区空状态也更贴近真实用户动作，不再暗示系统一定还在持续刷日志。
+
+### 下一步
+
+1. 若继续推进 `Phase 5`，下一轮可以做一次停止点判断：
+   - 检查飞书连接页是否还存在高价值的明显误导文案
+   - 若没有，则让这条线先降优先级
+2. 若 `darwin-arm64` runtime 包体到位，则立即切回 `Phase 2` 接包验证。
+
+---
+
+## 2026-04-07（第 63 次更新）
+
+### 本次目标
+
+完成 `Phase 5` 当前这轮清扫的停止点判断，并清理 `ChannelConnect` 中剩余的明显品牌残留。
+
+### 已完成动作
+
+1. 更新 `src/pages/ChannelConnect.tsx`：
+   - 将个人微信安装器输出中的 `[Qclaw]` 前缀切换为 `[Mclaw]`
+   - 将个人微信接入说明中的 `Qclaw 会安装个人微信插件` 切换为 `Mclaw 会安装个人微信插件`
+
+### 当前结论
+
+1. `ChannelConnect` 当前这轮 `Phase 5` 文案与引导收口已经接近停止点。
+2. 经过最近几轮推进后，飞书连接页已经基本具备：
+   - 官方 CLI 未安装引导
+   - 官方 CLI 未登录引导
+   - 官方 CLI 状态未知 / 读取失败引导
+   - 官方安装器等待态提示
+   - notice 区中性标题
+   - 新建 / 关联已有机器人路径的压缩提示
+   - 主要品牌残留清理
+3. 在 `darwin-arm64` runtime 包体尚未到位的前提下，继续深挖这条线的收益已经开始下降。
+
+### 下一步
+
+1. `Phase 5` 当前这条文案 / 引导增强线先降优先级，除非后续测试或真机使用再次暴露明显误导点。
+2. 当前最有价值的下一步仍然是等待 `darwin-arm64` runtime 包体，并在到位后立即切回 `Phase 2` 接包验证。
+
+---
+
+## 2026-04-07（第 64 次更新）
+
+### 本次目标
+
+不再继续深挖页面文案，转而补齐 `Phase 2` 收包后的执行演练材料，确保 `darwin-arm64` 包体一到就能直接推进。
+
+### 已完成动作
+
+1. 新增 `docs/darwin-arm64-runtime-intake-command-sheet.md`：
+   - 明确收包后不要直接做的事
+   - 给出推荐临时目录布局
+   - 提供从候选报告到 `phase2-exit` 的最短执行顺序
+   - 补齐可直接复制执行的命令模板
+   - 补齐 `dev_log.md` 结果记录模板
+
+### 当前结论
+
+1. 当前这一步的价值高于继续微调 `Phase 4/5` 页面文案，因为它直接服务于主阻塞：
+   - `darwin-arm64` runtime 接包
+   - `Phase 2` 退出判断
+2. 现在关于 `darwin-arm64` 已经形成了三层材料：
+   - 对外导出说明
+   - 内部收包验收单
+   - 内部接包命令单
+3. 这意味着包体一旦到位，当前仓库已经不需要再临时组织步骤，可以直接开始执行。
+
+### 下一步
+
+1. 等 `darwin-arm64` runtime 包体到位后，按以下顺序推进：
+   - 收包验收
+   - 候选报告
+   - runtime probe
+   - 入仓
+   - manifest 回填
+   - `check:openclaw:bundle`
+   - `check:openclaw:bundle:strict`
+   - `check:openclaw:phase2-exit`
+2. 在包体到位前，除非出现新的高价值问题，否则当前并行文案线可维持低优先级。
+### 第五十八次更新：收口 EnvCheck 中的 mac-only 预检入口
+
+1. 继续推进 `src/pages/EnvCheck.tsx` 的 Windows 主线收口，但这次不做大拆文件，而是先把平台分流入口统一收束到显式 helper：
+   - `isMacPlatform(...)`
+   - `shouldPrepareMacDeveloperTools(...)`
+   - `shouldInspectNodeInstallerForPlatform(...)`
+   - `classifyNodeInstallerFailureForPlatform(...)`
+2. 将原先散落在 `EnvCheck` 主流程里的 `window.api.platform === 'darwin'` 直接判断，改为复用上述 helper，覆盖场景包括：
+   - mac 开发者工具预检
+   - Node 安装包检查
+   - Node 安装失败后的平台化 issue 分类
+3. 把“如果在 Windows 上看到 macOS 专属开发者工具提示，说明平台分流仍需继续排查”这类防御性 UI 文案从页面内联提示中移除；目标是让 Windows 主流程默认不暴露这类调试口径，而不是继续在 UI 层兜底提醒。
+4. `StartupIssueDialog` 的 Xcode inline 展示逻辑也已改为复用统一平台 helper，避免后续继续在多个位置手写 `darwin` 判断。
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明本次 `EnvCheck` 平台收口未引入 TypeScript 或 Vite 构建错误。
+2. 尝试执行 `npm test -- src/pages/__tests__/env-check-state.test.ts` 时，当前终端环境仍命中既有的 `vite/esbuild spawn EPERM` 限制；这次失败属于环境级问题，不是本次改动引入的新编译错误。
+
+当前结论：
+
+1. `EnvCheck` 仍然保留 mac 专属能力，但“是否进入 mac-only 预检链”的判断口已明显收紧，不再散落在主流程各处。
+2. Windows 主线现在从“靠 UI 防御性提示避免误入”进一步推进到“代码结构上先把 mac-only 入口集中管理”。
+3. 下一步应继续沿这个方向推进：
+   - 细化 Windows 的 Node 安装失败分类
+   - 继续清理 `EnvCheck` 中与 mac 开发者工具强绑定的状态组织方式
+   - 然后再进入下一轮 Windows smoke 验证
+### 第五十九次更新：补齐 Windows Node 安装失败分类入口
+
+1. 继续沿 `EnvCheck` 的平台收口方向推进，这次把“Node 安装失败后的 Windows 用户提示”从单一 `installer-failed` 扩展为更细的结构化分类。
+2. 在 `src/shared/node-installer-issues.ts` 中新增：
+   - `classifyWindowsNodeInstallerFailure(...)`
+3. 当前已覆盖的 Windows 典型失败信号包括：
+   - 用户取消 / MSI `1602`
+   - 权限不足 / `Access is denied` / `EPERM` / `EACCES`
+   - SmartScreen / Group Policy / 管理员策略拦截
+   - 安装包不存在或无法打开
+   - 其余未知错误继续回落到 `installer-failed`
+4. 同时把一部分原本偏 mac 语义的通用 issue 文案收敛为跨平台表述，避免这些通用 kind 在 Windows 下复用时仍带有明显 macOS 口径：
+   - `not-admin-user`
+   - `blocked-by-policy`
+   - `permission-denied`
+5. `src/pages/EnvCheck.tsx` 中的 `classifyNodeInstallerFailureForPlatform(...)` 现在已接入 Windows 专属分类器：
+   - `darwin` 仍走 `classifyMacNodeInstallerFailure(...)`
+   - `win32` 改为走 `classifyWindowsNodeInstallerFailure(...)`
+   - 其它平台继续回落到通用 `installer-failed`
+6. 补充了 `src/pages/__tests__/env-check-state.test.ts` 的断言，覆盖：
+   - Windows 权限不足
+   - Windows 缺失安装包
+   - Windows 策略拦截
+   - Windows 未知安装失败回落
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明这轮 Windows 安装失败分类收口未引入构建错误。
+2. 再次尝试执行 `npm test -- src/pages/__tests__/env-check-state.test.ts` 时，仍命中当前终端环境的 `vite/esbuild spawn EPERM` 旧限制；失败原因与本次代码修改无关。
+
+当前结论：
+
+1. Windows 首启链路中，“Node 安装失败”不再只有一个笼统兜底结果，而是开始具备按失败类型给出更接近真实原因的用户提示能力。
+2. 这一步虽然还没有重构 `EnvCheck` 的整体状态机，但已经继续提升了 Windows 主线的可解释性和可恢复性。
+3. 下一步可继续推进：
+   - 让 Windows 侧失败分类与 support action / 修复指引继续对齐
+   - 再做一轮 `EnvCheck` 平台状态组织清理
+   - 然后进入下一轮 Windows smoke 验证
+### 第六十次更新：让 Windows Node 安装失败也带出手动兜底入口
+
+1. 继续把 Windows 首启失败恢复能力往前推，这次补的是 `support action` 层，而不是只停留在 issue 分类本身。
+2. 更新 `src/shared/env-check-policy.ts`，让以下 Node 安装失败类型也统一带出“打开 Node 官网”兜底入口：
+   - `missing-installer`
+   - `not-admin-user`
+   - `permission-denied`
+   - `user-cancelled`
+3. 这样一来，Windows 首启里即使出现：
+   - 权限不足
+   - 管理员权限不够
+   - 用户取消安装
+   - 安装包缺失
+   这些问题，UI 侧也不再只剩纯报错，而是至少会给出一个明确的手动兜底动作。
+4. 同步更新 `src/shared/__tests__/env-check-policy.test.ts`，补齐上述 issue kind 的断言，确保这些 support action 不会在后续改动中被误删。
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明这轮 support action 收口未引入构建错误。
+2. 尝试执行 `npm test -- src/shared/__tests__/env-check-policy.test.ts` 时，仍命中当前终端环境既有的 `vite/esbuild spawn EPERM` 限制；失败原因与本次改动无关。
+
+当前结论：
+
+1. Windows Node 安装失败链路现在已经从“只有更细的错误分类”继续推进到“错误分类 + 可点击手动兜底入口”。
+2. 这使得 `EnvCheck` 在 Windows 下的用户体验更接近真实交付要求：即便自动安装失败，也不至于把用户卡在纯提示文本里。
+3. 下一步建议继续推进：
+   - 把不同失败类型对应的修复文案再细化一层
+   - 然后再做一轮 `EnvCheck` 的平台状态组织清理
+   - 最后再进入下一轮 Windows smoke 验证
+### 第六十一次更新：把 Windows Node 安装失败文案收口到更可执行的修复口径
+
+1. 继续沿 Windows 首启恢复链路推进，这次重点不再是“分错类”，而是“分类后给出的文案是否足够像真实交付品”。
+2. 在 `src/shared/node-installer-issues.ts` 中新增 `createWindowsNodeInstallerIssue(...)`，用于在不影响 macOS 既有分类逻辑的前提下，给 Windows 场景覆盖更明确的修复文案。
+3. 当前已针对以下 Windows 失败类型补齐更具体提示：
+   - `missing-installer`
+   - `not-admin-user`
+   - `blocked-by-policy`
+   - `user-cancelled`
+   - `permission-denied`
+   - `installer-failed`
+4. 这些文案现在会显式提到更符合 Windows 用户语境的关键词与动作，例如：
+   - `UAC`
+   - `SmartScreen`
+   - 管理员账户
+   - Node 官网手动安装
+5. `classifyWindowsNodeInstallerFailure(...)` 已改为统一走 `createWindowsNodeInstallerIssue(...)`，避免继续复用偏通用/偏 mac 的默认提示。
+6. 同步补充 `src/pages/__tests__/env-check-state.test.ts` 断言，确认 Windows 分类后的 message 中确实带出了关键恢复词：
+   - `UAC`
+   - `SmartScreen`
+   - `Node 官网`
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明本轮 Windows 文案收口未引入构建错误。
+2. 再次尝试执行 `npm test -- src/pages/__tests__/env-check-state.test.ts` 时，仍命中当前终端环境既有的 `vite/esbuild spawn EPERM` 限制；失败原因与本次改动无关。
+
+当前结论：
+
+1. Windows 首启链路现在不只具备“更细的失败分类”，也开始具备“更像 Windows 真机故障恢复指引”的文案质量。
+2. 这一步进一步降低了用户在 `EnvCheck` 卡住时只看到泛化报错的概率。
+3. 下一步建议继续推进：
+   - 把这些 Windows 失败类型与更细的 support action 再做一轮映射
+   - 或继续清理 `EnvCheck` 中平台状态组织，准备下一轮 Windows smoke
+### 第六十二次更新：让不同 Windows 失败类型带出更贴近场景的 support action
+
+1. 继续推进 Windows 首启恢复链路，这次把 `support action` 从“所有失败都只给同一个 Node 官网入口”进一步收口为更贴近场景的映射。
+2. 更新 `src/shared/env-check-policy.ts`：
+   - 保留 `打开 Node 官网`
+   - 新增 `打开 Node 下载页`
+3. 当前映射策略改为：
+   - `download-failed` / `corrupted-installer` / `missing-system-command` / `unsupported-macos`
+     - 继续给 `打开 Node 官网`
+   - `blocked-by-policy` / `installer-failed` / `missing-installer` / `not-admin-user` / `permission-denied` / `user-cancelled`
+     - 改为给 `打开 Node 下载页`
+4. 这样处理后，Windows 用户在遇到权限、策略、缺包、取消安装等更偏“重新手动下载安装包”的故障时，UI 不会再统一跳到首页，而是更直接落到下载页。
+5. 同步更新 `src/shared/__tests__/env-check-policy.test.ts`，将这些 Windows 失败类型的断言从“有 action 即可”提升为“具体 label/href 必须正确”。
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明本轮 support action 细分未引入构建错误。
+2. 尝试执行 `npm test -- src/shared/__tests__/env-check-policy.test.ts` 时，仍命中当前终端环境既有的 `vite/esbuild spawn EPERM` 限制；失败原因与本次改动无关。
+
+当前结论：
+
+1. Windows 首启链路现在不仅具备“失败分类 + 修复文案 + 手动兜底入口”，而且开始具备“不同失败类型指向不同兜底入口”的细分能力。
+2. 这使得 `EnvCheck` 更接近真实交付时的恢复体验，而不是停留在统一模板式处理。
+3. 下一步建议继续推进：
+   - 把 Windows 失败类型对应的 support action 再扩展到更细的帮助页/说明页
+   - 或转回 `EnvCheck` 平台状态组织清理，为下一轮 Windows smoke 做准备
+### 第六十三次更新：继续收紧 Windows Node 故障的 support action 映射
+
+1. 在上一轮“Node 官网 / Node 下载页”双入口基础上，继续收紧 Windows 首启失败的 support action 组织方式，避免所有失败类型都复用完全相同的入口定义。
+2. 更新 `src/shared/env-check-policy.ts`：
+   - 将原先的单一 `Set` 判断改为显式 `Map<string, readonly EnvCheckSupportAction[]>`
+   - 保留 `打开 Node 官网`
+   - 保留 `打开 Node 下载页`
+3. 当前的映射已经具备更清晰的意图分层：
+   - 偏“了解 Node / 重新获取通用信息”的问题，继续走官网入口
+   - 偏“Windows 上需要直接重新下载安装包”的问题，统一走下载页入口
+4. 这样做的直接收益是：
+   - 后续若需要再细分成“权限问题帮助页 / SmartScreen 帮助页 / MSI 下载页”等，不需要再改判断结构，只需补充映射表即可
+5. 同步更新 `src/shared/__tests__/env-check-policy.test.ts`：
+   - 不再只验证“有没有 action”
+   - 而是直接验证每个 issue kind 对应的 `label` 和 `href` 是否正确
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明这轮 support action 结构收口未引入构建错误。
+2. 尝试执行 `npm test -- src/shared/__tests__/env-check-policy.test.ts` 时，仍命中当前终端环境既有的 `vite/esbuild spawn EPERM` 限制；失败原因与本次改动无关。
+
+当前结论：
+
+1. Windows 首启恢复链路的 support action 现在已经不只是“入口不同”，连内部组织方式也开始具备可扩展性。
+2. 这一步虽然是结构层的小收口，但会直接降低后续继续细分 Windows 故障恢复入口时的改动成本。
+3. 下一步建议转回 `EnvCheck` 本体，继续清理平台状态组织，为下一轮 Windows smoke 验证做准备。
+### 第六十四次更新：把 EnvCheck 平台状态进一步收口为统一对象
+
+1. 继续回到 `EnvCheck` 本体推进平台状态组织收口，这次重点是把页面内部已经存在的平台布尔判断再集中一层，而不是继续散落在组件逻辑里各自解析。
+2. 在 `src/pages/EnvCheck.tsx` 中新增：
+   - `EnvCheckPlatformState`
+   - `resolveEnvCheckPlatformState(...)`
+3. 当前该平台状态对象统一输出：
+   - `platform`
+   - `isMac`
+   - `shouldPrepareMacDeveloperTools`
+   - `shouldInspectNodeInstaller`
+4. 现有 helper 也改为基于这一统一对象派生：
+   - `shouldPrepareMacDeveloperTools(...)`
+   - `shouldInspectNodeInstallerForPlatform(...)`
+5. 页面内部已开始直接复用 `platformState`，覆盖场景包括：
+   - 权限异常修复提示中的平台文案分流
+   - mac 开发者工具预检入口
+   - Node 安装包检查入口
+6. 这一步的收益不是立刻改变用户界面，而是继续减少 `EnvCheck` 内部“平台判断散点化”的问题，为后续继续拆 Windows 主流程和下一轮 smoke 验证做准备。
+7. 同步补充 `src/pages/__tests__/env-check-state.test.ts`，新增对 `resolveEnvCheckPlatformState(...)` 的断言，确保 darwin / win32 的状态输出稳定。
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明这轮平台状态收口未引入构建错误。
+2. 再次尝试执行 `npm test -- src/pages/__tests__/env-check-state.test.ts` 时，仍命中当前终端环境既有的 `vite/esbuild spawn EPERM` 限制；失败原因与本次改动无关。
+
+当前结论：
+
+1. `EnvCheck` 现在不再只是“新增一堆平台 helper”，而是开始拥有统一的平台状态对象，这会让后续继续拆分 Windows/mac 预检逻辑更容易。
+2. 这一步虽然是内部结构收口，但它直接服务于下一阶段目标：继续整理 `EnvCheck` 的状态组织，并为 Windows smoke 验证准备更清晰的主流程边界。
+### 第六十五次更新：把 Node 安装阶段的平台行为进一步收口为统一对象
+
+1. 继续推进 `EnvCheck` 的内部状态组织，这次进一步把“Node 安装阶段的平台专属行为”集中到单一对象，而不只是在页面里散落多个 helper 调用。
+2. 在 `src/pages/EnvCheck.tsx` 中新增：
+   - `EnvCheckNodeInstallPlatformBehavior`
+   - `resolveNodeInstallPlatformBehavior(...)`
+3. 当前该行为对象统一封装了三类 Node 安装阶段最核心的平台差异：
+   - `shouldPrepareMacDeveloperTools`
+   - `shouldInspectNodeInstaller`
+   - `classifyInstallerFailure(...)`
+4. 页面内部已开始改为复用 `nodeInstallPlatformBehavior`，覆盖场景包括：
+   - mac 开发者工具预检入口
+   - Node 安装包检查入口
+   - Node 安装失败后的平台化错误分类
+5. 这一步的意义是：`EnvCheck` 内部关于 Node 安装阶段的平台差异，现在开始从“多个离散 helper + 页面自己拼装”推进到“单一行为对象驱动”，后续继续拆 Windows 主流程时会更顺。
+6. 同步更新 `src/pages/__tests__/env-check-state.test.ts`，新增对 `resolveNodeInstallPlatformBehavior(...)` 的断言，并确认其中的 `classifyInstallerFailure(...)` 会产出正确的 Windows 错误类型。
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明这轮 Node 安装阶段行为收口未引入构建错误。
+2. 再次尝试执行 `npm test -- src/pages/__tests__/env-check-state.test.ts` 时，仍命中当前终端环境既有的 `vite/esbuild spawn EPERM` 限制；失败原因与本次改动无关。
+
+当前结论：
+
+1. `EnvCheck` 现在已经开始具备两层统一平台状态：
+   - 页面级 `EnvCheckPlatformState`
+   - Node 安装阶段级 `EnvCheckNodeInstallPlatformBehavior`
+2. 这为下一步继续把“Node 安装前 / 安装中 / 安装后”的状态组织往 Windows 主线收口，提供了更稳的结构基础。
+### 第六十六次更新：继续把 Node 安装后阶段也纳入平台行为对象的主线
+
+1. 继续推进 `EnvCheck` 的 Node 主流程收口，这次重点是把“Node 安装阶段的平台差异”从页面内多处直接判断，进一步收敛到更明确的行为对象接口上。
+2. 在 `src/pages/EnvCheck.tsx` 中新增：
+   - `EnvCheckNodeInstallPlatformBehavior`
+   - `resolveNodeInstallPlatformBehavior(...)`
+3. 当前该对象已明确承载三类 Node 安装阶段行为：
+   - 是否需要 mac 开发者工具预检
+   - 是否需要安装包检查
+   - 安装失败时如何做平台化错误分类
+4. 页面内部现已直接通过 `nodeInstallPlatformBehavior` 驱动这些分支，而不是每个节点再分别调用不同 helper。
+5. 这一步的实际价值在于：后续若要继续把“刷新环境变量 / 重检 Node / 安装后失败回退”继续往 Windows 主线抽离，只需要继续扩展这一对象，而不必重新在页面主流程里找散点判断。
+6. 同步更新 `src/pages/__tests__/env-check-state.test.ts`：
+   - 校验 `resolveNodeInstallPlatformBehavior('darwin' | 'win32')` 的结构输出
+   - 校验其 `classifyInstallerFailure(...)` 在 Windows 下仍能产出正确 issue kind
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明这轮行为对象扩展未引入构建错误。
+2. 再次尝试执行 `npm test -- src/pages/__tests__/env-check-state.test.ts` 时，仍命中当前终端环境既有的 `vite/esbuild spawn EPERM` 限制；失败原因与本次改动无关。
+
+当前结论：
+
+1. `EnvCheck` 中 Node 主流程的跨平台组织方式，已经从“零散 helper”逐步推进到“统一行为对象”。
+2. 下一步可以继续把“刷新环境变量 / 重检 Node / 安装后失败提示”这些 Node 安装后阶段逻辑，也纳入同一层行为抽象，为下一轮 Windows smoke 验证做最后一轮主流程收口准备。
+### 第六十七次更新：把 Node 安装后阶段文案也接入统一平台行为对象
+
+1. 继续沿 `EnvCheck` 的 Windows 主线收口推进，这次补的是 Node 安装后阶段，目标是不再让“刷新环境变量 / 重检 Node / 安装后兜底提示”散落为页面内硬编码文案。
+2. 更新 `src/pages/EnvCheck.tsx`：
+   - 将 Node 安装完成后的“刷新环境变量”步骤改为复用 `nodeInstallPlatformBehavior.refreshDescription`
+   - 将安装后的重检步骤改为复用 `nodeInstallPlatformBehavior.recheckDescription`
+   - 将“安装后仍无法检测到 Node.js”改为复用 `nodeInstallPlatformBehavior.missingAfterInstallMessage`
+3. 这样处理后，Windows 与非 Windows 平台在 Node 安装后阶段已经开始共用同一层行为对象接口，而不是继续在主流程里写死兜底提示。
+4. 当前 Windows 下的安装后失败提示也更贴近真实交付场景：
+   - 会明确提示先关闭并重新打开 `Mclaw`
+   - 若仍失败，再改为手动安装 Windows 版 Node.js
+5. 同步更新 `src/pages/__tests__/env-check-state.test.ts`，补充对 `resolveNodeInstallPlatformBehavior('darwin' | 'win32')` 新字段的断言，确保平台化文案输出稳定。
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明这轮 Node 安装后阶段收口未引入构建错误。
+2. 再次执行 `npm test -- src/pages/__tests__/env-check-state.test.ts` 仍失败于当前环境既有的 `vite/esbuild spawn EPERM`，失败点发生在测试前置构建阶段，与本次改动无直接关系。
+
+当前结论：
+
+1. `EnvCheck` 的 Node 平台行为对象已经从“安装前 / 安装中”继续延伸到“安装后”阶段，主流程里的散点硬编码进一步减少。
+2. 这一步完成后，Windows 主线关于 Node 的平台化收口已经更接近可做下一轮 smoke 验证的状态。
+3. 下一步可以优先转向：
+   - 再做一轮 Windows 主线 smoke / 首启验证
+   - 或继续把 OpenClaw 安装后阶段里类似的刷新/重检提示也抽成同类行为对象
+### 第六十八次更新：把 OpenClaw 安装后阶段也收口为统一行为对象
+
+1. 继续沿 `EnvCheck` 主流程收口推进，这次把 `OpenClaw` 安装后阶段里仍然散落的硬编码文案统一抽离，避免页面主流程继续手写“刷新环境变量 / 重检 / 安装后失败提示”。
+2. 在 `src/pages/EnvCheck.tsx` 中新增：
+   - `EnvCheckOpenClawInstallBehavior`
+   - `resolveOpenClawInstallBehavior()`
+3. 当前该对象统一承载了 `OpenClaw` 安装后阶段的四类信息：
+   - 刷新环境变量文案
+   - 根据是否处于恢复路径决定的重检文案
+   - 安装后仍检测不到时的 step error 文案
+   - 安装后兜底 fatal message 文案
+4. 页面主流程已改为复用 `openClawInstallBehavior`，覆盖场景包括：
+   - `OpenClaw` 安装后的环境变量刷新步骤
+   - `needOpenClawRuntimeRecovery` 为真/假时的重检描述分流
+   - 安装后仍无法识别 `OpenClaw` 时的错误提示与兜底说明
+5. 这一步的直接收益是：`EnvCheck` 里 `Node` 与 `OpenClaw` 的“安装后阶段”现在都开始沿同一种组织方式收口，后续做 Windows 主线 smoke 时，主流程更容易逐段定位问题。
+6. 同步更新 `src/pages/__tests__/env-check-state.test.ts`，补充对 `resolveOpenClawInstallBehavior()` 的断言，确认：
+   - 恢复路径与普通路径的重检文案分流正确
+   - 安装后错误标题稳定
+   - fatal message 中保留了 PATH 异常说明与重启提示
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明这轮 `OpenClaw` 安装后阶段收口未引入构建错误。
+2. 再次执行 `npm test -- src/pages/__tests__/env-check-state.test.ts` 时，仍然卡在当前环境既有的 `vite/esbuild spawn EPERM`，失败发生在测试前置构建阶段，与本次改动无直接关系。
+
+当前结论：
+
+1. `EnvCheck` 的主流程收口已经不只覆盖 `Node`，也开始覆盖 `OpenClaw` 安装后阶段。
+2. Windows 主线现在更接近进入下一轮 smoke / 首启验证的准备状态。
+3. 下一步可以优先做：
+   - 真实 Windows 首启链路验证
+   - 或继续清理 `EnvCheck` 里剩余的安装后硬编码状态描述，让主流程进一步“行为对象化”
+### 第六十九次更新：继续清理安装后阶段的完成态与错误态硬编码
+
+1. 继续沿上一轮的“安装后阶段行为对象化”推进，这次重点不再是刷新/重检文案，而是把主流程里剩余的完成态与错误态描述也纳入统一行为对象。
+2. 更新 `src/pages/EnvCheck.tsx`：
+   - 为 `EnvCheckNodeInstallPlatformBehavior` 新增：
+     - `installCompletedDescription`
+     - `installedDescription`
+     - `missingAfterInstallError`
+   - 为 `EnvCheckOpenClawInstallBehavior` 新增：
+     - `installedDescription`
+3. 页面主流程中以下原本仍然写死的状态文案，现已改为复用行为对象：
+   - Node 安装完成后的 `安装完成`
+   - Node 检测通过后的 `已安装`
+   - Node 安装后未识别成功时的 `安装后仍无法检测到`
+   - OpenClaw 检测通过后的 `已安装`
+   - OpenClaw 安装后未识别成功时的 `安装后仍无法检测到`
+4. 这一步的价值在于：`EnvCheck` 的安装后阶段现在不仅把“过程描述”收口了，连“结束状态描述”也开始统一归位，主流程中与文案耦合最紧的散点又减少了一层。
+5. 同步更新 `src/pages/__tests__/env-check-state.test.ts`，补充对上述新增行为字段的断言，确保 Node / OpenClaw 的完成态与错误态文案输出稳定。
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明这轮完成态/错误态收口未引入构建错误。
+2. 再次执行 `npm test -- src/pages/__tests__/env-check-state.test.ts`，仍失败于当前环境既有的 `vite/esbuild spawn EPERM`，失败点仍在测试前置构建阶段，与本次改动无直接关系。
+
+当前结论：
+
+1. `EnvCheck` 主流程里与安装后阶段相关的硬编码文案已经进一步减少，行为对象化程度又向前推进了一步。
+2. 现在更适合进入下一轮：
+   - Windows 首启 / smoke 验证
+   - 或继续把 Gateway / 其它收尾提示也纳入同样的状态解析方式
+### 第七十次更新：把 Gateway 收尾提示也纳入统一行为解析
+
+1. 继续推进 `EnvCheck` 主流程的状态收口，这一轮把 `Gateway` 相关的收尾提示也从页面硬编码中抽离出来，减少“最后一段流程”里的散点文案。
+2. 在 `src/pages/EnvCheck.tsx` 中新增：
+   - `EnvCheckGatewayBehavior`
+   - `resolveGatewayBehavior()`
+3. 当前 `Gateway` 行为对象统一承载了以下收尾状态：
+   - 延后检查时的 checking 文案
+   - 延后确认完成后的 step version
+   - 延后确认完成后的 step description
+   - 根据 `sharedConfigInitialized` 决定的继续按钮文案
+4. 页面主流程现已改为复用 `gatewayBehavior`，覆盖场景包括：
+   - “当前阶段先跳过 Gateway 运行态检查...” 的 checking 提示
+   - `buildDeferredGatewayStepState(...)` 里的 deferred state 输出
+   - 底部主按钮在“进入控制面板 / 开始配置”之间的分流
+5. 这一步的意义是：`EnvCheck` 现在不只是把 Node / OpenClaw 的安装后阶段收口，连 Gateway 收尾提示也开始进入同一套“行为对象 + 状态解析”组织方式，主流程边界更清晰了。
+6. 同步更新 `src/pages/__tests__/env-check-state.test.ts`，补充对 `resolveGatewayBehavior()` 的断言，确认：
+   - deferred checking 文案稳定
+   - deferred step state 文案稳定
+   - continue button label 分流稳定
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明这轮 Gateway 收尾提示收口未引入构建错误。
+2. 再次执行 `npm test -- src/pages/__tests__/env-check-state.test.ts` 时，依旧命中当前环境既有的 `vite/esbuild spawn EPERM`，失败仍发生在测试前置构建阶段，与本次改动无直接关系。
+
+当前结论：
+
+1. `EnvCheck` 主流程的行为对象化已经从安装前/安装中/安装后，进一步延伸到 Gateway 的收尾阶段。
+2. 这使得下一轮如果要做 Windows 首启 smoke，主流程里需要关注的分支和文案入口已经更集中、更容易排查。
+3. 下一步可以优先转向：
+   - 开始整理/执行 Windows 首启 smoke 验证
+   - 或继续把 `buildDeferredGatewayStepState(...)` 一类收尾 helper 也向更统一的状态解析函数推进
+### 第七十一次更新：把 Gateway deferred helper 进一步收口为显式状态解析函数
+
+1. 继续沿上一轮的 Gateway 收尾整理推进，这次不再只是把文案抽到行为对象，而是把 `deferred helper` 本身也收口成更明确的状态解析函数。
+2. 更新 `src/pages/EnvCheck.tsx`：
+   - 新增 `EnvCheckGatewayDeferredStepState`
+   - 将原先的 `buildDeferredGatewayStepState(...)` 改为导出的 `resolveGatewayDeferredStepState(...)`
+3. 这样调整后，Gateway 的 deferred state 不再只是“页面内部的一个构造 helper”，而是和其它状态/行为对象一样，进入可复用、可测试、可单独验证的解析层。
+4. 页面主流程中的 Gateway deferred 更新点，现已统一改为复用 `resolveGatewayDeferredStepState(gatewayBehavior)`，从而进一步减少“主流程自己拼 step 状态”的情况。
+5. 同步更新 `src/pages/__tests__/env-check-state.test.ts`，补充对 `resolveGatewayDeferredStepState(...)` 的断言，确保输出稳定为：
+   - `status: 'ok'`
+   - `version: '后续确认'`
+   - `description: '完成认证和渠道配置后再确认 Gateway 可用性'`
+   - `progress: 100`
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明这轮 Gateway deferred 状态收口未引入构建错误。
+2. 再次执行 `npm test -- src/pages/__tests__/env-check-state.test.ts`，仍然卡在当前环境既有的 `vite/esbuild spawn EPERM`，失败点仍在测试前置构建阶段，与本次改动无直接关系。
+
+当前结论：
+
+1. `EnvCheck` 中和 Gateway deferred 收尾有关的逻辑，已经从“页面 helper”继续推进到“显式状态解析函数”。
+2. 到这一轮为止，Windows 首启主线里最核心的 Node / OpenClaw / Gateway 三段收尾状态已经基本收口到统一的解析/行为层。
+3. 下一步更适合直接转向：
+   - Windows 首启 smoke 验证清单整理与执行
+   - 或开始梳理 `EnvCheck` 主流程还能否继续拆成更清晰的阶段函数
+### 第七十二次更新：补齐 Windows 首启 smoke 清单的当前验证顺序与观察点
+
+1. 这一轮不再继续堆代码抽象，而是正式转向 Windows 首启 smoke 准备，把最近几轮 `EnvCheck` 主线收口的成果沉淀到可执行的验证清单里。
+2. 更新 `docs/mclaw-windows-smoke-checklist.md`，新增 `2026-04-08` 版本的“下一轮推荐执行顺序”，明确要求按以下顺序验证：
+   - 先确认安装产物可正常进入 `EnvCheck`
+   - 再分别覆盖“已装 Node / 未装 OpenClaw”与“未装 Node / 未装 OpenClaw”两类首启场景
+   - 最后验证 Gateway 收尾提示和主按钮分流是否符合当前主线预期
+3. 在同一份清单里补充了 `C-1. 当前建议重点观察项（2026-04-08）`，把最近收口过的 Windows 关键观察点明确列出来，包括：
+   - Node 自动安装后的“刷新环境变量 -> 重新检测 -> 已安装”状态变化
+   - Node 安装后失败时的 Windows 专属重启/手动安装提示
+   - OpenClaw 自动准备后的刷新/重检状态变化
+   - OpenClaw 安装后失败时的 PATH 异常说明、重启提示和 PowerShell 手动兜底命令
+   - 底部主按钮在 `进入控制面板 / 开始配置` 之间的分流
+4. 同时在“当前未完成但已验证的边界”中补充说明：最近几轮 `EnvCheck` 收口尚未完成一次新的真机 Windows smoke 回归验证，避免文档给出“代码已收口 = 真机已通过”的错误暗示。
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明这轮文档与验证准备整理未影响当前构建。
+2. 本轮没有新增运行时代码测试；测试环境仍存在既有的 `vite/esbuild spawn EPERM` 问题，后续若继续执行单测，预期仍会卡在测试前置构建阶段。
+
+当前结论：
+
+1. 现在不只是“代码更容易 smoke”，而是“smoke 应该怎么做、重点盯什么”也已经形成了当前版本的执行清单。
+2. 下一步最合理的方向已经非常明确：
+   - 直接按 `docs/mclaw-windows-smoke-checklist.md` 做一轮新的 Windows 首启 smoke
+   - 或在无法立即做真机验证时，继续把 `EnvCheck` 主流程拆成更清晰的阶段函数，为后续问题定位做准备
+### 第七十三次更新：先把 ready payload 构造从主流程里抽成单独解析函数
+
+1. 在继续拆 `EnvCheck` 主流程前，我先选了一处低风险、但对后续阶段化拆分有帮助的片段下手：把环境检查完成后写入 `readyPayload` 的对象构造，从主流程里抽离出来。
+2. 在 `src/pages/EnvCheck.tsx` 中新增：
+   - `createEnvCheckReadyPayload(...)`
+3. 这个函数统一负责生成环境检查完成后的 handoff 数据，当前封装字段包括：
+   - `hadOpenClawInstalled`
+   - `installedOpenClawDuringCheck`
+   - `gatewayRunning`
+   - `sharedConfigInitialized`
+   - `discoveryResult`
+4. 页面主流程中原本两处直接 `setReadyPayload({ ... })` 的对象拼装，现已改为统一复用 `createEnvCheckReadyPayload(...)`。这一步虽然不改变 UI，但可以继续减少主流程里“检测结束后顺手拼对象”的散点逻辑。
+5. 同步更新 `src/pages/__tests__/env-check-state.test.ts`，补充对 `createEnvCheckReadyPayload(...)` 的断言，确保环境检查完成态的 handoff 数据结构稳定。
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明这轮 `readyPayload` 收口未引入构建错误。
+2. 再次执行 `npm test -- src/pages/__tests__/env-check-state.test.ts` 时，仍然命中当前环境既有的 `vite/esbuild spawn EPERM`，失败点仍在测试前置构建阶段，与本次改动无直接关系。
+
+当前结论：
+
+1. `EnvCheck` 主流程现在又少了一类“尾部对象拼装”逻辑，后续若继续拆阶段函数，可以更容易把“环境检查结束态”单独组织出来。
+2. 下一步可以继续沿这个方向推进：
+   - 把 `readSharedConfigInitialized(...)` 及最终完成态处理继续抽成更清晰的阶段 helper
+   - 或开始真正拆分 `runChecks` 中的阶段块（Node / OpenClaw / finalize）
+### 第七十四次更新：继续把 finalize 收尾逻辑收口为单独状态解析
+
+1. 继续沿上一轮的 `readyPayload` 收口推进，这一轮把 finalize 阶段里剩余的“Gateway deferred step + 最终 progress + running 状态 + ready payload”一起抽成了单独解析函数。
+2. 在 `src/pages/EnvCheck.tsx` 中新增：
+   - `EnvCheckFinalizeState`
+   - `resolveEnvCheckFinalizeState(...)`
+3. 该函数当前统一负责生成环境检查完成后的收尾状态，输出包括：
+   - `gatewayStep`
+   - `progress`
+   - `isRunning`
+   - `readyPayload`
+4. 主流程中原本两处 finalize 尾段逻辑，现已改为复用：
+   - `resolveEnvCheckFinalizeState(...)`
+   - 再分别将其结果写入 `updateStep('gateway', ...)` / `setProgress(...)` / `setIsRunning(...)` / `setReadyPayload(...)`
+5. 这样处理后，`runChecks` 的 finalize 阶段已经不再是“多行状态散点写入”，而是开始具备一个明确的结束态解析入口；这对后续继续拆 `runChecks` 阶段函数会更有帮助。
+6. 同步更新 `src/pages/__tests__/env-check-state.test.ts`，补充对 `resolveEnvCheckFinalizeState(...)` 的断言，确认 finalize 阶段会稳定产出：
+   - Gateway deferred step
+   - `progress: 100`
+   - `isRunning: false`
+   - 带 `gatewayRunning: false` 的 ready payload
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明这轮 finalize 收口未引入构建错误。
+2. 再次执行 `npm test -- src/pages/__tests__/env-check-state.test.ts`，仍然命中当前环境既有的 `vite/esbuild spawn EPERM`，失败点依旧在测试前置构建阶段，与本次改动无直接关系。
+
+当前结论：
+
+1. `EnvCheck` 的 finalize 阶段现在已经不只拆出一个 payload helper，而是开始拥有更完整的“结束态解析函数”。
+2. 下一步如果继续推进代码结构，已经比较适合真正开始拆 `runChecks` 的阶段块，例如：
+   - Node 检查/安装阶段
+   - OpenClaw 检查/恢复阶段
+   - finalize 阶段 orchestration
+### 第七十五次更新：先把 Node 检查结果归一化为独立状态解析
+
+1. 继续沿“开始拆 `runChecks` 阶段块”的方向推进，这一轮先从 Node 阶段里最稳定、最适合纯函数化的一块下手：把 `checkNode()` 返回结果归一化为单独状态解析。
+2. 在 `src/pages/EnvCheck.tsx` 中新增：
+   - `EnvCheckNodeCheckResultLike`
+   - `EnvCheckNodeCheckState`
+   - `resolveEnvCheckNodeCheckState(...)`
+3. 当前该解析函数统一负责从 `checkNode()` 结果中产出：
+   - `requiredVersion`
+   - `targetVersion`
+   - `needNode`
+   - `nodeNeedsUpgrade`
+4. 页面主流程中原本直接写在 `runChecks` 里的这几段判断，现已改为复用 `resolveEnvCheckNodeCheckState(...)`，从而让 Node 阶段开始具备更清晰的“先归一化状态，再驱动 UI”结构。
+5. 这一步虽然还没有把 Node 阶段整段拆出去，但它已经先把 Node 阶段里最基础、最常用的一组判断集中到了单一入口；后续继续拆 Node 阶段 helper 时，可以直接围绕这个状态对象展开。
+6. 同步更新 `src/pages/__tests__/env-check-state.test.ts`，补充对 `resolveEnvCheckNodeCheckState(...)` 的断言，覆盖：
+   - 未安装 Node 时，应回落到默认最低版本并标记 `needNode: true`
+   - 已安装但版本过低时，应标记 `nodeNeedsUpgrade: true`
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明这轮 Node 检查状态收口未引入构建错误。
+2. 再次执行 `npm test -- src/pages/__tests__/env-check-state.test.ts` 时，仍然命中当前环境既有的 `vite/esbuild spawn EPERM`，失败点依旧在测试前置构建阶段，与本次改动无直接关系。
+
+当前结论：
+
+1. `runChecks` 的 Node 阶段现在已经不再完全依赖内联判断，而是开始拥有第一个明确的“阶段状态归一化入口”。
+2. 下一步如果继续拆 Node 阶段，会比较适合继续推进：
+   - Node 检查结果 -> 页面 step 展示 的状态解析
+   - Node 安装前准备 / 安装后重检 的阶段 helper 化
+### 第七十六次更新：把 Node 检查结果到 step 展示的逻辑也收口成解析函数
+
+1. 继续沿 Node 阶段拆分推进，这一轮把“Node 检查结果如何映射到页面 step 展示”从 `runChecks` 主流程里抽成了单独解析函数。
+2. 在 `src/pages/EnvCheck.tsx` 中新增：
+   - `EnvCheckNodeStepState`
+   - `resolveEnvCheckNodeStepState(...)`
+3. 当前该函数统一负责把已归一化的 Node 检查状态映射为页面 step 展示结果，输出包括：
+   - `status`
+   - `version`
+   - `description`
+   - `progress`
+   - `latestNodeVersion`
+   - `blocksContinue`
+4. 页面主流程里原本这几段分支：
+   - 未安装 Node 时展示自动安装提示
+   - 已安装但版本过低时展示手动升级提示并中断继续
+   - 已安装且满足要求时展示 `已安装`
+   现在都统一改为复用 `resolveEnvCheckNodeStepState(...)`。
+5. 这一步的直接收益是：Node 阶段已经从“结果归一化”继续推进到了“展示态解析”，`runChecks` 内部又少了一块长条件分支，后续继续拆 Node 阶段 helper 会更顺。
+6. 同步更新 `src/pages/__tests__/env-check-state.test.ts`，补充对 `resolveEnvCheckNodeStepState(...)` 的断言，覆盖三类核心场景：
+   - 未安装 Node
+   - 已安装但版本过低
+   - 已安装且满足要求
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明这轮 Node step 展示态收口未引入构建错误。
+2. 再次执行 `npm test -- src/pages/__tests__/env-check-state.test.ts` 时，仍然命中当前环境既有的 `vite/esbuild spawn EPERM`，失败点依旧在测试前置构建阶段，与本次改动无直接关系。
+
+当前结论：
+
+1. `runChecks` 的 Node 阶段现在已经具备两层清晰入口：
+   - `resolveEnvCheckNodeCheckState(...)`
+   - `resolveEnvCheckNodeStepState(...)`
+2. 下一步如果继续推进代码结构，会更适合开始处理：
+   - Node 安装前准备阶段
+   - Node 安装后刷新/重检阶段
+### 第七十七次更新：把 Node 安装前准备阶段也收口成解析函数
+
+1. 继续沿 Node 阶段拆分推进，这一轮把“安装前准备阶段该展示下载还是 nvm 准备”的逻辑，也从 `runChecks` 主流程里抽成了单独解析函数。
+2. 在 `src/pages/EnvCheck.tsx` 中新增：
+   - `EnvCheckNodeInstallPrepState`
+   - `resolveEnvCheckNodeInstallPrepState(...)`
+3. 当前该函数统一负责根据：
+   - `needNode`
+   - `installStrategy`
+   - `targetNodeVersion`
+   解析出 Node 安装前准备阶段的展示状态，并明确给出：
+   - `status`
+   - `description`
+   - `progress`
+   - `shouldDownloadInstaller`
+4. 页面主流程中原本这段内联判断：
+   - 需要下载安装包时显示“正在下载 Node.js ...”
+   - 使用 `nvm` 时显示“正在通过 nvm 准备 Node.js ...”
+   现在都统一改为复用 `resolveEnvCheckNodeInstallPrepState(...)`。
+5. 这样处理后，Node 阶段已经从“检查状态归一化 -> step 展示态解析”继续推进到了“安装前准备态解析”，`runChecks` 里的 Node 路径结构进一步清晰。
+6. 同步更新 `src/pages/__tests__/env-check-state.test.ts`，补充对 `resolveEnvCheckNodeInstallPrepState(...)` 的断言，覆盖：
+   - `needNode = false`
+   - 安装器下载路径
+   - `nvm` 准备路径
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明这轮 Node 安装前准备状态收口未引入构建错误。
+2. 再次执行 `npm test -- src/pages/__tests__/env-check-state.test.ts` 时，仍然命中当前环境既有的 `vite/esbuild spawn EPERM`，失败点依旧在测试前置构建阶段，与本次改动无直接关系。
+
+当前结论：
+
+1. `runChecks` 的 Node 阶段现在已经具备三层较清晰的状态入口：
+   - `resolveEnvCheckNodeCheckState(...)`
+   - `resolveEnvCheckNodeStepState(...)`
+   - `resolveEnvCheckNodeInstallPrepState(...)`
+2. 下一步如果继续推进 Node 阶段拆分，最自然的方向会是：
+   - Node 安装后刷新/重检阶段
+   - 或把 Node 安装失败后的收尾/兜底处理继续抽成更清晰的阶段 helper
+### 第七十八次更新：把 Node 安装后刷新/重检阶段也收口成状态解析
+
+1. 继续沿 Node 阶段拆分推进，这一轮把安装完成后的“刷新环境变量 -> 重检 -> 成功/失败”整段状态，也从 `runChecks` 主流程里抽成了解析函数。
+2. 在 `src/pages/EnvCheck.tsx` 中新增：
+   - `EnvCheckNodePostInstallRecheckState`
+   - `resolveEnvCheckNodePostInstallRecheckState(...)`
+3. 当前该解析函数统一负责给出 Node 安装后重检阶段所需的全部展示状态，包括：
+   - `refreshStep`
+   - `recheckStep`
+   - `successStep`
+   - `failureStep`
+   - `failureIssueKind`
+   - `failureMessage`
+4. 页面主流程中原本分散写在一起的这几段逻辑：
+   - 刷新环境变量状态
+   - 重新检测状态
+   - 安装后成功时的 `已安装`
+   - 安装后失败时的错误标题与 fatal message
+   现在都统一改为复用 `resolveEnvCheckNodePostInstallRecheckState(...)`。
+5. 这样处理后，Node 阶段已经从“检查前展示、安装前准备”进一步推进到了“安装后收尾重检”也具备独立状态入口，Node 主线结构又完整了一层。
+6. 同步更新 `src/pages/__tests__/env-check-state.test.ts`，补充对 `resolveEnvCheckNodePostInstallRecheckState(...)` 的断言，确认：
+   - 刷新/重检的 checking 文案与进度稳定
+   - 成功态为 `已安装`
+   - 失败态为 `安装后仍无法检测到`
+   - 失败 issue kind 为 `installer-failed`
+   - Windows 下保留明确的重启/手动安装提示
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明这轮 Node 安装后重检状态收口未引入构建错误。
+2. 再次执行 `npm test -- src/pages/__tests__/env-check-state.test.ts` 时，仍然命中当前环境既有的 `vite/esbuild spawn EPERM`，失败点依旧在测试前置构建阶段，与本次改动无直接关系。
+
+当前结论：
+
+1. `runChecks` 的 Node 阶段现在已经覆盖到四层较清晰的状态入口：
+   - `resolveEnvCheckNodeCheckState(...)`
+   - `resolveEnvCheckNodeStepState(...)`
+   - `resolveEnvCheckNodeInstallPrepState(...)`
+   - `resolveEnvCheckNodePostInstallRecheckState(...)`
+2. 下一步如果继续推进 Node 阶段拆分，就比较适合开始处理：
+   - Node 安装失败后的收尾/兜底路径
+   - 或直接转向用同样方式继续拆 OpenClaw 阶段
+
+### 第七十九次更新：统一 OpenClaw `2026.3.24` 主线与 `2026.4.x` 候选迁移策略
+
+背景：
+
+1. 当前仓库主线代码、文档、测试、runtime manifest 示例仍统一围绕 `2026.3.24` 设计。
+2. 外部对接口径最近同时出现了 `2026.4.6` 与 `4.7` 两种说法，而且明确提到最近两个大版本重点补了：
+   - 记忆模块
+   - Agent 之间沟通能力
+3. Mclaw 后续还要集成 `Claude Code（claudecode）` 与 `MemOS / memos`，同时也需要保留 OpenClaw 运行时的更新能力，所以这已经不是单纯的“换个版本号”，而是版本策略问题。
+
+本次文档更新：
+
+1. 新增 `docs/openclaw-version-strategy.md`，把以下判断统一写成正式策略：
+   - 当前主线继续锁定 `2026.3.24`
+   - 外部 `2026.4.6/2026.4.7` 统一先按 `2026.4.x` 候选线管理
+   - `OpenClaw` 受控升级/回退保留在当前主线，`Mclaw` 应用自动更新仍放到 `v1.5`
+2. 更新 `docs/dev_guide.md`，补充：
+   - `Claude Code` 接入依赖 `2026.4.x` 兼容评估
+   - `MemOS / memos` 不直接驱动当前 `Phase 2` 改版本
+   - 当前 `2026.3.24` 主线与 `2026.4.x` 候选线的分层判断
+3. 更新 `docs/mclaw-prd-v1.md`，明确：
+   - v1 的“自动更新暂不做”仅指 `Mclaw` 主程序自动更新
+   - `OpenClaw` 受控升级/回退属于 v1 当前主线能力
+   - `MemOS / Claude Code` 从 v1 非目标转入 `v1.5` 迁移方向
+4. 更新 `docs/mclaw-feature-boundary-matrix.md`，把以下边界写明：
+   - `OpenClaw` 受控版本升级/回退 = `v1 必做`
+   - `OpenClaw 2026.4.x` 升基线 = `v1.5`
+   - `Claude Code` / `MemOS` 接入 = `v1.5`
+5. 更新 `docs/mclaw-development-roadmap.md`，把路线统一为：
+   - `2026.3.24` 继续作为当前 `Phase 2` 主线
+   - `2026.4.x` 作为 `Claude Code / MemOS` 前置兼容评估线
+   - `Mclaw` 应用自动更新仍不抢占当前发布主线
+6. 更新 `docs/openclaw-runtime-pending-items.md` 与 `docs/openclaw-bundled-runtime-spec.md`，避免继续把外部 `2026.4.x` 候选线误写成当前正式 runtime 基线。
+
+当前结论：
+
+1. 对当前项目进度最稳妥的选择，仍然是把 `2026.3.24` 作为正在交付的 pinned baseline。
+2. 但从中长期能力规划看，`2026.4.x` 不能忽略；它应进入候选兼容评估，而不是现在就粗暴替换主线。
+3. 接下来真正合理的节奏是：
+   - 先继续完成当前 `Phase 2 / Windows runtime-first` 收口
+   - 同步整理 `OpenClaw` 受控升级/回退能力
+   - 再把 `2026.3.24 -> 2026.4.x` 迁移，作为 `MemOS / Claude Code` 接入前的正式前置任务
+
+### 第八十次更新：先把 `2026.4.x` 候选线收口到升级兼容评估层
+
+背景：
+
+1. 前一轮文档已经明确：当前主线继续锁定 `2026.3.24`，但外部 `2026.4.6/2026.4.7` 需要作为 `2026.4.x` 候选线进入兼容评估。
+2. 如果代码层仍把所有大于 `2026.3.24` 的版本一律打成完全未知的 `unknown_future`，那后面做 `Claude Code / MemOS` 迁移时，既不利于诊断，也不利于把“候选线”与“完全未知版本”区分开。
+
+本次代码调整：
+
+1. 在 `src/shared/openclaw-version-policy.ts` 中新增：
+   - `FUTURE_CANDIDATE_OPENCLAW_RELEASE_LINE`
+   - `isFutureCandidateOpenClawVersion(...)`
+2. 统一把当前已知的外部新版本线标记为：
+   - `2026.4.x`
+   这样后续无论外部口头先说 `4.6` 还是 `4.7`，只要仍处于 `2026.4.*`，兼容评估层都能先按同一候选轨处理。
+3. 在 `src/shared/gateway-runtime-reconcile-state.ts` 中新增版本段：
+   - `openclaw_2026_4_candidate`
+4. 在 `electron/main/openclaw-upgrade-compatibility.ts` 中补齐：
+   - `detectOpenClawVersionBand(...)` 现在会把 `2026.4.*` 识别为 `openclaw_2026_4_candidate`
+   - 该版本段仍然保持保守兼容模式，不会被误当成已审计通过的主线
+   - 但 summary / warning 已能明确指出：当前命中的是 `2026.4.x` 候选线，而不是彻底无上下文的未知未来版本
+5. 这样做的直接收益是：
+   - 当前主线仍不改 pinned baseline
+   - 但升级兼容层已经开始为后续 `2026.3.24 -> 2026.4.x` 迁移提前建模
+   - 后面补 `MemOS / Claude Code` 时，不需要再把“候选版本识别”从零补起
+6. 同步更新测试：
+   - `src/shared/__tests__/openclaw-version-policy.test.ts`
+   - `electron/main/__tests__/openclaw-upgrade-compatibility.test.ts`
+   重点确认：
+   - `2026.4.6` 会落入 `openclaw_2026_4_candidate`
+   - `2026.4.x` 仍进入 conservative mode
+   - summary 中会明确提示这是 `2026.4.x` 候选线
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明这轮“候选版本段”建模没有引入编译错误。
+2. 执行：
+   - `npm test -- electron/main/__tests__/openclaw-upgrade-compatibility.test.ts src/shared/__tests__/openclaw-version-policy.test.ts`
+   仍然命中当前环境既有的 `vite/esbuild spawn EPERM`，失败点依旧在测试前置构建阶段，不是本次逻辑改动导致。
+
+当前结论：
+
+1. 当前代码现在已经不再把 `2026.4.x` 与“任意未知未来版本”完全混为一谈。
+2. 这一步还没有开始真正迁移到 `2026.4.x`，但已经把“候选线识别”正式落到代码里。
+3. 下一步更适合继续推进：
+   - 把 `OpenClaw` 版本门禁文案/提示也逐步切到统一 helper
+   - 或直接开始补 `2026.3.24 -> 2026.4.x` 迁移时需要的升级/回退 smoke 入口
+
+### 第八十一次更新：继续收口版本门禁文案，降低未来升基线改动面
+
+背景：
+
+1. 上一轮已经把 `2026.4.x` 候选线正式落到了升级兼容评估层。
+2. 但 UI 与升级服务里仍有多处直接写死 `2026.3.24` 的提示语；如果后面开始推进 `2026.3.24 -> 2026.4.x` 迁移，这些地方会成为明显的改动散点。
+
+本次代码调整：
+
+1. 在 `src/shared/openclaw-version-policy.ts` 中新增：
+   - `resolveOpenClawTargetVersionLabel(...)`
+2. 该 helper 统一负责：
+   - 优先使用外部显式传入的 `targetVersion`
+   - 若没有显式目标，则回落到当前 pinned baseline
+3. 先把一轮最核心、最容易散落的版本提示入口切到该 helper：
+   - `src/components/UpdateCenter.tsx`
+   - `src/components/OpenClawUpgradeDialog.tsx`
+   - `src/components/CombinedUpdateDialog.tsx`
+   - `electron/main/openclaw-upgrade-service.ts`
+   - `electron/main/openclaw-upgrade-compatibility.ts`
+4. 这样处理后，以下场景都不再直接硬编码 `2026.3.24`：
+   - 升级中心中的“手动调整到 / 自动纠偏到”
+   - OpenClaw 升级弹窗里的“升级到 / 自动纠偏到”
+   - 组合更新里的“可升级到”
+   - 升级服务生成的 manual hint
+   - 兼容评估里回退目标版本的 doctor --fix 提示
+5. 这一步的直接收益是：
+   - 当前主线仍然保持 `2026.3.24`
+   - 但未来如果 pinned baseline 调整，首批用户可见提示已经不需要到处手改
+   - `OpenClaw` 版本门禁和升级提示开始向统一入口收口
+6. 同步更新 `src/shared/__tests__/openclaw-version-policy.test.ts`，补充对 `resolveOpenClawTargetVersionLabel(...)` 的断言，确认：
+   - 显式版本会被原样保留
+   - 空值时会稳定回落到当前 pinned baseline
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明这一轮版本门禁文案收口没有引入编译错误。
+2. 执行：
+   - `npm test -- src/shared/__tests__/openclaw-version-policy.test.ts electron/main/__tests__/openclaw-upgrade-compatibility.test.ts`
+   仍然命中当前环境既有的 `vite/esbuild spawn EPERM`，失败点依旧是测试前置构建阶段，不是本次逻辑改动引入的新问题。
+
+当前结论：
+
+1. 当前代码里最核心的一批 `2026.3.24` 用户提示，已经从“到处硬编码”推进到“通过 targetVersion helper 统一回落”。
+2. 这一步还没有改变任何版本策略，但已经显著降低了未来升基线时的改动面。
+3. 下一步更适合继续推进：
+   - 把 `EnvCheck` 版本门禁提示也继续往同一套 helper 收口
+   - 或开始给 `2026.3.24 -> 2026.4.x` 迁移补更明确的 smoke / 诊断入口
+
+### 第八十二次更新：继续把 `EnvCheck` 版本门禁提示收口到统一目标版本 helper
+
+背景：
+
+1. 前一轮已经把升级中心、升级弹窗、组合更新和升级服务里的目标版本提示收口到 `resolveOpenClawTargetVersionLabel(...)`。
+2. 但 `EnvCheck` 仍然是当前 Windows 首启主线里最关键的版本门禁入口，如果这里继续散落 `targetVersion || PINNED_OPENCLAW_VERSION`，后面升基线时还是要重复改一轮。
+
+本次代码调整：
+
+1. 在 `src/pages/EnvCheck.tsx` 中继续复用：
+   - `resolveOpenClawTargetVersionLabel(...)`
+2. 收口以下入口：
+   - `buildOpenClawGateState(...)` 里的
+     - `可升级至`
+     - `需回退至`
+     - `需升级至`
+     - `如需升级请手动切换至`
+     - `需手动调整至`
+   - `buildOpenClawAutoCorrectionConsentMessage(...)` 里的 `目标版本`
+3. 同时把 `OPENCLAW_MANUAL_INSTALL_COMMANDS` 改为直接复用：
+   - `PINNED_OPENCLAW_VERSION`
+   避免同一文件里手写固定 `2026.3.24`
+4. 这一步的直接收益是：
+   - 当前版本门禁主流程里最关键的一层提示，也开始与升级中心共用同一套目标版本解析口径
+   - 后续如果 pinned baseline 切到 `2026.4.x`，`EnvCheck` 首批关键文案不会继续成为额外散点
+5. 同步更新 `src/pages/__tests__/env-check-state.test.ts`，补充断言：
+   - 当 `upgradeCheck.targetVersion` 明确给到 `2026.4.6` 时，自动纠偏确认文案里的目标版本会优先使用显式版本，而不是盲目回落到 pinned baseline
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明本轮 `EnvCheck` 文案收口未引入编译错误。
+2. 执行：
+   - `npm test -- src/pages/__tests__/env-check-state.test.ts src/shared/__tests__/openclaw-version-policy.test.ts electron/main/__tests__/openclaw-upgrade-compatibility.test.ts`
+   仍然命中当前环境既有的 `vite/esbuild spawn EPERM`，失败点依旧在测试前置构建阶段，不是本次改动导致。
+
+当前结论：
+
+1. 现在不只是升级中心，连 `EnvCheck` 版本门禁提示也开始统一走目标版本 helper。
+2. 这一步继续压缩了未来从 `2026.3.24` 升到 `2026.4.x` 时的文案改动面。
+3. 下一步更适合继续推进：
+   - 把剩余 OpenClaw 版本相关提示继续往 helper / helper object 收口
+   - 或正式开始补 `2026.3.24 -> 2026.4.x` 的迁移 smoke / 诊断入口
+
+### 第八十三次更新：继续收口升级中心与升级弹窗里的目标版本展示
+
+背景：
+
+1. 前一轮已经把 `EnvCheck` 主流程中的版本门禁提示收口到 `resolveOpenClawTargetVersionLabel(...)`。
+2. 但升级中心相关 UI 里仍有几处用户可见文案没有完全复用统一版本口径：
+   - `OpenClawUpgradeDialog`
+   - `CombinedUpdateDialog`
+   - `UpdateCenter`
+3. 这些位置虽然不影响底层策略判断，但会在未来 baseline 从 `2026.3.24` 切到 `2026.4.x` 时继续形成文案散点。
+
+本次代码调整：
+
+1. 在 `src/components/OpenClawUpgradeDialog.tsx` 中继续复用：
+   - `resolveOpenClawTargetVersionLabel(...)`
+2. 将升级弹窗里的以下用户可见提示改为统一口径：
+   - `目标版本`
+   - `可按需升级至`
+   - `自动纠偏至`
+3. 在 `src/components/CombinedUpdateDialog.tsx` 中继续复用同一个 helper：
+   - `目标版本` 行不再直接回显 `check.openclaw.targetVersion || '未知'`
+   - 组合更新资格提示统一改为 `可升级至`
+4. 在 `src/components/UpdateCenter.tsx` 中进一步统一措辞：
+   - `手动切换至`
+   - `手动调整至`
+   - `自动纠偏至`
+5. 这一步的直接收益是：
+   - 升级中心、组合更新弹窗、单独升级弹窗与 `EnvCheck` 版本门禁开始共享同一套目标版本回落口径
+   - 后续如果 pinned baseline 改动，用户界面里与目标版本相关的核心提示会更稳定，不容易出现“有的地方还是旧文案”的问题
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明本轮 UI 文案收口没有引入编译错误。
+
+当前结论：
+
+1. 现在 OpenClaw 版本策略相关的主要用户入口，已经从“各自拼接 targetVersion”继续推进到“统一 target version helper”。
+2. 这一步没有改变 `2026.3.24` 作为当前 pinned baseline 的策略，但继续降低了未来切向 `2026.4.x` 时的前端散点修改成本。
+3. 下一步更适合继续推进：
+   - 扫描 `App.tsx` / 主进程诊断提示里是否还有“未来版本一律按 unknown future”过于粗糙的用户提示
+   - 或开始补一层 `2026.4.x candidate` 的 smoke / doctor 展示入口，给后续 mac runtime 和版本迁移做铺垫
+
+### 第八十四次更新：补上 2026.4.x candidate 的入口级兼容提示
+
+背景：
+
+1. 前几轮已经把 `EnvCheck`、升级中心和升级弹窗里的目标版本提示逐步收口。
+2. 但应用入口层还有一个明显缺口：
+   - `src/App.tsx` 里的启动通知对未来版本总体还是偏粗糙
+   - `2026.4.x candidate` 虽然在兼容评估里已被识别为 `openclaw_2026_4_candidate`
+   - 但在 UI 上仍主要通过“unknown future / 超出审计范围”这种笼统语义出现
+3. 这会让后续我们准备接 `Claude Code`、`MemOS` / memos，以及后续 OpenClaw 更新能力时，入口层缺少一个更明确的候选线提醒。
+
+本次代码调整：
+
+1. 在 `src/App.tsx` 中新增 candidate notice 说明逻辑：
+   - 引入 `FUTURE_CANDIDATE_OPENCLAW_RELEASE_LINE`
+   - 新增 `buildFutureCandidateNoticeMessage(...)`
+2. 调整 `buildOpenClaw322Notice(...)` 的展示条件：
+   - 以前只有 `3.22` 特殊带、运行时异常、认证注册表降级，才会弹启动通知
+   - 现在 `2026.4.x candidate` 且处于 `conservativeMode` 时，即使运行时暂时 `ready`，也会给出黄色兼容提示
+3. 这条 candidate 入口提示会明确告诉用户：
+   - 当前版本已落在 `2026.4.x` 候选线
+   - 当前仍按保守兼容模式处理
+   - 进入 Dashboard 前，应优先确认：
+     - 记忆目录
+     - Agent 协同
+     - 升级 / 回退链路
+4. 同时保留原有运行时阻塞逻辑：
+   - 如果 candidate 版本同时还出现 `blocked / degraded`
+   - 标题仍保持运行时告警优先
+   - 但消息正文会额外附带 `2026.4.x candidate` 的迁移提醒
+5. 补充测试 `src/pages/__tests__/app-openclaw-notice.test.ts`：
+   - 验证 `2026.4.6` 在运行时就绪时也能出现 candidate 兼容提示
+   - 验证 candidate 版本在运行时阻塞时，仍会带出候选线说明
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明入口层通知逻辑调整未引入编译错误。
+2. 执行：
+   - `npm test -- src/pages/__tests__/app-openclaw-notice.test.ts`
+   仍命中当前环境既有的 `vite/esbuild spawn EPERM`，失败发生在测试前置构建阶段，不是本次 candidate notice 改动引入的新问题。
+
+当前结论：
+
+1. 现在不只是文档、兼容评估和升级中心知道 `2026.4.x` 是 candidate line，连应用入口通知也开始明确表达这层语义。
+2. 这一步仍未改变当前主线坚持 `2026.3.24` 的策略，但已经把“候选线提示”提前铺到用户最先看到的入口层。
+3. 下一步更适合继续推进：
+   - 把主进程 `doctor / compatibility / runtime reconcile` 里的 candidate 提示继续往统一 helper 收口
+   - 或开始梳理 `mac-openclaw-runtime` 后续要接入时，哪些校验可直接复用这套 `candidate + conservativeMode` 入口语义
+
+### 第八十五次更新：把 candidate 兼容提示继续收口到 shared helper 和主进程摘要
+
+背景：
+
+1. 前一轮已经把 `2026.4.x candidate` 的提示推进到了 `App` 入口通知层。
+2. 但当时还有一个不一致点：
+   - `src/App.tsx` 的 candidate 提醒是单独拼的
+   - `electron/main/openclaw-upgrade-compatibility.ts` 的 candidate 摘要也有自己的一套文案
+   - runtime reconcile 虽然会因为 conservative mode 进入阻塞态，但测试里还没有明确覆盖“候选线也会压过 healthy gateway”的语义
+3. 如果后面还要把这套语义复用到 `mac-openclaw-runtime`、OpenClaw 更新、以及未来 `Claude Code + memos` 迁移入口，最好先把文案和归因口径收成一套。
+
+本次代码调整：
+
+1. 在 `src/shared/openclaw-version-policy.ts` 中新增共享 helper：
+   - `buildOpenClawFutureCandidateGuidance(...)`
+   - `buildOpenClawConservativeCompatibilityGuidance(...)`
+2. 这两个 helper 负责统一表达：
+   - `2026.4.x 候选线`
+   - `记忆目录、Agent 协同与升级回退迁移验证`
+   - `当前仍按保守兼容模式处理`
+3. 在 `src/App.tsx` 中改为直接复用：
+   - `buildOpenClawConservativeCompatibilityGuidance(...)`
+   让入口通知与共享策略文案不再各写一份
+4. 在 `electron/main/openclaw-upgrade-compatibility.ts` 中继续收口：
+   - 对 `openclaw_2026_4_candidate + unknown_future_version`
+   - 兼容摘要不再只说“超出当前审计范围”
+   - 现在会更明确地说“已进入候选版本线”，并复用 shared conservative guidance
+5. 补充测试：
+   - `src/shared/__tests__/openclaw-version-policy.test.ts`
+     - 覆盖 candidate guidance / conservative guidance
+   - `electron/main/__tests__/openclaw-upgrade-compatibility.test.ts`
+     - 断言 candidate 摘要包含：
+       - `已进入候选版本线`
+       - `2026.4.x 候选线`
+       - `当前仍按保守兼容模式处理`
+   - `electron/main/__tests__/openclaw-runtime-reconcile.test.ts`
+     - 增加用例，确认即使 Gateway state 是 `healthy`，只要 compatibility assessment 处于 candidate conservative mode，blocking reason 仍会归到 `unknown_future_version`
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明 shared helper 与主进程摘要收口没有引入编译错误。
+2. 执行：
+   - `npm test -- src/shared/__tests__/openclaw-version-policy.test.ts electron/main/__tests__/openclaw-upgrade-compatibility.test.ts electron/main/__tests__/openclaw-runtime-reconcile.test.ts src/pages/__tests__/app-openclaw-notice.test.ts`
+   仍然命中当前环境既有的 `vite/esbuild spawn EPERM`，失败点依旧在测试前置构建阶段，不是本次逻辑调整造成的新问题。
+
+当前结论：
+
+1. 现在 candidate 语义已经不只是“文档里有、入口层有”，而是开始在：
+   - shared strategy helper
+   - 主进程兼容摘要
+   - runtime reconcile 阻塞归因
+   三层同时统一起来。
+2. 这一步继续巩固了当前策略：
+   - 主线仍然保持 `2026.3.24`
+   - `2026.4.x` 仍然只是 candidate line
+   - 但候选线进入 conservative mode 的语义，已经从“零散提示”升级为“跨层统一口径”
+3. 下一步更适合继续推进：
+   - 把 `doctor / runtime reason detail / gateway bootstrap` 里和 candidate 相关的提示也继续统一
+   - 或开始基于这套 shared guidance，梳理 `mac-openclaw-runtime` 后续接入时的最小校验集合
+
+### 第八十六次更新：继续收口 candidate 版本的阻塞归因文案
+
+背景：
+
+1. 前一轮已经把 candidate 语义收到了：
+   - shared strategy helper
+   - App 入口通知
+   - main 兼容摘要
+   - runtime reconcile 阻塞归因
+2. 但入口通知里的“当前归因”仍有一个细小不一致：
+   - 当 blocking reason 是 `unknown_future_version` 时
+   - 普通未来版本和 `2026.4.x candidate` 都还是走同一条粗粒度归因文案
+3. 这会让用户在 candidate 版本被阻塞时，虽然能在上文看到候选线提示，但在“当前归因”这一行又退回成泛化表述。
+
+本次代码调整：
+
+1. 在 `src/shared/openclaw-version-policy.ts` 中新增：
+   - `buildOpenClawCompatibilityBlockingReasonLabel(...)`
+2. 该 helper 负责统一 `unknown_future_version` 场景下的归因文案：
+   - 对 `2026.4.x candidate`：
+     - 明确提示“已进入 2026.4.x 候选线，当前仍按保守兼容模式处理”
+   - 对普通未审计未来版本：
+     - 仍保持“当前 OpenClaw 版本超出已审计范围”
+3. 在 `src/App.tsx` 中把 `describeBlockingReason(...)` 改为接收当前版本：
+   - 当 blocking reason 为 `unknown_future_version` 时
+   - 直接复用 `buildOpenClawCompatibilityBlockingReasonLabel(...)`
+4. 这样一来，入口通知在 candidate 被阻塞时：
+   - 上面的候选线提醒
+   - 下面的当前归因
+   都开始使用同一套 candidate 语义，不再出现“一半具体、一半泛化”的割裂
+5. 同步更新测试：
+   - `src/shared/__tests__/openclaw-version-policy.test.ts`
+   - `src/pages/__tests__/app-openclaw-notice.test.ts`
+
+验证：
+
+1. 执行 `npm run build:app` 通过，说明这一轮阻塞归因文案收口没有引入编译错误。
+
+当前结论：
+
+1. 现在 candidate 版本在 UI 上不只“被提醒”，也开始“被一致地解释”。
+2. 这一步继续把 `2026.4.x candidate` 的表达从散点补丁推进到统一语义层，为后面接 `doctor / mac-openclaw-runtime` 的检查提示打底。
+3. 下一步更适合继续推进：
+   - 把 `gateway bootstrap` 或后续诊断页里可能出现的未来版本提示继续往 shared helper 收口
+   - 或开始把这套 candidate/conservative 语义映射成 `mac-openclaw-runtime` 接入前的明确检查清单
+
+### 第八十七次更新：提前把 macruntime 到包后的接入清单改成版本策略感知
+
+背景：
+
+1. 你提到大约一小时后能拿到 `macruntime`。
+2. 当前我们已经把 `2026.3.24` 主线 / `2026.4.x candidate` 的策略、UI 提示和兼容归因逐步统一起来。
+3. 但之前几份 `darwin-arm64` 收包文档仍明显写死了：
+   - 文件名按 `2026.3.24`
+   - 候选报告命令写死 `--version 2026.3.24`
+   - 默认收包后就是“直接准备入主线”
+4. 如果一小时后拿到的包实际是 `2026.4.6` 或 `2026.4.7`，这些旧清单会直接把执行人带偏。
+
+本次文档调整：
+
+1. 更新 `docs/darwin-arm64-runtime-receipt-checklist.md`
+   - 不再把收包文件名固定写死为 `2026.3.24`
+   - 明确要求以 `notes` 中的 `--version` 输出为准
+   - 增加分流：
+     - 若真实版本是 `2026.3.24`，才允许继续走主线入仓
+     - 若真实版本是 `2026.4.x`，只允许做 candidate 验证，不直接入主线
+2. 更新 `docs/darwin-arm64-runtime-intake-command-sheet.md`
+   - 把候选报告、manifest 预览命令改成使用“notes 里确认的真实版本”
+   - 补上收包后的第一步：先判断它属于主线还是 candidate line
+   - 明确如果实际是 `2026.4.x`，本轮不要复制入主线 runtime 目录，也不要直接回填 manifest
+3. 更新 `docs/openclaw-runtime-intake-runbook.md`
+   - 把 runbook 从“默认直接入主线”改成“先过版本策略门”
+   - 明确只有真实版本属于 `2026.3.24`，才允许把 `phase2-exit` 作为退出依据
+4. 更新 `docs/openclaw-runtime-pending-items.md`
+   - 增加“拿到包后优先使用哪三份文档”的入口说明
+   - 明确 `2026.4.x` 到包时，本轮默认只做候选验证
+
+本轮直接收益：
+
+1. 一小时后包一到，不会因为旧清单写死 `2026.3.24` 而误操作。
+2. 执行人现在可以先按统一策略判断：
+   - `2026.3.24` -> 主线接入
+   - `2026.4.x` -> candidate 验证
+3. 这也意味着后面真正开始看 `mac-openclaw-runtime` 时，我们不是临时讨论，而是已经有一套和当前项目策略一致的接包入口。
+
+当前结论：
+
+1. macruntime 还没到，但接包和验收入口已经提前从“固定版本清单”升级成“版本策略感知清单”。
+2. 下一步最适合做的就是等包到后，直接按这三份文档执行真实版本确认、candidate report 和 probe。
+
+### 第八十八次更新：正式接入 darwin-arm64 主线 runtime 并打通 Phase 2 退出校验
+
+背景：
+
+1. 这一轮收到并验收了：
+   - `mac-openclaw-runtime/darwin-arm64-openclaw-2026.3.24/darwin-arm64-openclaw-2026.3.24.tar.gz`
+2. 核验结果表明它不是之前担心的 `2026.4.x` 候选版本，而是当前主线 `2026.3.24`：
+   - `source_version_output=OpenClaw 2026.3.24`
+   - `copied_version_output=OpenClaw 2026.3.24`
+   - 包内 `node_modules/openclaw/package.json` 版本也是 `2026.3.24`
+3. 这意味着当前收到的 darwin-arm64 包可以直接进入主线，而不只是作为 candidate 验证样本。
+
+本次实际推进：
+
+1. 将 `darwin-arm64` runtime 正式复制到：
+   - `resources/openclaw-bundle/runtime/darwin-arm64`
+2. 核对主线目录结构：
+   - `bin/openclaw`
+   - `node_modules/openclaw/package.json`
+   - `darwin-arm64-runtime-notes.txt`
+3. 更新 `resources/openclaw-bundle/manifest.json`：
+   - 新增 `darwin-arm64` runtime artifact
+   - notes 从“macOS payload 仍挂起”改为：
+     - `darwin-arm64` 已进入 bundled-runtime
+     - `darwin-x64` 仍保持可选后补
+4. 同步更新文档状态，避免仓库继续保留过期判断：
+   - `docs/openclaw-runtime-pending-items.md`
+   - `docs/mclaw-development-roadmap.md`
+   - `docs/openclaw-version-strategy.md`
+
+验证：
+
+1. `npm run check:openclaw:bundle` 通过
+2. `npm run check:openclaw:bundle:strict` 通过
+3. `npm run report:openclaw:bundle` 显示：
+   - `win32-x64 -> bundled-runtime`
+   - `darwin-arm64 -> bundled-runtime`
+   - `darwin-x64 -> bundled-fallback`
+4. `npm run check:openclaw:phase2-exit` 通过
+   - 这表示当前主线所要求的 `win32-x64 + darwin-arm64` 双主路径退出前置已经满足
+
+当前结论：
+
+1. `darwin-arm64` 已不再是挂起事项，而是正式进入主线 bundled-runtime。
+2. 当前剩余的 mac runtime 后补项只剩：
+   - `darwin-x64`
+3. 项目当前最该推进的重点，已经从“等 macruntime”切换为：
+   - 利用已完成的 `win32-x64 + darwin-arm64` 主线，继续推进后续主流程 / 升级迁移 / 候选线诊断闭环
+
+### 第八十九次更新：给 runtime candidate 报告补上主线 / candidate / 拒收自动判定
+
+背景：
+
+1. 现在 `darwin-arm64` 已经正式接入主线，`Phase 2` 主路径退出前置也已经满足。
+2. 接下来项目的重点不再是“有没有 runtime”，而是“后续再收到新包时，能否快速判断它是：
+   - 主线可直接接入
+   - 还是只允许作为 `2026.4.x` candidate
+   - 或者应该直接拒收”
+3. 之前的 `report-openclaw-runtime-candidate.mjs` 只输出结构信息和建议 manifest 片段，还没有给出最终判定结论。
+
+本次代码调整：
+
+1. 更新 `scripts/report-openclaw-runtime-candidate.mjs`
+2. 新增自动读取并核对：
+   - `node_modules/openclaw/package.json` 的真实版本
+   - `runtime-notes.txt`
+   - `source_version_output`
+   - `copied_version_output`
+   - `resources/openclaw-bundle/manifest.json` 中当前 pinned baseline
+3. 报告脚本现在会额外输出：
+   - `packageVersion`
+   - `notes.sourceVersion`
+   - `notes.copiedVersion`
+   - `pinnedVersion`
+   - `intakeDecision`
+   - `decisionReason=...`
+4. 当前自动判定规则收口为三类：
+   - `mainline-ready`
+     - 真实版本与当前 pinned baseline 一致
+     - notes 与 package version 彼此一致
+   - `candidate-only`
+     - 真实版本属于 `2026.4.x`
+     - 允许继续做候选验证，但不允许直接入主线
+   - `reject`
+     - notes 缺失
+     - 版本不一致
+     - 或实际版本既不属于当前主线，也不属于当前候选线
+5. 同步更新：
+   - `docs/darwin-arm64-runtime-intake-command-sheet.md`
+   - 让接包执行人明确关注 `intakeDecision=...` 输出，而不只是看目录结构
+
+验证：
+
+1. 对当前已接入的：
+   - `resources/openclaw-bundle/runtime/darwin-arm64`
+   执行 candidate 报告后，输出为：
+   - `intakeDecision=mainline-ready`
+2. 再执行：
+   - `npm run check:openclaw:bundle:strict`
+   - `npm run check:openclaw:phase2-exit`
+   均继续通过，说明这次脚本增强没有破坏现有主线状态。
+
+当前结论：
+
+1. 现在 runtime 收包不再只是“看结构像不像对”，而是开始能自动给出：
+   - 主线接入
+   - 候选验证
+   - 拒收
+   三种结论。
+2. 这一步对后续继续收 `darwin-x64` 或未来 `2026.4.x` 候选包非常关键，因为它直接把当前版本策略落到了执行脚本层。
+
+### 第九十次更新：让 probe 也输出统一的 intake 判定结果
+
+背景：
+
+1. 前一轮已经让 `report-openclaw-runtime-candidate.mjs` 能输出：
+   - `mainline-ready`
+   - `candidate-only`
+   - `reject`
+2. 但执行链里还有一个缺口：
+   - candidate report 能看出结论
+   - probe 还只是做结构/执行检查
+   - 没有同步打印同一套 intake 判定
+3. 这会导致接包时需要在两条命令之间来回对照，不够顺手，也不利于后续把 runbook 做成标准作业。
+
+本次代码调整：
+
+1. 新增共享判定模块：
+   - `scripts/openclaw-runtime-intake-decision.mjs`
+2. 把以下逻辑抽到共享 helper 中：
+   - 读取 `runtime-notes.txt`
+   - 解析 `source_version_output`
+   - 解析 `copied_version_output`
+   - 读取 `node_modules/openclaw/package.json`
+   - 读取当前主线 `pinnedVersion`
+   - 最终生成：
+     - `intakeDecision`
+     - `decisionReasons`
+3. 更新 `scripts/report-openclaw-runtime-candidate.mjs`
+   - 改为复用共享 helper，避免后面 report/probe 各自复制一套规则
+4. 更新 `scripts/probe-openclaw-runtime.mjs`
+   - 当传入 `--runtime-dir ... --version <真实版本>` 时
+   - probe 现在也会打印：
+     - `intakeDecision`
+     - `packageVersion`
+     - `pinnedVersion`
+     - `notes.sourceVersion`
+     - `notes.copiedVersion`
+     - `decisionReason=...`
+5. 更新 `docs/openclaw-runtime-intake-runbook.md`
+   - 明确 probe 也建议带上 `--version <真实版本>`
+   - 并要求 probe 输出的 `intakeDecision` 与 candidate report 保持一致
+
+验证：
+
+1. 对当前主线 `darwin-arm64` 依次执行：
+   - `npm run report:openclaw:runtime-candidate -- --runtime-dir resources/openclaw-bundle/runtime/darwin-arm64 --platform darwin --arch arm64 --version 2026.3.24`
+   - `npm run probe:openclaw:runtime -- --runtime-dir resources/openclaw-bundle/runtime/darwin-arm64 --platform darwin --arch arm64 --version 2026.3.24 --allow-cross-platform-structure-only`
+2. 两条命令现在都一致输出：
+   - `intakeDecision=mainline-ready`
+3. 再执行：
+   - `npm run check:openclaw:bundle:strict`
+   继续通过，说明这次共享化没有破坏现有主线状态。
+
+当前结论：
+
+1. 现在不只是 report，连 probe 也开始共享同一套主线/candidate/拒收判定。
+2. 这意味着后续收：
+   - `darwin-x64`
+   - 或 `2026.4.x` 候选 runtime
+   时，执行链已经更接近“拿到包 -> 两条命令 -> 直接出统一结论”的状态。
+
+### 第九十一次更新：把 manifest preview 也接上统一的 intake 判定链
+
+背景：
+
+1. 前两轮已经把 `intakeDecision` 接到了：
+   - `report-openclaw-runtime-candidate.mjs`
+   - `probe-openclaw-runtime.mjs`
+2. 但接包流程里还有一个常用入口没有统一：
+   - `preview-openclaw-manifest-runtime.mjs`
+3. 这样会导致执行人虽然能在 report/probe 看结论，但在“准备回填 manifest”这一步还要自己脑补前面判定，不够顺滑。
+
+本次代码调整：
+
+1. 更新 `scripts/preview-openclaw-manifest-runtime.mjs`
+2. 新增可选参数：
+   - `--runtime-check <platform>:<arch>:<runtimeDir>:<version>`
+3. 当带上 `--runtime-check` 时，preview 现在也会复用：
+   - `scripts/openclaw-runtime-intake-decision.mjs`
+4. 并输出统一信息：
+   - `runtimeCheck.intakeDecision`
+   - `runtimeCheck.packageVersion`
+   - `runtimeCheck.pinnedVersion`
+   - `runtimeCheck.notes.sourceVersion`
+   - `runtimeCheck.notes.copiedVersion`
+   - `runtimeCheck.decisionReason=...`
+5. 同步更新文档：
+   - `docs/darwin-arm64-runtime-intake-command-sheet.md`
+   - `docs/openclaw-runtime-intake-runbook.md`
+   让 preview 也成为标准接包链的一部分，而不是单独的 manifest 片段预览工具
+
+验证：
+
+1. 执行：
+   - `npm run preview:openclaw:manifest-runtime -- --runtime darwin:arm64:darwin-arm64:2026.3.24 --runtime-check darwin:arm64:resources/openclaw-bundle/runtime/darwin-arm64:2026.3.24`
+2. 输出中已经能看到：
+   - `runtimeCheck.intakeDecision=mainline-ready`
+3. 再执行：
+   - `npm run check:openclaw:bundle:strict`
+   继续通过，说明这次 preview 增强没有破坏主线状态。
+
+当前结论：
+
+1. 现在 report / probe / preview 三个接包关键入口，已经都可以共享同一套：
+   - 主线接入
+   - candidate 验证
+   - 拒收
+   判定语义。
+2. 接下来再收 `darwin-x64` 或未来 `2026.4.x` 包时，执行链已经非常接近标准化作业面板。
+
+### 第九十二次更新：把 bundled delivery report 也补齐主线状态与版本对齐诊断
+
+背景：
+
+1. 前几轮已经把统一的 runtime intake 判定链接到了：
+   - `report-openclaw-runtime-candidate.mjs`
+   - `probe-openclaw-runtime.mjs`
+   - `preview-openclaw-manifest-runtime.mjs`
+2. 但日常最常看的 `npm run report:openclaw:bundle` 还只有：
+   - `preferredSource=bundled-runtime / bundled-fallback`
+   - 缺少当前 runtime 是否仍与 pinned baseline 对齐的摘要
+3. 同时文档里还残留了一处过期口径：
+   - 仍把 `win32-x64` 写成“唯一正式主线 runtime”
+   - 与当前 `win32-x64 + darwin-arm64` 双主路径状态不一致
+
+本次代码调整：
+
+1. 更新 `scripts/report-openclaw-bundled-delivery.mjs`
+2. delivery report 现在会额外输出：
+   - `openclawVersion`
+   - `targetMainlineState`
+   - `artifactVersion`
+   - `packageVersion`
+   - `pinnedVersion`
+   - `mainlineStatus`
+   - `readyRequiredTargets`
+   - `pendingOptionalTargets`
+3. 当前判定口径收口为：
+   - 已声明 runtime、binary 存在、且 `artifact.version / packageVersion / pinnedVersion` 一致
+     - `targetMainlineState=mainline-ready`
+   - 未声明 runtime 但仍有 `tgz`
+     - `targetMainlineState=fallback-only`
+   - 其余缺口或版本不一致
+     - 进入对应的 review / warning 状态
+4. 这样一来，delivery report 不再只是“来源报告”，也开始承担：
+   - bundled runtime 是否仍与主线基线一致
+   - 当前主线是不是仍保持 `cross-platform-mainline-ready`
+   的快速诊断职责
+
+本次文档调整：
+
+1. 更新 `docs/openclaw-runtime-pending-items.md`
+   - 改正“Windows 是唯一正式主线 runtime”的过期表述
+   - 明确 `report:openclaw:bundle` 现在也能直接给出主线状态摘要
+2. 更新 `docs/openclaw-runtime-intake-runbook.md`
+   - 把新的 delivery report 输出项写进仓库校验步骤
+3. 更新 `docs/openclaw-version-strategy.md`
+   - 改正“当前仓库仍未完成 Phase 2 双平台退出”的过期判断
+
+验证：
+
+1. 执行 `npm run report:openclaw:bundle`，当前输出已显示：
+   - `win32-x64 -> targetMainlineState=mainline-ready`
+   - `darwin-arm64 -> targetMainlineState=mainline-ready`
+   - `darwin-x64 -> targetMainlineState=fallback-only`
+   - `mainlineStatus=cross-platform-mainline-ready`
+2. 执行 `npm run check:openclaw:phase2-exit` 通过。
+3. 执行 `npm run check:openclaw:bundle:strict` 通过。
+
+当前结论：
+
+1. 现在不只是 intake 链，连仓库侧的 bundled delivery report 也能直接看出：
+   - 哪些 runtime 仍与主线基线对齐
+   - 当前双主路径是否仍保持就绪
+2. 这一步完成后，后续继续推进 `darwin-x64` 或 `2026.4.x` 候选迁移时，常用诊断入口已经更统一。
+
+### 第九十三次更新：补上 `2026.3.24 -> 2026.4.x` 的迁移 smoke 诊断骨架
+
+背景：
+
+1. 当前 runtime intake 链已经基本成型：
+   - `report:openclaw:runtime-candidate`
+   - `probe:openclaw:runtime`
+   - `preview:openclaw:manifest-runtime --runtime-check ...`
+   - `report:openclaw:bundle`
+2. 但关于 `2026.3.24 -> 2026.4.x` 的主线迁移，仓库里此前还缺一个“迁移前先做什么”的统一入口。
+3. 这会导致后面评估：
+   - `Claude Code`
+   - `memos / MemOS`
+   - 以及未来 OpenClaw 受控升级/回退
+   时，仍容易退回到口头判断。
+
+本次代码调整：
+
+1. 新增脚本：
+   - `scripts/report-openclaw-migration-smoke.mjs`
+2. 新增 npm 入口：
+   - `npm run report:openclaw:migration-smoke`
+3. 该脚本当前支持：
+   - `--from <version>`
+   - `--to <version>`
+   - `--runtime-dir <path>`
+   - `--runtime-version <version>`
+4. 脚本会统一输出：
+   - `migrationPath`
+   - `needsBaselineBackup`
+   - `requiresConservativeMode`
+   - `requiresRuntimeCandidateProof`
+   - `doctorFixPriority`
+   - `memoryAuditRequired`
+   - `agentAuditRequired`
+   - `recommendedChecks`
+5. 当前迁移路径会先被归类为：
+   - `steady-pinned`
+   - `steady-non-pinned`
+   - `in-range-upgrade`
+   - `in-range-downgrade`
+   - `candidate-upgrade`
+   - `rollback-to-pinned`
+   - `unsupported-path`
+6. 如果同时传入候选 runtime 目录，脚本还会复用现有 intake helper，补充输出：
+   - `runtimeCheck.intakeDecision`
+   - `runtimeCheck.packageVersion`
+   - `runtimeCheck.notes.sourceVersion`
+   - `runtimeCheck.notes.copiedVersion`
+
+本次文档调整：
+
+1. 新增：
+   - `docs/openclaw-upgrade-migration-smoke-runbook.md`
+2. 更新：
+   - `docs/openclaw-version-strategy.md`
+   - `docs/mclaw-development-roadmap.md`
+3. 当前版本策略里已经明确：
+   - 每次评估 `2026.4.x` 候选迁移前，先跑 migration smoke 报告
+   - 并显式覆盖记忆目录、Agent 协同与回退演练
+
+验证：
+
+1. 执行：
+   - `npm run report:openclaw:migration-smoke -- --from 2026.3.24 --to 2026.4.6`
+   输出为：
+   - `migrationPath=candidate-upgrade`
+   - `requiresConservativeMode=yes`
+   - `memoryAuditRequired=yes`
+   - `agentAuditRequired=yes`
+2. 执行：
+   - `npm run report:openclaw:migration-smoke -- --from 2026.4.6 --to 2026.3.24 --runtime-dir resources/openclaw-bundle/runtime/darwin-arm64 --runtime-version 2026.3.24`
+   输出为：
+   - `migrationPath=rollback-to-pinned`
+   - `runtimeCheck.intakeDecision=mainline-ready`
+3. 两条命令都通过，说明迁移 smoke 报告链已经可以作为后续候选线评估的固定入口。
+
+当前结论：
+
+1. 现在仓库里不只是“知道 `2026.4.x` 是 candidate line”，还开始有了一个明确的迁移前诊断入口。
+2. 这一步把后续最关键的几个迁移问题提前显式化了：
+   - 是否必须先做 baseline backup
+   - 是否需要按 conservative mode 看待
+   - 是否必须额外审计记忆目录和 Agent 协同
+   - runtime 候选目录是否已拿到主线 / candidate / 拒收结论
+3. 下一步更适合继续推进：
+   - 把这份 migration smoke 报告再接进 upgrade UI / doctor 诊断摘要
+   - 或继续补 `darwin-x64` 的 intake 与后续迁移入口
+
+### 第九十四次更新：把 migration smoke 摘要接进升级弹窗与组合更新弹窗
+
+背景：
+
+1. 前一轮已经补上：
+   - `report:openclaw:migration-smoke`
+   - `openclaw-upgrade-migration-smoke-runbook.md`
+2. 但那时 migration smoke 仍主要停留在：
+   - CLI 报告脚本
+   - 文档 runbook
+3. 用户真正执行升级时，最先看到的还是：
+   - `OpenClawUpgradeDialog`
+   - `CombinedUpdateDialog`
+   这两个入口还没有直接展示迁移 smoke 结论。
+
+本次代码调整：
+
+1. 更新 `src/shared/openclaw-version-policy.ts`
+2. 新增共享 helper：
+   - `classifyOpenClawMigrationSmokePath(...)`
+   - `buildOpenClawMigrationSmokeSummary(...)`
+3. 该 helper 会统一给出：
+   - `migrationPath`
+   - `needsBaselineBackup`
+   - `requiresConservativeMode`
+   - `doctorFixPriority`
+   - `memoryAuditRequired`
+   - `agentAuditRequired`
+   - `recommendedChecks`
+4. 更新 `src/components/OpenClawUpgradeDialog.tsx`
+   - 新增“迁移 Smoke 诊断”信息块
+   - 新增升级前建议检查提示
+5. 更新 `src/components/CombinedUpdateDialog.tsx`
+   - 新增 “OpenClaw 迁移诊断” 信息块
+   - 在组合更新前也同步展示建议检查项
+6. 更新 `docs/openclaw-upgrade-migration-smoke-runbook.md`
+   - 明确当前升级弹窗与组合更新弹窗也已经开始直接展示 migration smoke 摘要
+
+本轮直接收益：
+
+1. migration smoke 不再只是“要打开命令行才看得到”的诊断结果。
+2. 现在用户进入升级弹窗时，就能先看到：
+   - 当前迁移路径
+   - 是否需要 baseline backup
+   - 是否需要按 conservative mode 看待
+   - 是否需要额外做记忆目录 / Agent 协同审计
+3. 这也让后续把 `2026.4.x` 候选迁移接进产品流程时，不会只有文档与脚本层知道规则，UI 入口也能同步表达同一套策略。
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 当前未追加前端单测执行，原因仍是本地测试链此前存在 `vite/esbuild spawn EPERM` 的既有环境问题；本轮至少已确认 TypeScript 与 Vite 构建链路正常。
+
+当前结论：
+
+1. 现在 migration smoke 已经从“脚本 + 文档”推进到了“共享 helper + 升级入口 UI”。
+2. 下一步更适合继续推进：
+   - 把同样的 migration smoke 摘要接进 `EnvCheck` / doctor 诊断状态
+   - 或继续补 `darwin-x64` 的 intake 与后续迁移入口
+
+### 第九十五次更新：把 migration smoke 摘要继续接进 `EnvCheck` 主流程
+
+背景：
+
+1. 前一轮已经把 migration smoke 摘要接进：
+   - `OpenClawUpgradeDialog`
+   - `CombinedUpdateDialog`
+2. 但真正所有用户都会先经过的仍是：
+   - `EnvCheck`
+3. 如果 `EnvCheck` 里还看不到这层信息，那么主流程入口仍然只知道：
+   - 当前版本是否要升级/回退
+   - 却不知道这次迁移是否还伴随：
+     - baseline backup 要求
+     - conservative mode
+     - 记忆目录 / Agent 协同额外审计
+
+本次代码调整：
+
+1. 更新 `src/pages/EnvCheck.tsx`
+2. 在 `OpenClawVersionGateState` 中新增：
+   - `migrationSmoke`
+3. `buildOpenClawGateState(...)` 现在会直接复用：
+   - `buildOpenClawMigrationSmokeSummary(...)`
+   并把结果挂到 gate state 上
+4. `EnvCheck` 渲染层新增一块：
+   - `OpenClaw 迁移 Smoke`
+5. 当前在环境检查页里会直接显示：
+   - `migrationPath`
+   - 是否需要 baseline backup
+   - 是否需要 conservative mode
+   - 是否需要记忆目录审计
+   - 是否需要 Agent 协同审计
+   - `recommendedChecks`
+6. 更新测试：
+   - `src/pages/__tests__/env-check-state.test.ts`
+   - 补充断言 `buildOpenClawGateState(...)` 现在会产出对应的 `migrationSmoke`
+
+本次文档调整：
+
+1. 更新 `docs/openclaw-upgrade-migration-smoke-runbook.md`
+   - 明确 `EnvCheck` 主流程现在也会展示 migration smoke 摘要
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 由于本地测试链仍存在既有的 `vite/esbuild spawn EPERM` 环境问题，本轮未追加跑前端单测，但已至少确认 TypeScript 与 Vite 构建链路正常。
+
+当前结论：
+
+1. 现在 migration smoke 已经覆盖到三类主要入口：
+   - CLI 报告脚本
+   - 升级 / 组合更新弹窗
+   - `EnvCheck` 主流程
+2. 这意味着后续无论用户是：
+   - 在环境检查时发现版本偏移
+   - 在升级弹窗里准备执行升级
+   - 在候选线评估时跑脚本
+   都开始看到同一套迁移语义，而不是每个入口各说各话。
+3. 下一步更适合继续推进：
+   - 把同样的 migration smoke 摘要接进 doctor / runtime reconcile 诊断摘要
+   - 或切换去补 `darwin-x64` 的 intake 与迁移入口
+
+### 第九十六次更新：把 migration smoke 摘要继续接进 doctor / runtime reconcile 兼容摘要
+
+背景：
+
+1. 前几轮已经把 migration smoke 摘要接进：
+   - CLI 报告脚本
+   - 升级弹窗
+   - 组合更新弹窗
+   - `EnvCheck`
+2. 但主进程侧的诊断口径里，`doctor / runtime reconcile` 依赖的仍主要是：
+   - `assessOpenClawUpgradeCompatibility(...)`
+   - 其返回的 `summary`
+3. 如果这里还不带 migration smoke 信息，那么：
+   - UI 入口知道迁移路径
+   - 主进程诊断摘要却不知道
+   口径仍不完全一致。
+
+本次代码调整：
+
+1. 更新 `electron/main/openclaw-upgrade-compatibility.ts`
+2. 在 compatibility summary 生成阶段，新增复用：
+   - `buildOpenClawMigrationSmokeSummary(...)`
+3. 当前兼容摘要会额外拼入：
+   - `迁移 smoke：路径=...`
+   - `baseline backup=...`
+   - `记忆目录审计=...`
+   - `Agent 协同审计=...`
+4. 这样一来，不同场景下的主进程兼容摘要都会开始带出迁移语义：
+   - `upgrade_detected`
+   - `downgrade_detected`
+   - `unknown_future_version`
+5. 更新测试：
+   - `electron/main/__tests__/openclaw-upgrade-compatibility.test.ts`
+   - 补充断言：
+     - `candidate-upgrade`
+     - `in-range-upgrade`
+     - `rollback-to-pinned`
+     这几类路径都会出现在 compatibility summary 中
+
+本次文档调整：
+
+1. 更新 `docs/openclaw-upgrade-migration-smoke-runbook.md`
+   - 明确 `doctor / runtime reconcile` 的兼容摘要现在也会带出 migration smoke 关键信息
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 本轮仍未追加跑 Vitest，原因依旧是当前环境存在既有的 `vite/esbuild spawn EPERM` 问题；但至少已确认 TypeScript 与构建链路正常。
+
+当前结论：
+
+1. 现在 migration smoke 摘要已经不只是前端入口层能力，也开始进入主进程诊断口径。
+2. 这意味着后续无论从：
+   - `EnvCheck`
+   - 升级弹窗
+   - runtime reconcile store / compatibility summary
+   看当前版本迁移状态，都会逐步收敛到同一套语义。
+3. 下一步更适合继续推进：
+   - 补 `darwin-x64` 的 intake 与迁移入口
+   - 或继续把 migration smoke 摘要落到更多 doctor-like 文本出口
+
+### 第九十七次更新：补齐 `darwin-x64` 的最小对等接包命令入口
+
+背景：
+
+1. 当前 runtime 主线已经是：
+   - `win32-x64`
+   - `darwin-arm64`
+2. 当前唯一剩余的 runtime 挂起项就是：
+   - `darwin-x64`
+3. 但仓库里此前虽然已经有：
+   - `openclaw-runtime-pending-items.md`
+   - `openclaw-runtime-intake-runbook.md`
+   这些总入口
+   却还没有一份专门给 `Intel Mac / darwin-x64` 执行人使用的对等命令单。
+4. 这样一来，后续真拿到 `darwin-x64` 包时，执行人仍容易参考 `darwin-arm64` 文档临时改命令，容易出错。
+
+本次文档调整：
+
+1. 新增：
+   - `docs/darwin-x64-runtime-intake-command-sheet.md`
+2. 这份命令单已明确覆盖：
+   - `darwin-x64` 收包验收
+   - candidate report
+   - runtime probe
+   - manifest preview
+   - `2026.3.24` 主线 / `2026.4.x` candidate 分流
+   - 入仓后 bundle / phase2-exit 校验
+   - `migration smoke` 记录入口
+3. 更新 `docs/openclaw-runtime-pending-items.md`
+   - 把 `darwin-x64` 的专用接包命令单挂进恢复推进入口
+   - 明确 `darwin-x64` 也要配合 `openclaw-upgrade-migration-smoke-runbook.md`
+4. 更新 `docs/openclaw-runtime-intake-runbook.md`
+   - 明确 `darwin-arm64 / darwin-x64` 各自优先参考的命令单
+5. 更新 `docs/openclaw-upgrade-migration-smoke-runbook.md`
+   - 增补 `darwin-x64` 到包后的建议执行顺序：
+     - 先 runtime report / probe / preview
+     - 再 migration smoke
+
+验证：
+
+1. 直接核对 `docs/darwin-x64-runtime-intake-command-sheet.md` 已成稿，可独立指导执行人操作。
+2. 执行 `npm run report:openclaw:migration-smoke -- --from 2026.3.24 --to 2026.4.6` 通过。
+3. 执行 `npm run report:openclaw:bundle` 通过，当前仍保持：
+   - `darwin-x64 -> targetMainlineState=fallback-only`
+   - `pendingOptionalTargets=darwin-x64`
+
+当前结论：
+
+1. 现在 `darwin-x64` 虽然还没有真实 runtime 包体，但至少已经不再是“口头挂起项”，而是有了明确的接包操作面。
+2. 这一步的价值在于：后续一旦 `Intel Mac` runtime 到包，我们可以直接按专用命令单执行，而不是再临时改 `arm64` 的文档。
+3. 下一步更适合继续推进：
+   - 如果拿到真实 `darwin-x64` 包，直接按新命令单做 intake
+   - 如果还没拿到包，则继续补更细的 `Intel Mac` receipt checklist / handoff 文档
+
+### 第九十八次更新：把 `darwin-x64` 的 receipt checklist / handoff 文档补齐到对等水平
+
+背景：
+
+1. 前一轮已经给 `darwin-x64` 补上了最小命令入口：
+   - `darwin-x64-runtime-intake-command-sheet.md`
+2. 但和 `darwin-arm64` 相比，`Intel Mac` 线还缺两份对等文档：
+   - 收包验收单
+   - 发给同事的导出交付说明
+3. 如果这两份文档不补齐，后面一旦让同事去导出 `darwin-x64` runtime，仍然容易因为口头沟通不一致而反复返工。
+
+本次文档调整：
+
+1. 新增：
+   - `docs/darwin-x64-runtime-receipt-checklist.md`
+   - `docs/darwin-x64-runtime-handoff.md`
+2. `darwin-x64-runtime-receipt-checklist.md` 当前已经明确覆盖：
+   - 期望收到的文件
+   - 根目录与 `package.json` 检查
+   - notes 字段检查
+   - report / probe / preview / migration smoke 顺序
+   - 允许入仓 / 不允许入仓条件
+3. `darwin-x64-runtime-handoff.md` 当前已经明确覆盖：
+   - 适用对象：`Intel Mac`
+   - `uname -m = x86_64` 前置要求
+   - 真实 runtime 目录结构要求
+   - 一键导出脚本
+   - 导出后自检
+   - 失败时回传哪些信息
+4. 更新：
+   - `docs/openclaw-runtime-pending-items.md`
+   - `docs/darwin-x64-runtime-intake-command-sheet.md`
+   让新的 receipt checklist / handoff 文档已经挂入总入口
+
+验证：
+
+1. 已直接核对：
+   - `docs/darwin-x64-runtime-receipt-checklist.md`
+   - `docs/darwin-x64-runtime-handoff.md`
+   两份文档均已成稿，可独立使用。
+2. 当前 `darwin-x64` 在仓库状态上仍保持：
+   - `targetMainlineState=fallback-only`
+   - `pendingOptionalTargets=darwin-x64`
+   没有误改主线状态。
+
+当前结论：
+
+1. 现在 `darwin-x64` 这一条线已经具备和 `darwin-arm64` 基本对等的文档链：
+   - handoff
+   - receipt checklist
+   - intake command sheet
+2. 这意味着后续如果要让同事导出 `Intel Mac` runtime，已经不需要再临时拼说明，直接发现成文档即可。
+3. 下一步更适合继续推进：
+   - 等真实 `darwin-x64` 包到位后按整套文档做 intake
+   - 或继续补 `darwin-x64` 在总文档里的状态引用与进度说明
+
+### 第九十九次更新：补一份可直接转发给同事的 `darwin-x64` 消息模板
+
+背景：
+
+1. 前两轮已经把 `darwin-x64` 文档链补到了：
+   - handoff
+   - receipt checklist
+   - intake command sheet
+2. 但实际协作里，项目侧最常遇到的不是“没有长文档”，而是：
+   - 临时要在 IM 里发一句话给同事
+   - 不想每次都手写需求说明
+3. 如果没有一份短消息 / 长消息模板，项目侧仍然容易临时发挥，导致对方误发：
+   - `tgz`
+   - 零散脚本
+   - 缺 notes 的目录
+
+本次文档调整：
+
+1. 新增：
+   - `docs/darwin-x64-runtime-request-message-template.md`
+2. 当前包含两套模板：
+   - 可直接在 IM 里发的短消息模板
+   - 第一次正式发起协作时的长消息模板
+3. 模板中已固定强调：
+   - 机器必须是 `Intel Mac`
+   - `uname -m = x86_64`
+   - 最终交付必须包含：
+     - `darwin-x64-openclaw-<version>.tar.gz`
+     - `darwin-x64-runtime-notes.txt`
+   - 不接受只发：
+     - `openclaw-*.tgz`
+     - 启动脚本
+     - `package.json`
+     - `npm install` 日志
+4. 同步更新：
+   - `docs/darwin-x64-runtime-handoff.md`
+   - `docs/openclaw-runtime-pending-items.md`
+   让这份模板已经挂进现有总入口
+
+本轮直接收益：
+
+1. 现在项目侧如果准备让同事开始导出 `Intel Mac` runtime，不再需要自己临时组织消息。
+2. 直接复制模板即可，协作口径会明显更稳定。
+3. 这也进一步降低了后续收包时出现“少 notes / 只发 tgz / 版本说法不清”的概率。
+
+验证：
+
+1. 已直接核对：
+   - `docs/darwin-x64-runtime-request-message-template.md`
+   - `docs/darwin-x64-runtime-handoff.md`
+   - `docs/openclaw-runtime-pending-items.md`
+   三者的引用链已打通，可直接使用。
+
+当前结论：
+
+1. 到这一轮为止，`darwin-x64` 相关的对外协作文档已经基本闭环：
+   - handoff
+   - receipt checklist
+   - intake command sheet
+   - request message template
+2. 下一步最适合的动作已经很明确：
+   - 直接把模板发给同事，开始索取真实 `Intel Mac` runtime
+   - 或等包到位后按整套文档执行 intake
+### 第一百次更新：把 `darwin-x64` 相关入口继续补进总策略文档
+
+背景：
+
+1. 前一轮已经把 `darwin-x64` 的对外协作文档链补到基本闭环：
+   - request message template
+   - handoff
+   - receipt checklist
+   - intake command sheet
+2. 但项目里几个最常被先打开的总文档仍然只提到：
+   - `Intel Mac`
+   - `darwin-x64`
+   - `2026.4.x`
+   这些关键词
+   却没有把新的执行入口文档直接挂进去。
+3. 这样会导致后续同事或执行人虽然“知道有这条线”，但仍可能从旧经验出发，回到口头沟通或 arm64 经验迁移。
+
+本次文档调整：
+
+1. 更新 `docs/mclaw-development-roadmap.md`
+   - 在当前阶段结论里补充 `darwin-x64` 后续统一执行链
+   - 明确真实包体一旦到位，直接按：
+     - request template
+     - handoff
+     - receipt checklist
+     - intake command sheet
+     - migration smoke runbook
+     推进
+2. 更新 `docs/openclaw-bundled-runtime-acquisition-sop.md`
+   - 在 macOS arm64/x64 获取段补上 `Intel Mac` 协作文档入口
+   - 在“当前下一步”里补充 pinned baseline / candidate line 分流说明
+3. 更新 `docs/openclaw-bundled-runtime-validation-checklist.md`
+   - 在使用前提里补上 `darwin-x64` 接包时应同时打开的文档组合
+   - 在结论模板后补充 `2026.4.x` candidate 与 `darwin-x64` 记录要求
+4. 更新 `docs/openclaw-version-strategy.md`
+   - 把 `2026.4.x` 候选线与 `darwin-x64` 收包文档链直接挂到策略文档中
+
+本轮直接收益：
+
+1. 现在不只是 `openclaw-runtime-pending-items.md` 知道该看哪些 `Intel Mac` 文档，
+   连路线图、获取 SOP、验证清单、版本策略这几份总文档也都能直接把人引到正确入口。
+2. 这会明显降低后续拿到 `darwin-x64` 包体时出现的两类常见偏差：
+   - 只按 arm64 经验操作
+   - 忘记把 `2026.4.x` 候选迁移与 `migration smoke` 一起看
+3. 文档口径现在更统一地收敛为：
+   - 主线继续固定 `2026.3.24`
+   - `darwin-x64` 是后补项，但执行入口已标准化
+   - `2026.4.x` 继续只走 candidate 评估链
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 本轮未追加 Vitest，原因仍是当前环境存在既有的 `vite/esbuild spawn EPERM` 问题；但文档调整未影响主构建链。
+
+当前结论：
+
+1. `darwin-x64` 这条线现在已经不只是“有独立文档”，而是开始真正嵌入项目的总策略文档体系。
+2. 下一步更适合继续推进：
+   - 若仍未拿到 `Intel Mac` 包，则继续补总览/摘要文档中的 discoverability
+   - 若包体到位，则直接按现有文档链执行 intake 和 candidate/mainline 分流
+### 第一百零一次更新：修正 runtime spec 的过期状态，并把主线口径补回 PRD
+
+背景：
+
+1. 前一轮已经把 `darwin-x64` 的执行链补进了多份总策略文档。
+2. 但继续检查后发现，仍有一份非常核心的总规范文档存在明显过期口径：
+   - `docs/openclaw-bundled-runtime-spec.md`
+3. 它还停留在：
+   - “Windows 先作为唯一正式 runtime-first 主线”
+   - `darwin-arm64` 仍未正式入仓
+   这样的旧状态。
+4. 如果这个文件不修正，后面任何人只看 spec，就会误判当前项目仍处于更早阶段。
+
+本次文档调整：
+
+1. 更新 `docs/openclaw-bundled-runtime-spec.md`
+   - 将当前生效原则修正为：
+     - `win32-x64 + darwin-arm64` 是当前 bundled-runtime 双主路径
+     - `darwin-x64` 是可选后补项
+   - 将仓库实际状态修正为：
+     - `darwin-arm64` 已在主线
+     - `darwin-x64` 仍待补齐
+   - 补入当前 bundle / phase2-exit 输出口径：
+     - `mainlineStatus=cross-platform-mainline-ready`
+     - `readyRequiredTargets=win32-x64,darwin-arm64`
+     - `pendingOptionalTargets=darwin-x64`
+   - 在接入步骤里补上：
+     - `darwin-x64` 的 request / handoff / receipt / intake command sheet
+     - `2026.4.x` 的 version strategy / migration smoke runbook
+   - 在验收与下一步章节里，明确：
+     - 当前主线退出前置已满足
+     - `darwin-x64` 不再阻塞主线
+     - 若到包版本属于 `2026.4.x`，只记 candidate，不直接切主线
+2. 更新 `docs/mclaw-prd-v1.md`
+   - 把当前实际 runtime 主线路径补回 PRD：
+     - `win32-x64 bundled-runtime`
+     - `darwin-arm64 bundled-runtime`
+     - `darwin-x64 bundled-fallback / online-fallback`
+   - 在文末把 runtime spec / pending items 也挂入产品层参考入口
+
+本轮直接收益：
+
+1. 现在最关键的 runtime 规范文档终于与当前仓库状态重新对齐，不再会把执行人带回旧阶段。
+2. PRD 也开始直接表达当前 runtime 主线路径，而不是只停留在抽象的“Windows / macOS 都要支持”。
+3. 这会减少后续两类误判：
+   - 误以为 `darwin-arm64` 还没进入主线
+   - 误以为 `darwin-x64` 仍然阻塞整个 Phase 2 主线
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 本轮仍未追加 Vitest，原因依旧是当前环境存在既有的 `vite/esbuild spawn EPERM` 问题；但文档调整未影响构建链。
+
+当前结论：
+
+1. 现在 `runtime spec -> roadmap -> PRD -> pending items -> version strategy` 这几层主文档的状态口径更一致了。
+2. 下一步更适合继续推进：
+   - 检查是否还有其他“总规范型”文档残留旧的 `Windows-only mainline` 口径
+   - 或开始把这套主线 / candidate 分流口径继续沉到更多 UI / 诊断说明文本
+### 第一百零二次更新：正式接入 `darwin-x64` 主线 runtime，并完成仓库侧校验
+
+背景：
+
+1. 前面已经完成了 `darwin-x64` 收包验收：
+   - 目录结构合格
+   - `darwin-x64-runtime-notes.txt` 合格
+   - `report:openclaw:runtime-candidate` 结论为 `mainline-ready`
+2. 这一轮不再停留在候选目录验收，而是把它正式接入：
+   - `resources/openclaw-bundle/runtime/darwin-x64`
+3. 同时需要把仓库里所有还把 `darwin-x64` 写成“挂起 / optional / fallback-only” 的主文档口径同步改正。
+
+本次实际接入：
+
+1. 将：
+   - `mac-openclaw-runtime/darwin-x64-openclaw-2026.3.24`
+   正式复制到：
+   - `resources/openclaw-bundle/runtime/darwin-x64`
+2. 更新 `resources/openclaw-bundle/manifest.json`
+   - 新增 `darwin-x64` runtime artifact
+   - 将 manifest notes 中的 `darwin-x64` 描述改为已验证并已声明为 `bundled-runtime`
+
+本次文档调整：
+
+1. 更新 `docs/openclaw-runtime-pending-items.md`
+   - 不再把 `darwin-x64` 记为当前主线挂起项
+   - 改为三平台 bundled-runtime 已就绪
+2. 更新 `docs/openclaw-bundled-runtime-spec.md`
+   - 改正此前“`darwin-x64` 仍是后补项”的过期口径
+   - 明确当前已形成：
+     - `win32-x64`
+     - `darwin-arm64`
+     - `darwin-x64`
+     三平台 bundled-runtime 主线
+3. 更新 `docs/mclaw-development-roadmap.md`
+   - 把当前阶段结论里的 `darwin-x64 暂挂起` 改为已接入主线
+4. 更新 `docs/mclaw-prd-v1.md`
+   - 把 PRD 中的 runtime 主线路径改为三平台均命中 `bundled-runtime`
+5. 更新 `docs/openclaw-version-strategy.md`
+   - 把 `darwin-x64` 从“后补挂起项”改为“已进入主线，后续仅在替换包体时重新走 intake”
+
+本轮验证：
+
+1. 执行 `npm run check:openclaw:bundle` 通过。
+2. 执行 `npm run check:openclaw:bundle:strict` 通过。
+3. 执行 `npm run report:openclaw:bundle` 通过，当前输出已显示：
+   - `darwin-x64 -> preferredSource=bundled-runtime`
+   - `darwin-x64 -> targetMainlineState=mainline-ready`
+4. 执行 `npm run check:openclaw:phase2-exit` 通过。
+5. 执行 `npm run probe:openclaw:runtime -- --runtime-dir resources/openclaw-bundle/runtime/darwin-x64 --platform darwin --arch x64 --version 2026.3.24 --allow-cross-platform-structure-only` 通过，输出为：
+   - `intakeDecision=mainline-ready`
+   - 因当前主机是 `win32-x64`，`--version` 直执行被按预期跳过
+6. 执行 `npm run build:app` 通过。
+
+本轮结论：
+
+1. `darwin-x64` 已正式进入仓库主线 bundled-runtime。
+2. 当前 OpenClaw bundled runtime 主线已形成三平台一致状态：
+   - `win32-x64`
+   - `darwin-arm64`
+   - `darwin-x64`
+3. 后续与 `Intel Mac` 相关的工作重点不再是“先补包”，而是：
+   - Intel Mac 断网首启验证
+   - 后续替换包体时的 intake / candidate 分流
+   - `2026.4.x` 候选迁移验证
+### 第一百零三次更新：把 bundle / phase2-exit 输出口径从“双主路径”收口为“三平台主线”
+
+背景：
+
+1. 上一轮已经把 `darwin-x64` 正式接入主线 runtime，并完成了：
+   - manifest 回填
+   - bundle strict 校验
+   - build 校验
+2. 但继续检查后发现，脚本层仍残留一处“旧时代语义”：
+   - `scripts/check-openclaw-phase2-exit.mjs`
+   - `scripts/report-openclaw-bundled-delivery.mjs`
+3. 这两处仍把 `darwin-x64` 当作：
+   - `required: false`
+   - optional / pending
+4. 结果就是即使 `darwin-x64` 已入主线，输出里仍可能继续给出：
+   - `readyRequiredTargets=win32-x64,darwin-arm64`
+   - 或文档继续引用旧的 `pendingOptionalTargets=darwin-x64`
+
+本次代码调整：
+
+1. 更新 `scripts/check-openclaw-phase2-exit.mjs`
+   - 将 cross-platform 模式下的 `darwin-x64` 改为 `required: true`
+2. 更新 `scripts/report-openclaw-bundled-delivery.mjs`
+   - 将 `darwin-x64` 也纳入主线 required target 集合
+3. 这样一来，当前三平台主线状态不再只是“目录已存在”，而是会被诊断输出直接承认：
+   - `win32-x64`
+   - `darwin-arm64`
+   - `darwin-x64`
+
+本次文档调整：
+
+1. 更新 `docs/openclaw-bundled-runtime-spec.md`
+   - 去掉残留的：
+     - `readyRequiredTargets=win32-x64,darwin-arm64`
+     - `pendingOptionalTargets=darwin-x64`
+   - 改为三平台主线一致口径
+2. 更新 `docs/openclaw-runtime-pending-items.md`
+   - 把“`darwin-x64` 预期将切为 `mainline-ready`”改为“已经切为 `mainline-ready`”
+
+本轮验证：
+
+1. 执行 `npm run report:openclaw:bundle` 通过，当前输出已变为：
+   - `readyRequiredTargets=win32-x64,darwin-arm64,darwin-x64`
+2. 执行 `npm run check:openclaw:phase2-exit` 通过，当前输出也已变为：
+   - `readyRequiredTargets=win32-x64,darwin-arm64,darwin-x64`
+3. 执行 `npm run build:app` 通过。
+
+本轮结论：
+
+1. 现在不只是资源目录和 manifest 层承认 `darwin-x64` 已入主线，
+   连最关键的 bundle / phase2-exit 诊断脚本也已经改成“三平台主线”语义。
+2. 这一步完成后，后续即使暂时拿不到真实 Intel Mac 机器，项目内关于 bundled runtime 的主线判断口径也已经更一致。
+3. 后续最适合继续推进的方向变成：
+   - 补 Intel Mac 断网首启 runbook / 预留记录模板
+   - 或继续清理 UI / 诊断文本里是否还残留“双主路径时代”的旧说法
+### 第一百零四次更新：补一份 `Intel Mac` 断网首启验证 runbook，先把真机缺位期间的执行面准备好
+
+背景：
+
+1. 当前 `darwin-x64` 已经正式进入主线 bundled-runtime。
+2. 但你这边暂时还拿不到真实 `Intel Mac` 机器，所以接下来最合理的推进方式不是等机器，而是先把“拿到机器后怎么验”写成可直接执行的 runbook。
+3. 这样后续一旦机器到位，我们就不需要再临时组织验证步骤，也不会把 `arm64` 验证经验机械套到 `x64` 上。
+
+本次文档调整：
+
+1. 新增：
+   - `docs/darwin-x64-offline-first-launch-runbook.md`
+2. 这份 runbook 当前已经明确覆盖：
+   - 适用前提
+   - 验证机器要求
+   - 断网前准备
+   - 断网执行步骤
+   - 来源判断 / 首启体验 / 接管结果 / 日志状态 四类验证点
+   - 失败分类
+   - 可直接回填到 `dev_log.md` 的记录模板
+3. 更新：
+   - `docs/openclaw-bundled-runtime-validation-checklist.md`
+   - `docs/openclaw-runtime-pending-items.md`
+   - `docs/openclaw-bundled-runtime-spec.md`
+   - `docs/darwin-x64-runtime-intake-command-sheet.md`
+4. 这样一来，`Intel Mac` 相关文档链现在已经覆盖到：
+   - request
+   - handoff
+   - receipt
+   - intake
+   - offline first-launch
+
+本轮直接收益：
+
+1. 虽然现在还拿不到真实 Intel Mac 机器，但“拿到后做什么”已经不是模糊口头结论，而是有了专门 runbook。
+2. 这使后续 Intel Mac 真机验证不再依赖临场发挥，尤其适合：
+   - 验证断网首启
+   - 验证实际是否命中 `bundled-runtime`
+   - 验证日志和状态页是否仍残留旧的 fallback 语义
+3. 当前 `darwin-x64` 这条线已经从“包体接入”继续推进到了“真机验证准备完成”。
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 本轮未新增业务代码逻辑，主要验证文档调整未影响构建链。
+
+本轮结论：
+
+1. 现在即使暂时没有 Intel Mac 机器，项目侧也已经把后续真机验证的操作面准备好了。
+2. 下一步更适合继续推进：
+   - 再检查 UI / 诊断文本里是否还残留 Intel Mac fallback 旧口径
+   - 或整理一份 Intel Mac 真机到位后的最短执行顺序摘要
+### 第一百零五次更新：继续清理 Intel Mac 旧口径，把仓库 README 和 intake 文档同步到三平台主线状态
+
+背景：
+
+1. 前几轮已经把：
+   - `darwin-x64` runtime 接入主线
+   - bundle / phase2-exit 输出改成三平台 required
+2. 但继续往下查时发现，仓库里仍有几份“入口型文档”残留旧口径：
+   - `resources/openclaw-bundle/README.md`
+   - `docs/openclaw-runtime-intake-runbook.md`
+   - `docs/darwin-x64-runtime-intake-command-sheet.md`
+3. 这些文件虽然不是最核心的策略文档，但都属于“执行人很可能先打开”的入口，所以如果不改，后面仍然容易被旧状态误导。
+
+本次文档调整：
+
+1. 更新 `resources/openclaw-bundle/README.md`
+   - 改正“真实 macOS runtime 还不存在”的过期表述
+   - 改为：
+     - `darwin-arm64` 已存在并进入 `bundled-runtime`
+     - `darwin-x64` 已存在并进入 `bundled-runtime`
+   - 改正 “Phase 2 exit checks do not pass yet” 的过期表述
+   - 增补 Intel Mac 断网首启 runbook 入口
+2. 更新 `docs/openclaw-runtime-intake-runbook.md`
+   - 去掉仍在引用的 `pendingOptionalTargets=...`
+   - 将主线路径说明改成：
+     - `win32-x64 + darwin-arm64 + darwin-x64`
+3. 更新 `docs/darwin-x64-runtime-intake-command-sheet.md`
+   - 把“`darwin-x64` 从 fallback-only 切到 mainline-ready”的表述改成当前完成态
+   - 把检查点改成：
+     - `readyRequiredTargets=win32-x64,darwin-arm64,darwin-x64`
+
+本轮直接收益：
+
+1. 现在不仅主策略文档已经改正，连 bundle 目录 README 和 intake 类型文档也开始统一三平台主线语义。
+2. 后续无论执行人先打开哪一层入口，都更不容易再看到：
+   - `darwin-x64` 仍是 optional
+   - `pendingOptionalTargets=darwin-x64`
+   - macOS runtime 还没齐
+3. 这一步把 Intel Mac 线的“入口发现层”又往前收口了一层。
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 本轮未新增业务代码，仅继续做文档和说明口径收口。
+
+本轮结论：
+
+1. `darwin-x64` 现在不只是“已经接入”，连包内 README 和 intake runbook 也开始完整承认它属于三平台 bundled-runtime 主线。
+2. 下一步更适合继续推进：
+   - 再检查 UI / 诊断说明文本是否还有 Intel Mac fallback 旧说法
+   - 或继续整理 Intel Mac 真机到位后的最短验证摘要页
+### 第一百零六次更新：继续收口验证规则，把 bundled runtime 验收标准从“双平台时代”同步到当前三平台状态
+
+背景：
+
+1. 前几轮已经把：
+   - `darwin-x64` 接入主线
+   - bundle / phase2-exit 输出改成三平台 required
+   - 入口型 README / intake 文档改成三平台语义
+2. 但继续检查后发现，还有两类“规范级文件”仍残留双平台时代痕迹：
+   - `docs/openclaw-bundled-runtime-validation-checklist.md`
+   - `docs/openclaw-bundled-runtime-acquisition-sop.md`
+3. 另外，`resources/openclaw-bundle/manifest.runtime-template.json` 的 notes 也还是旧的过渡态说明。
+
+本次文档调整：
+
+1. 更新 `docs/openclaw-bundled-runtime-validation-checklist.md`
+   - 将验证视角从“Windows + macOS”进一步明确为：
+     - `win32-x64`
+     - `darwin-arm64`
+     - `darwin-x64`
+   - 把 `Phase 2` 通过标准同步到当前三平台主线状态
+   - 在结论建议里补上 `darwin-x64` 真机 runbook 执行/排期记录要求
+2. 更新 `docs/openclaw-bundled-runtime-acquisition-sop.md`
+   - 明确截至当前仓库已经处于：
+     - `defaultDeliveryMode = bundled-runtime`
+     - 三平台 runtime artifact 均已入库
+   - 将 SOP 的主要后续用途改写为：
+     - 替换现有主线 runtime
+     - 或验证 `2026.4.x` 候选 runtime
+   - 将断网首启验证拆成：
+     - Windows
+     - macOS Apple Silicon
+     - macOS Intel
+3. 更新 `resources/openclaw-bundle/manifest.runtime-template.json`
+   - 把 notes 从旧的“等待切主线”语义改为当前更适合复用的主线模板语义
+
+本轮直接收益：
+
+1. 现在连最核心的验收清单与获取 SOP，也已经不再停留在“双平台先过、Intel Mac 后说”的旧状态。
+2. 后续无论是替换 `darwin-x64` 主线 runtime，还是验证 `2026.4.x` 候选包，执行人都能从 SOP 和验证清单直接看到当前正确语义。
+3. 这一步把 bundled runtime 体系里的“规范层”也基本同步到了三平台主线状态。
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 本轮仍未新增业务代码逻辑，主要完成 runtime 规范与模板层收口。
+
+本轮结论：
+
+1. 当前 bundled runtime 相关文档已经从：
+   - 策略层
+   - 接入层
+   - README 入口层
+   - 验收 / SOP 规范层
+   基本都完成了对 `darwin-x64` 主线接入的同步。
+2. 下一步更适合继续推进：
+   - 再查 UI / 诊断说明是否存在旧的 Intel Mac fallback 文案
+   - 或整理一份“Intel Mac 真机一到位后的最短执行摘要”
+### 第一百零七次更新：继续收口 UI 与安装发现提示，去掉三平台主线完成后的过时 fallback 语义
+
+背景：
+
+1. 前几轮已经把：
+   - `darwin-x64` 正式接入 `bundled-runtime`
+   - `report:openclaw:bundle` / `check:openclaw:phase2-exit` 改成三平台 required
+   - 主文档、README、runbook、SOP 基本同步到了三平台主线口径
+2. 但继续检查后发现，前端状态页与安装发现告警里仍有一类过时表达：
+   - 还把 `bundled-fallback -> bundled-runtime` 差异解释成“降级、兜底或过渡状态”
+3. 这类说法在 `darwin-x64` 已进入主线后已经不够准确，当前更应该直接提示：
+   - 当前平台没有命中目标本体路径
+   - 或安装包里的该平台 runtime 载荷缺失、损坏、打包不完整
+
+本次代码调整：
+
+1. 更新 `src/pages/EnvCheck.tsx`
+   - 收紧 “运行来源” 提示文案
+   - 将解释聚焦到：
+     - 当前平台未命中目标本体路径
+     - 当前安装包中的该平台内置 runtime 载荷缺失、损坏或打包不完整
+2. 更新 `electron/main/openclaw-install-discovery.ts`
+   - 当 `bundledDeliveryMode` 与 `bundledTargetDeliveryMode` 不一致时，
+     直接给出更贴近当前主线状态的安装发现提示
+   - 不再把问题暗示为仓库仍处于过渡交付阶段
+3. 同步更新测试：
+   - `src/pages/__tests__/env-check-state.test.ts`
+   - `electron/main/__tests__/openclaw-install-discovery.test.ts`
+
+本轮直接收益：
+
+1. 用户在状态页和安装发现告警里看到的信息，会更贴近当前真实问题，而不是继续被旧的“过渡态”语义误导。
+2. 这也让三平台 bundled-runtime 主线与界面文案 finally 对齐，减少后续 Intel Mac 真机验证时的歧义。
+3. 后面如果真出现 `bundled-fallback`，执行人会优先检查包体和平台载荷，而不是误以为这是预期中的阶段性状态。
+
+验证：
+
+1. 同步更新了对应单测断言，保证提示文案与当前策略一致。
+2. 执行 `npm run build:app` 通过。
+
+本轮结论：
+
+1. 当前三平台主线状态已经不只体现在资源目录、manifest 和文档中，也开始真正反映到用户可见的诊断提示层。
+2. 下一步更适合继续推进：
+   - 再做一轮针对 `EnvCheck` / 安装发现 / 诊断页的统一巡检
+   - 或继续补 Intel Mac 真机验证到位后的结果回填模板
+### 第一百零八次更新：继续收口 `EnvCheck` 来源徽标，把 `bundled-fallback` 从“内置降级”改成更准确的载荷异常提示
+
+背景：
+
+1. 上一轮已经处理了两处更显眼的提示入口：
+   - `EnvCheck` 的运行来源 notice
+   - `openclaw-install-discovery` 的安装发现 warning
+2. 继续巡检后发现，`EnvCheck` 里还有一层更短的来源徽标状态仍沿用旧说法：
+   - `bundled-fallback` 被展示为“内置降级”
+   - 并说明为“正在使用安装包内置的降级载荷”
+3. 这套语义更像历史上的阶段性策略描述，但在当前三平台 bundled-runtime 主线已完成的前提下，
+   更准确的解释应该是：
+   - 当前没有命中目标内置 runtime
+   - 安装包中的对应平台 runtime 可能缺失、损坏或打包不完整
+
+本次代码调整：
+
+1. 更新 `src/pages/EnvCheck.tsx`
+   - 将 `bundled-fallback` 的徽标标签从：
+     - `内置降级`
+     调整为：
+     - `内置补位`
+   - 将说明改为：
+     - 当前未命中目标内置 runtime
+     - 正在使用安装包内置补位载荷
+     - 需要检查该平台 runtime 是否缺失、损坏或打包不完整
+2. 更新 `src/pages/__tests__/env-check-state.test.ts`
+   - 新增 `bundled-fallback` 对应的 badge 状态断言
+   - 保证后续不会又回到“内置降级”这类旧语义
+
+本轮直接收益：
+
+1. `EnvCheck` 现在不仅长提示正确，连短徽标层也开始和当前三平台主线语义对齐。
+2. 后续 Intel Mac 真机验证时，如果页面出现 `bundled-fallback`，执行人会更自然地去检查平台 payload，而不是把它当成正常的“阶段性降级”。
+3. 这一步把用户感知层的语义又收紧了一层，减少误判。
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 新增的 `bundled-fallback` badge 测试断言已同步入仓。
+
+本轮结论：
+
+1. `EnvCheck` 当前和 OpenClaw 交付模式相关的两层提示：
+   - notice
+   - source badge
+   已基本完成从旧 fallback 阶段语义到当前三平台主线语义的收口。
+2. 下一步更适合继续推进：
+   - 再扫一轮其他诊断页里是否还有类似“降级/过渡”旧词
+   - 或开始补 Intel Mac 真机验证结果的标准回填模板
+### 第一百零九次更新：确认可正式切回 Phase 5，并继续收口飞书接入页的旧品牌残留
+
+背景：
+
+1. 经过前几轮 runtime 主线收口后，当前仓库已经满足：
+   - `win32-x64 bundled-runtime`
+   - `darwin-arm64 bundled-runtime`
+   - `darwin-x64 bundled-runtime`
+2. 这意味着我们现在讨论“什么时候能开始搞飞书接入”时，结论已经和前面不同：
+   - 不再需要继续等待 runtime 主线成型
+   - 可以正式把主线重心切回 `Phase 5` 飞书官方接入闭环
+3. 同时复查飞书相关页面后发现，仍有少量用户可见文案保留 `Qclaw / Qclaw Lite` 历史品牌，容易影响当前阶段判断与对外体验。
+
+本次调整：
+
+1. 更新 `docs/mclaw-development-roadmap.md`
+   - 将当前阶段结论进一步改正为：
+     - 三平台 bundled-runtime 主线已成型
+     - 可正式切回 `Phase 5`
+   - 明确后续主线聚焦：
+     - 飞书官方插件安装闭环
+     - 飞书扫码 / 手动绑定闭环
+     - 飞书配对与诊断闭环
+2. 更新 `docs/mclaw-prd-v1.md`
+   - 补充说明：自当前时点起，v1 的下一主线应正式转入飞书接入闭环
+3. 继续收口飞书相关用户可见文案：
+   - `src/components/FeishuDiagnosticsModal.tsx`
+   - `src/components/FeishuBotManagerModal.tsx`
+   - `src/components/feishu-install-tutorial.ts`
+   将其中残留的 `Qclaw` / `Qclaw Lite` 改回 `Mclaw`
+
+本轮直接收益：
+
+1. 项目阶段判断终于可以明确回答：
+   - 现在就可以开始正式搞飞书接入
+2. 飞书这条线的下一阶段目标也更清楚，不再与 runtime 收口阶段混在一起。
+3. 连飞书教程、诊断弹窗、Bot 管理提示里的历史品牌残留也继续减少，便于后续直接进入真实联调。
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 本轮没有改飞书核心控制逻辑，主要完成阶段切换确认与飞书页面文案收口。
+
+本轮结论：
+
+1. 从当前仓库状态出发，`Phase 5` 已经可以作为主线正式推进。
+2. 接下来最适合立刻进入的飞书工作顺序是：
+   - 先补飞书页面的结束态 / 下一步动作统一
+   - 再做真实凭证下的飞书手动绑定 / 配对闭环验证
+   - 最后收口诊断与售后排查入口
+### 第一百一十次更新：用脚本复核 runtime 主线已完成，并把当前阶段判断明确切换到可正式推进飞书闭环
+
+背景：
+
+1. 用户继续追问两个关键问题：
+   - `macruntime` / `winruntime` 什么时候算搞定
+   - 什么时候能正式开始飞书接入
+2. 这类问题不能只靠口头判断，必须回到当前仓库真实状态复核。
+3. 因此本轮直接重新执行 runtime 主线校验脚本，避免阶段判断继续沿用旧口径。
+
+本次复核结果：
+
+1. 执行 `npm run report:openclaw:bundle`，当前输出明确为：
+   - `defaultDeliveryMode=bundled-runtime`
+   - `targetDeliveryMode=bundled-runtime`
+   - `win32-x64 -> targetMainlineState=mainline-ready`
+   - `darwin-arm64 -> targetMainlineState=mainline-ready`
+   - `darwin-x64 -> targetMainlineState=mainline-ready`
+   - `mainlineStatus=cross-platform-mainline-ready`
+2. 执行 `npm run check:openclaw:phase2-exit`，当前输出明确为：
+   - `Ready target win32-x64`
+   - `Ready target darwin-arm64`
+   - `Ready target darwin-x64`
+   - `Phase 2 exit prerequisites currently look complete.`
+3. 仓库内 runtime 目录也已实际存在：
+   - `resources/openclaw-bundle/runtime/windows-x64`
+   - `resources/openclaw-bundle/runtime/darwin-arm64`
+   - `resources/openclaw-bundle/runtime/darwin-x64`
+
+本次文档调整：
+
+1. 更新 `docs/mclaw-development-roadmap.md`
+   - 将当前阶段结论日期同步到 `2026-04-09`
+   - 将 `check:openclaw:phase2-exit` 的说明改成当前更准确的“三平台当前退出检查”
+   - 顺手修正重复编号，避免后续继续误读
+
+本轮阶段结论：
+
+1. 如果按“仓库主线 / bundled-runtime / 校验脚本”定义，`winruntime` 与 `macruntime` 这一块已经搞定。
+2. 如果按“所有真机最终验收都完成”定义，则剩下的是验收层收尾，不再是主线工程阻塞。
+3. 因此当前项目阶段不应再继续表述为“runtime 还没好，不能进飞书”，而应明确为：
+   - `Phase 2` 主线前置已完成
+   - 当前主线开发可正式切入 `Phase 5` 飞书官方接入闭环
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 本轮主要完成阶段判断复核与路线文档同步，没有改业务控制逻辑。
+
+本轮结论：
+
+1. 从当前仓库状态出发，现在就可以开始正式搞飞书接入，而不是继续等待 runtime 主线。
+2. 接下来最适合推进的是：
+   - 飞书页面结束态 / 下一步动作统一
+   - 真实凭证下的手动绑定 / 配对闭环验证
+   - 飞书诊断与售后排查入口收口
+### 第一百一十一次更新：开始正式推进飞书主线，统一 `ChannelConnect` 的结束态与下一步动作
+
+背景：
+
+1. 上一轮已经通过 runtime 校验脚本确认：
+   - 三平台 bundled-runtime 主线已完成
+   - 当前可以正式切入 `Phase 5` 飞书官方接入闭环
+2. 切到飞书线后，第一眼能看到的真实问题不是缺功能，而是结束态文案仍有一点不够统一：
+   - 表单阶段按钮写的是“完成配置”
+   - 成功后的下一步按钮写的是“下一步：输入配对码”
+   - 飞书手动绑定区和教程页也仍沿用旧的“完成配置”说法
+3. 对飞书这种需要“先完成机器人配置，再继续输入配对码”的链路来说，
+   当前最应该先收口的是：
+   - 当前这一步到底完成了什么
+   - 用户下一步应该点哪个按钮
+
+本次代码调整：
+
+1. 更新 `src/pages/ChannelConnect.tsx`
+   - 将飞书表单阶段主按钮从：
+     - `完成配置`
+     调整为：
+     - `完成机器人配置`
+   - 将恢复提示与手动绑定提示中的对应文案一并同步
+   - 新增 `buildChannelConnectConnectedActionLabel(...)`
+     统一 connected 阶段的下一步按钮文案
+   - 对飞书单独使用更明确的下一步按钮：
+     - `下一步：输入飞书配对码`
+   - 同时把飞书 completion copy 改成：
+     - 先去飞书里给机器人发消息拿配对码
+     - 然后点击“下一步：输入飞书配对码”继续
+2. 更新 `src/components/feishu-install-tutorial.ts`
+   - 将教程第 6 步从“完成配置”统一改成“完成机器人配置”
+3. 更新测试：
+   - `src/pages/__tests__/channel-connect.test.ts`
+   - 校验飞书 completion copy 已指向新的下一步动作
+   - 校验 connected 阶段的飞书按钮文案为 `下一步：输入飞书配对码`
+
+本轮直接收益：
+
+1. 飞书接入链路里的两个关键阶段现在更容易区分：
+   - 先完成机器人配置
+   - 再进入飞书配对码输入
+2. 用户不容易再把“保存飞书配置”误解成“整个飞书接入已经结束”。
+3. 教程页、表单按钮、成功后的下一步按钮，开始使用同一套阶段语义。
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 本轮新增了飞书 connected 阶段按钮文案的测试断言。
+
+本轮结论：
+
+1. `Phase 5` 已经不是停留在“要不要开始”的讨论，而是已经进入飞书主流程的具体收口开发。
+2. 下一步最适合继续推进：
+   - 统一 `ChannelConnect` 里飞书新建 / 关联 / 恢复提示的结束态分层
+   - 补一份飞书最小闭环验收清单
+### 第一百一十二次更新：继续收口飞书三条路径的结束态提示，并补齐最小闭环验收清单
+
+背景：
+
+1. 上一轮已经开始正式推进飞书主线，并完成了两件关键事：
+   - 飞书表单阶段按钮改成 `完成机器人配置`
+   - connected 阶段按钮改成 `下一步：输入飞书配对码`
+2. 但继续检查 `ChannelConnect` 后发现，飞书三条路径的结束态提示还不够完全一致：
+   - 新建机器人恢复成功
+   - 关联已有机器人准备成功
+   - 手动绑定区域的下一步说明
+3. 这些提示虽然都大致正确，但还没有全部把“完成机器人配置后，下一步继续输入飞书配对码”这条阶段线说透。
+
+本次代码调整：
+
+1. 更新 `src/pages/ChannelConnect.tsx`
+   - 将飞书新建机器人恢复成功提示改成：
+     - 先完成机器人配置
+     - 然后继续输入飞书配对码
+   - 将关联已有机器人准备完成提示改成：
+     - 现在可以手动绑定已有机器人
+     - 完成机器人配置后，再继续输入飞书配对码
+   - 将手动绑定区的说明文案同步到同一阶段语义
+2. 新增 `docs/feishu-minimum-acceptance-checklist.md`
+   - 明确飞书 `Phase 5` 的最小闭环验收路径：
+     - 进入飞书接入页
+     - 官方插件准备
+     - 完成机器人配置
+     - 获取并输入飞书配对码
+     - 完成至少一次真实消息往返
+   - 同时给出失败分流和验收通过标准
+
+本轮直接收益：
+
+1. `ChannelConnect` 中飞书的三条主要路径，开始真正共享同一条结束态语义：
+   - 先完成机器人配置
+   - 再继续输入飞书配对码
+2. 后续一旦开始真实飞书联调，我们已经有一份可直接照着走的最小闭环验收清单，不再需要口头说明。
+3. 这一步让 `Phase 5` 从“页面文案收口”进一步走向“可执行验收流程收口”。
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 本轮新增文档：
+   - `docs/feishu-minimum-acceptance-checklist.md`
+
+本轮结论：
+
+1. 当前飞书主线已经开始同时具备：
+   - 页面动作阶段语义
+   - 最小闭环验收清单
+2. 下一步最适合继续推进：
+   - 继续补飞书真实联调前的结果记录模板
+   - 或直接开始对 `ChannelConnect` 做一轮真实路径的联调前自检
+### 第一百一十三次更新：补飞书联调结果记录模板，并把联调前自检里最后几处结束态提示继续对齐
+
+背景：
+
+1. 上一轮已经完成：
+   - 飞书三条主要路径的结束态提示收口
+   - `docs/feishu-minimum-acceptance-checklist.md`
+2. 继续做联调前自检时，发现还有两类缺口：
+   - 个别飞书提示仍停留在“现在可以手动绑定已有机器人”，但没有把“后续继续输入飞书配对码”说完
+   - 还缺一份专门给真实联调后回填结果使用的模板
+3. 因此这轮继续把“联调前自检 + 联调后记录”这一前一后两块补齐。
+
+本次调整：
+
+1. 更新 `src/pages/ChannelConnect.tsx`
+   - 将剩余几处飞书官方插件就绪提示统一补全为：
+     - 现在可以手动绑定已有机器人
+     - 完成机器人配置后，再继续输入飞书配对码
+   - 这样刷新状态、自动检测、自动补装后的提示就不再出现阶段信息不完整的问题
+2. 新增 `docs/feishu-integration-result-template.md`
+   - 给真实飞书联调 / 验收后的回填提供统一模板
+   - 覆盖：
+     - 基本信息
+     - 接入路径
+     - 配对结果
+     - 消息联通结果
+     - 失败点定位
+     - 可直接回填到 `docs/dev_log.md` 的示例
+
+本轮直接收益：
+
+1. 联调前，`ChannelConnect` 页面里与飞书路径相关的主要结束态提示已经更接近统一口径。
+2. 联调后，也不再需要临时想“结果该怎么记”，可以直接按模板回填。
+3. 这一步把飞书主线从“页面收口 + 验收清单”进一步推进到“结果记录模板也已就绪”。
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 本轮新增文档：
+   - `docs/feishu-integration-result-template.md`
+
+本轮结论：
+
+1. 当前飞书主线已经具备三块可执行材料：
+   - 页面阶段语义
+   - 最小闭环验收清单
+   - 联调结果记录模板
+2. 下一步最适合继续推进：
+   - 直接按清单做一轮飞书真实联调前自检
+   - 或开始整理“需要你提供的真实飞书联调参数清单”
+### 第一百一十四次更新：补齐飞书真实联调前准备清单，把“你要准备什么”和“最短怎么走”固定下来
+
+背景：
+
+1. 上一轮已经补了两类关键材料：
+   - `docs/feishu-minimum-acceptance-checklist.md`
+   - `docs/feishu-integration-result-template.md`
+2. 但真要开始联调前，还差一个非常现实的问题：
+   - 你到底要先准备哪些真实参数
+   - 从 `Mclaw` 里最短应该点哪条路径
+   - 我们应该优先先测“关联已有机器人”还是“新建机器人”
+3. 如果这部分不提前固定，后面即使页面和验收清单都在，也很容易临场来回问答、浪费联调时间。
+
+本次调整：
+
+1. 新增 `docs/feishu-live-debug-prerequisites.md`
+   - 明确飞书真实联调前需要准备：
+     - 飞书测试账号
+     - `App ID`
+     - `App Secret`
+     - 联调平台
+     - 可选的 `lark-cli`
+   - 明确最短进入路径：
+     - 打开 `Mclaw`
+     - 进入 `连接 IM 渠道`
+     - 切到 `飞书`
+     - 先走 `关联已有机器人`
+   - 给出两条最短联调顺序：
+     - 关联已有机器人路径
+     - 新建机器人路径
+   - 同时补充联调时常见卡点与优先检查项
+2. 更新 `docs/feishu-minimum-acceptance-checklist.md`
+   - 在顶部补充联动文档入口：
+     - `docs/feishu-live-debug-prerequisites.md`
+     - `docs/feishu-integration-result-template.md`
+
+本轮直接收益：
+
+1. 现在飞书主线已经不只是“页面怎么提示”和“验收后怎么记录”，连联调前该准备什么也固定下来了。
+2. 后续你真要开始飞书联调时，我可以直接按这份清单告诉你最短路径，而不用现场重新整理。
+3. 这一步把飞书主线材料补成了更完整的一套：
+   - 联调前准备
+   - 联调执行验收
+   - 联调结果回填
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 本轮新增文档：
+   - `docs/feishu-live-debug-prerequisites.md`
+
+本轮结论：
+
+1. 当前飞书主线的执行材料已经基本成套。
+2. 下一步最适合继续推进：
+   - 直接开始整理“你现在需要提供给我的飞书真实联调参数”
+   - 或继续做一轮 `ChannelConnect` 联调前页面自检
+
+### 第一百一十五次更新：把 AI 提供商卡点改成支持远程 OpenAI 兼容服务，先打通飞书内测前置入口
+
+背景：
+
+1. 你已经把本地仓库里的 `Mclaw` 跑起来了，但实际卡在第一步“AI 提供商”。
+2. 当前 `ModelCenter` 里的 `custom-openai` 仍然偏“本地端点”思路：
+   - 文案强调本地 / 自托管
+   - 提交流依赖“先扫描模型再选默认模型”
+3. 这和我们已经确定的内测策略不一致：
+   - 不走本地模型
+   - 允许直接填写远程模型服务的 `Base URL`
+   - 允许填写 `API Key`
+   - 若接口不支持列模型，也要能手填 `Model ID`
+
+本次调整：
+
+1. 更新 `src/pages/ModelCenter.tsx`
+   - 将 `custom-openai` 的展示文案从“本地 OpenAI 兼容端点”改为更宽的“OpenAI 兼容服务”
+   - 明确提示这一路径支持远程、自托管、本地三类兼容服务
+2. 调整 `custom-openai` 的本地提交流
+   - 新增“默认模型 ID”手填输入框
+   - 如果接口能扫描出模型，仍然可以从下拉里直接选
+   - 如果接口不返回模型列表，也允许直接手填模型 ID 后继续
+3. 收敛校验逻辑
+   - `ollama` / `vllm` 仍保持“先发现模型再提交”的逻辑
+   - `custom-openai` 改成“Base URL + 默认模型 ID”即可继续
+4. 优化引导文案
+   - “获取本地模型”按钮在 `custom-openai` 下改成“测试连接并尝试获取模型”
+   - 扫描结果、空结果提示、API Key 说明都按远程兼容服务场景重写
+5. 更新 `src/pages/__tests__/model-center.test.tsx`
+   - 同步 `getLocalDiscoveryDisplay` 新增的 provider 参数，保证构建继续通过
+
+本轮直接收益：
+
+1. 现在你做飞书联调前，不必再被“必须先连本地模型”这条路径卡住。
+2. 对内测更稳：
+   - 可以先接共享的远程 OpenAI 兼容服务
+   - 不需要把共享 API Key 硬编码进仓库
+3. 这一步实际上是在给飞书主线排雷，因为飞书接入前最现实的阻塞点就是模型入口是否能先配置完成。
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 当前构建仍有既有的 `vite` chunk warning，但不是本轮改动新增错误。
+
+本轮结论：
+
+1. `AI 提供商 -> OpenAI 兼容服务` 这一步已经更符合我们当前的内测策略。
+2. 你下一次本地验证时，可以直接测试：
+   - 填远程 `Base URL`
+   - 填 `API Key`
+   - 填 `默认模型 ID`
+   - 然后继续走 `连接 IM 渠道 -> 飞书`
+
+### 第一百一十六次更新：继续压飞书配对卡点，把“粘贴完整回复”能力在配对页上讲清楚
+
+背景：
+
+1. 飞书接入主线现在已经能更顺利地走到“输入配对码”这一步。
+2. 但这里还有一个很典型的真实联调卡点：
+   - 用户只粘贴一个配对码
+   - 当前实例里刚好找不到待审批请求
+   - 实际上如果能拿到飞书用户 ID，就可以走兜底授权
+3. 我们底层其实已经支持：
+   - 解析机器人完整回复
+   - 从中提取配对码
+   - 从中提取飞书用户 ID
+   - 在 `no_pending_request` 时自动走 allow-from fallback
+4. 问题在于页面层没有把这件事讲得足够直白，用户还是容易只输一个码，然后误以为功能不通。
+
+本次调整：
+
+1. 更新 `src/pages/PairingCode.tsx`
+   - 飞书场景标题改成更明确的“输入飞书配对码”
+   - 输入框 placeholder 改成“粘贴飞书机器人完整回复或直接输入配对码...”
+2. 增加飞书专属识别提示
+   - 当输入内容里识别到飞书用户 ID 时，页面会明确提示：
+     - 已识别用户 ID
+     - 当前实例找不到待审批请求时，会自动尝试兜底授权
+3. 增加失败后的引导提示
+   - 如果飞书场景下输入了内容但没有识别到用户 ID，且本轮配对失败
+   - 页面会追加一条建议：
+     - 直接粘贴机器人完整回复
+     - 这样能提高跨实例 / 多实例场景下的配对成功率
+
+本轮直接收益：
+
+1. 飞书配对页现在不只是“有输入框”，而是更明确地告诉用户：
+   - 最稳的输入方式是什么
+   - 为什么要粘贴完整回复
+   - 识别到用户 ID 后系统会帮你做什么
+2. 这会明显降低真实联调时“明明后端支持兜底，但前端没讲明白”的误判成本。
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 构建过程中仍有既有的 `vite` chunk warning，但不是本轮新增问题。
+
+本轮结论：
+
+1. 飞书主线已经从“能接入”继续推进到“更容易真实配对成功”。
+2. 下一步更适合继续推进的方向：
+   - 继续压 `ChannelConnect -> PairingCode` 之间的提示衔接
+   - 或开始做一轮真实飞书联调演练脚本整理
+
+### 第一百一十七次更新：继续补齐接入完成页到配对页的衔接文案，统一强调“直接粘贴完整回复”
+
+背景：
+
+1. 上一轮已经把 `PairingCode` 页面本身补得更清楚了：
+   - 飞书场景标题更明确
+   - 能识别用户 ID
+   - 失败后会提示尽量粘贴完整回复
+2. 但我继续顺着流程检查后发现，`ChannelConnect` 成功后的提示，以及控制面板里的配对引导文案，仍然还在强调“获取配对码后粘贴”。
+3. 这会造成一个体验割裂：
+   - 前一页还在暗示用户只需要一个配对码
+   - 下一页却更推荐直接粘贴完整回复
+4. 对真实联调来说，这种前后不一致很容易让人继续走“只贴一个码”的旧路径。
+
+本次调整：
+
+1. 更新 `src/pages/ChannelConnect.tsx`
+   - 飞书接入完成后的提示文案改成：
+     - 先给机器人发消息
+     - 拿到配对信息后
+     - 建议直接粘贴机器人完整回复
+     - 再点击“下一步：输入飞书配对码”
+2. 更新 `src/pages/channels-page-utils.ts`
+   - 控制面板里的飞书配对引导文案同步改成：
+     - 建议直接粘贴机器人完整回复（含配对码和用户 ID）
+   - 这样无论你是首次接入流程，还是之后从控制面板补做配对，口径都一致
+3. 更新相关测试
+   - `src/pages/__tests__/channels-page-utils.test.ts`
+   - `src/pages/__tests__/channel-connect.test.ts`
+   - 保证新的飞书引导文案持续被测试覆盖
+
+本轮直接收益：
+
+1. 现在飞书主线的三段关键提示已经统一了：
+   - 接入完成提示
+   - 控制面板配对引导
+   - 配对输入页
+2. 用户从接入完成走到配对时，不会再被旧文案带偏成“只需要一串配对码”。
+3. 这会进一步降低多实例 / 跨实例场景下的误用概率。
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 构建中的 `vite` chunk warning 仍为既有问题，不是本轮新增。
+
+本轮结论：
+
+1. 飞书主线现在已经不仅是“功能能走通”，而是开始形成统一的联调口径。
+2. 下一步最适合继续推进：
+   - 开始整理一份“飞书真实联调逐步操作脚本”
+   - 或继续检查飞书 Bot 关联完成后的状态回显是否足够明确
+
+### 第一百一十八次更新：把飞书配对输入框改成真正适合粘贴完整回复，消除单行输入的实际阻塞
+
+背景：
+
+1. 前几轮我们已经把飞书整条链路的文案基本统一成：
+   - 最稳做法是直接粘贴机器人完整回复
+   - 完整回复里包含配对码和用户 ID
+   - 这样更利于多实例 / 跨实例场景下兜底授权
+2. 但我继续往下看时发现一个很实际的体验冲突：
+   - 页面一直建议“粘贴完整回复”
+   - 真正的输入控件却还是单行 `TextInput`
+3. 这会带来两个问题：
+   - 多行回复在粘贴时体验很差
+   - 用户更容易被单行输入框暗示成“这里只适合输一串短码”
+
+本次调整：
+
+1. 更新 `src/pages/PairingCode.tsx`
+   - 将配对输入从单行 `TextInput` 改为多行 `Textarea`
+   - 飞书场景下默认更高的输入框高度，适合直接粘贴整段机器人回复
+2. 优化输入标签
+   - 飞书场景标签改成“配对信息 / 配对码”
+   - 不再把用户引导成“这里只能填一个 code”
+3. 增加快捷提交提示
+   - 支持 `Ctrl/Cmd + Enter` 快速提交
+   - 页面上直接给出说明
+4. 调整输入框样式
+   - 保留等宽字体
+   - 允许多行展示
+   - 更符合“贴原始回复内容”这个真实使用方式
+
+本轮直接收益：
+
+1. 现在飞书配对页的真实交互方式，终于和我们前面几轮定下的引导文案一致了。
+2. 用户更容易直接粘贴完整回复，而不是被单行输入框误导成只填一个配对码。
+3. 这一步虽然不大，但对真实联调成功率很关键，因为它消除了一个非常容易被忽略的 UI 级阻塞。
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 构建中的 `vite` chunk warning 仍是既有问题，不是本轮新增。
+
+本轮结论：
+
+1. 飞书主线现在已经从“文案告诉你该怎么做”进一步推进到“输入控件本身也真正支持这种做法”。
+2. 下一步最适合继续推进：
+   - 开始整理飞书真实联调逐步操作脚本
+   - 或继续补充飞书接入成功后的状态回显与结果确认页
+
+### 第一百一十九次更新：把飞书“双路径都要验”明确写进页面和联调脚本，避免只走通一条就误判完成
+
+背景：
+
+1. 你这轮特别提醒得很对：飞书不能只盯着一条路径。
+2. 当前项目的真实目标不是“飞书能接上就行”，而是两条主路径都要成立：
+   - `新建机器人`
+   - `关联已有机器人`
+3. 继续检查后我发现，虽然我们前面的文档里已经提到过两条路径，但页面上还没有把“双路径都要验”这件事直接说透。
+4. 这会带来一个很实际的风险：
+   - 只要某一条先跑通
+   - 人就容易误以为飞书主线已经完成
+   - 另一条路径的问题会被拖到更后面才暴露
+
+本次调整：
+
+1. 更新 `src/pages/ChannelConnect.tsx`
+   - 在飞书接入区顶部新增一块“双路径联调”提示
+   - 明确当前需要同时验证两条路径：
+     - 路径 A：新建机器人
+     - 路径 B：关联已有机器人
+   - 并分别说明两条路径各自要验证什么
+2. 新增 `docs/feishu-dual-path-runbook.md`
+   - 单独整理成“飞书双路径联调执行脚本”
+   - 把两条路径分别拆成：
+     - 目标
+     - 操作步骤
+     - 重点记录项
+     - 共同验收终点
+   - 明确写出：不是任选其一，而是两条都要至少各跑一遍
+3. 更新文档入口
+   - `docs/feishu-live-debug-prerequisites.md`
+   - `docs/feishu-minimum-acceptance-checklist.md`
+   - 都新增了对 `docs/feishu-dual-path-runbook.md` 的引用，避免联调时漏看
+
+本轮直接收益：
+
+1. 现在飞书页面本身就会提醒：这不是单路径任务，而是双路径联调任务。
+2. 联调执行材料也更完整了，不再只是“有清单”，而是有一份可照着走的双路径脚本。
+3. 后续你本地真实联调时，我们可以更严格地区分：
+   - 哪条已经通过
+   - 哪条还没测
+   - 卡住的是创建链路还是绑定链路
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 构建中的 `vite` chunk warning 仍为既有问题，不是本轮新增。
+
+本轮结论：
+
+1. 飞书主线现在已经明确进入“双路径并行验收”阶段，而不是单路径试通阶段。
+2. 下一步最适合继续推进：
+   - 按 `docs/feishu-dual-path-runbook.md` 继续压两条路径的状态回显
+   - 或开始把两条路径的结果回填模板再细化成可直接打勾的现场记录版
+
+### 第一百二十次更新：给飞书双路径补状态回显卡片，让“新建”和“关联已有”当前停在哪一步更直观
+
+背景：
+
+1. 上一轮已经把“双路径都要验”正式写进了页面和文档。
+2. 但如果继续往真实操作上看，还差一个重要点：
+   - 用户虽然知道有两条路径
+   - 但不一定一眼能看懂“当前这两条路分别进行到哪一步了”
+3. 特别是在飞书页里，状态来源很多：
+   - 安装器是否在跑
+   - 是否已经检测到机器人
+   - 手动绑定是否准备完成
+   - 是否已经可以点击“完成机器人配置”
+4. 如果这些状态不收口成更直观的提示，联调现场还是容易问：
+   - 我现在到底该继续哪条路
+   - 这条路是不是已经准备好了
+
+本次调整：
+
+1. 更新 `src/pages/ChannelConnect.tsx`
+   - 新增“路径 A：新建机器人”状态卡片
+   - 新增“路径 B：关联已有机器人”状态卡片
+2. 两张卡片分别根据当前真实状态自动回显：
+   - `未开始`
+   - `创建流程进行中`
+   - `等待确认结果`
+   - `已检测到机器人`
+   - `准备中`
+   - `待补全字段`
+   - `可直接绑定`
+   - `收尾中`
+3. 每个状态都附带简短说明，告诉用户下一步该看哪里、该做什么。
+
+本轮直接收益：
+
+1. 现在飞书接入页不只是告诉你“有两条路径”，还会直接告诉你：
+   - 新建机器人当前到哪一步
+   - 关联已有机器人当前到哪一步
+2. 这对真实联调尤其有价值，因为页面不会再只有零散按钮和日志，而是开始出现结构化进度感。
+3. 后续你本地验证时，可以更快判断：
+   - 是创建链路卡住
+   - 还是已有机器人绑定链路没准备好
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 构建里的 `vite` chunk warning 仍为既有问题，不是本轮新增。
+
+本轮结论：
+
+1. 飞书双路径现在已经从“都要验”推进到“都能更清楚地看见各自状态”。
+2. 下一步最适合继续推进：
+   - 继续补双路径完成后的成功确认与结果回填
+   - 或开始整理一份现场联调记录表，把两条路径状态一一落档
+
+### 第一百二十一次更新：补飞书双路径收尾成功提示，让“新建完成”和“已有绑定完成”更容易当场确认
+
+背景：
+
+1. 上一轮已经给飞书双路径补了状态卡片，能更清楚看到“现在进行到哪一步”。
+2. 但继续看收尾阶段后，我发现还有一个缺口：
+   - 当用户点击“完成机器人配置”后
+   - 页面会继续往下走
+   - 但对于“到底是哪条路径完成了什么”，现场感知还不够强
+3. 特别是飞书有两条不同收尾语义：
+   - `新建机器人`：表示已经检测到并接入新建出来的 Bot
+   - `关联已有机器人`：表示已有机器人的凭证校验和绑定已经完成
+4. 如果这里没有明确成功提示，联调时就容易再问一句：
+   - 我这次到底是新建成功了，还是只是写进了配置
+   - 绑定已有机器人到底有没有真正完成
+
+本次调整：
+
+1. 更新 `src/pages/ChannelConnect.tsx`
+   - 在 `finishFeishuChannelConnect` 成功收尾后，新增路径感知型成功通知
+2. 新建机器人路径现在会弹出：
+   - `新建机器人已接入`
+   - 并提示已检测到并接入对应飞书 Bot，接下来进入后续确认步骤
+3. 关联已有机器人路径现在会弹出：
+   - `已有机器人已绑定`
+   - 并提示已经完成飞书 Bot 的绑定校验，接下来进入飞书配对步骤
+
+本轮直接收益：
+
+1. 飞书双路径现在不仅“过程可见”，连“完成瞬间的结果确认”也更明确了。
+2. 这会减少真实联调时对收尾结果的反复确认成本。
+3. 后续你本地跑时，更容易一眼区分：
+   - 是新建链路已经正式接入
+   - 还是已有机器人链路已经正式绑定完成
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 构建中的 `vite` chunk warning 仍为既有问题，不是本轮新增。
+
+本轮结论：
+
+1. 飞书双路径现在已经从“过程状态可见”继续推进到“完成结果也可见”。
+2. 下一步最适合继续推进：
+   - 开始做双路径现场联调记录表
+   - 或继续补充完成后落到控制面板时的状态回显一致性
+
+### 第一百二十二次更新：把飞书完成后的控制面板状态也收口，补上“已接入，待配对 / 已接入并已配对”口径
+
+背景：
+
+1. 上一轮已经在接入页补了双路径收尾成功提示：
+   - 新建机器人已接入
+   - 已有机器人已绑定
+2. 但如果再往后一步看，用户最终还是会回到控制面板查看结果。
+3. 之前控制面板里对飞书 Bot 的表达还不够统一：
+   - 有启用状态
+   - 有运行态
+   - 但“这个 Bot 当前到底是已接入待配对，还是已接入并已配对”并不够醒目
+4. 这就会导致接入页说得很清楚，回到控制面板后又要重新猜当前完成到哪一步。
+
+本次调整：
+
+1. 更新 `src/pages/ChannelsPage.tsx`
+   - 新增飞书配对状态 badge 逻辑
+   - 控制面板中的每个飞书 Bot 现在会更明确展示：
+     - `已接入，待配对`
+     - `已接入并已配对`
+2. 同步优化卡片说明文案
+   - 若飞书 Bot 已接入但尚无用户配对：
+     - 明确提示“这个飞书 Bot 已接入，但还没有用户完成配对”
+   - 若已有用户配对：
+     - 明确提示“这个飞书 Bot 已接入并已有用户完成配对”
+
+本轮直接收益：
+
+1. 飞书从接入页到控制面板，状态语义现在更一致了。
+2. 用户完成接入后回到控制面板，不用再重新判断“到底是只接入了，还是已经有用户配对完成”。
+3. 对双路径联调尤其有帮助，因为无论走：
+   - 新建机器人
+   - 关联已有机器人
+   最终都能在控制面板看到更一致的落地状态。
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 构建中的 `vite` chunk warning 仍为既有问题，不是本轮新增。
+
+本轮结论：
+
+1. 飞书主线现在已经从接入页、配对页一路延伸到控制面板，状态口径开始形成完整闭环。
+2. 下一步最适合继续推进：
+   - 做双路径现场联调记录表
+   - 或继续补充控制面板内的“新建 / 关联已有”来源信息展示
+
+### 第一百二十三次更新：把飞书 Bot 的“来源”写进配置并展示到控制面板，区分新建与关联已有
+
+背景：
+
+1. 上一轮我已经把控制面板里的飞书状态收口成：
+   - `已接入，待配对`
+   - `已接入并已配对`
+2. 但你前面一直强调双路径都要走，这里还差最后一层辨识度：
+   - 这个 Bot 到底是“新建机器人”来的
+   - 还是“关联已有机器人”来的
+3. 如果控制面板里看不出来源，后续联调复盘时就很难直接对应到哪条路径。
+
+本次调整：
+
+1. 更新 `src/pages/feishu-bots.ts`
+   - 给飞书 Bot 配置增加 `mclawProvisionSource`
+   - 支持记录：
+     - `created`
+     - `linked`
+   - `listFeishuBots` 同步把来源信息读出来
+2. 更新 `src/pages/ChannelConnect.tsx`
+   - 新建机器人路径写入来源 `created`
+   - 关联已有机器人路径写入来源 `linked`
+   - 包括默认 root 配置路径也会写入来源
+3. 更新 `src/pages/ChannelsPage.tsx`
+   - 控制面板中的飞书 Bot 现在会新增来源 badge：
+     - `来源：新建机器人`
+     - `来源：关联已有`
+     - `来源：待确认`
+   - 同时在卡片说明里补一句来源解释，方便联调和复盘时快速识别
+
+本轮直接收益：
+
+1. 现在控制面板里不只知道“这个飞书 Bot 已接入/已配对”，还知道它是从哪条接入路径来的。
+2. 对双路径联调很有帮助：
+   - 能更快区分哪条链路跑出来的结果
+   - 更方便排查“新建链路的问题”和“关联已有链路的问题”
+3. 对老配置也做了兼容：
+   - 如果来源暂未记录，会显示 `来源：待确认`
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 构建中的 `vite` chunk warning 仍为既有问题，不是本轮新增。
+
+本轮结论：
+
+1. 飞书双路径现在已经不只是“都能走”，而是连最终落到控制面板后的来源也能追溯。
+2. 下一步最适合继续推进：
+   - 做双路径现场联调记录表
+   - 或开始给旧飞书配置补来源修复/迁移策略
+
+### 第一百二十四次更新：补飞书双路径现场联调记录表，让新建/关联已有能逐项落档
+
+背景：
+
+1. 到上一轮为止，飞书双路径的产品侧已经补得比较完整：
+   - 双路径入口
+   - 双路径过程状态
+   - 双路径收尾成功提示
+   - 控制面板里的状态与来源回显
+2. 但联调执行层面还差一份真正“能边测边记”的现场记录表。
+3. 之前已有的文档各有侧重：
+   - `runbook` 更偏操作脚本
+   - `checklist` 更偏最小验收
+   - `result template` 更偏联调结束后的结果回填
+4. 还缺一份中间层材料：
+   - 真正在联调现场逐步打勾
+   - 分开记录新建和关联已有两条路径
+   - 现场把卡点记下来
+
+本次调整：
+
+1. 新增 `docs/feishu-dual-path-field-record-sheet.md`
+   - 按两条路径分别拆开：
+     - 路径 A：新建机器人
+     - 路径 B：关联已有机器人
+   - 每条路径都分成：
+     - 入口
+     - 创建/绑定过程
+     - 收尾
+     - 配对
+   - 同时补了控制面板回看区和最终结论区
+2. 更新联动入口文档
+   - `docs/feishu-dual-path-runbook.md`
+   - `docs/feishu-live-debug-prerequisites.md`
+   - `docs/feishu-minimum-acceptance-checklist.md`
+   - `docs/feishu-integration-result-template.md`
+   - 都挂上了这份现场记录表，避免之后联调时找不到入口
+
+本轮直接收益：
+
+1. 现在飞书双路径联调已经不只是“有流程”，而是有一份可在现场直接逐项记录的执行表。
+2. 新建机器人和关联已有机器人两条路径不再容易混在一起，方便后续复盘到底是哪条出了问题。
+3. 后面你本地真实联调时，我们可以直接按这份表一项项过，不用临时口头整理。
+
+本轮结论：
+
+1. 飞书双路径现在已经具备：
+   - 操作脚本
+   - 最小验收清单
+   - 现场记录表
+   - 结果回填模板
+2. 下一步最适合继续推进：
+   - 开始给旧飞书配置补来源修复 / 迁移策略
+   - 或等你开始真实联调时，直接按这份现场记录表逐项推进
+
+### 第一百二十五次更新：补旧飞书配置来源修复策略，并在控制面板对“来源待确认”给出更明确提示
+
+背景：
+
+1. 上一轮已经把新接入飞书 Bot 的来源写进配置：
+   - `created`
+   - `linked`
+2. 但老配置仍然可能显示：
+   - `来源：待确认`
+3. 这其实不是 bug，而是历史上没有记录来源字段。
+4. 下一步关键不是“硬猜”，而是要把这件事解释清楚，并给出安全的后续策略。
+
+本次调整：
+
+1. 更新 `src/pages/ChannelsPage.tsx`
+   - 当飞书 Bot 的来源为 `unknown` 时，控制面板会额外显示一条黄色提示
+   - 明确告诉用户：
+     - 这是旧配置或较早版本遗留
+     - 当前只能确认它已接入
+     - 但还不能可靠判断它最初是“新建机器人”还是“关联已有机器人”
+2. 新增 `docs/feishu-source-migration-strategy.md`
+   - 说明为什么旧配置会出现 `来源：待确认`
+   - 说明为什么当前不能激进自动猜来源
+   - 说明当前保守策略：
+     - 新配置直接记录来源
+     - 旧配置保留 `unknown`
+   - 同时给出后续两种可选方案：
+     - 人工确认后写回
+     - 仅在高置信度条件下做半自动修复
+3. 更新相关文档入口
+   - `docs/feishu-dual-path-runbook.md`
+   - `docs/feishu-live-debug-prerequisites.md`
+   - `docs/feishu-minimum-acceptance-checklist.md`
+   - `docs/feishu-integration-result-template.md`
+   - 都已挂上来源修复策略文档入口
+
+本轮直接收益：
+
+1. 现在“来源待确认”不再像一个悬空状态，而是有了清晰解释和后续策略。
+2. 这能减少真实联调时对旧配置的误判，避免为了追求“看起来完整”而把来源写错。
+3. 飞书双路径联调的材料现在不仅覆盖新链路，也开始覆盖老配置兼容和复盘策略。
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 构建中的 `vite` chunk warning 仍为既有问题，不是本轮新增。
+
+本轮结论：
+
+1. 飞书双路径这条线现在已经把“新配置可追溯”和“旧配置如何安全处理”两部分都补上了。
+2. 下一步最适合继续推进：
+   - 进入真实联调执行
+   - 或在你开始实测前，我再继续补一份“联调异常分流表”
+
+### 第一百二十六次更新：补飞书联调异常分流表，把双路径常见卡点按阶段归类
+
+背景：
+
+1. 到上一轮为止，飞书文档链已经比较完整，但仍然偏“正向执行材料”：
+   - 前置准备
+   - 双路径 runbook
+   - 现场记录表
+   - 结果模板
+   - 来源修复策略
+2. 还缺一份专门给“联调现场出问题时”快速判断用的材料。
+3. 真实联调里最耗时间的，往往不是没有步骤，而是卡住后不知道：
+   - 这是入口问题
+   - 插件问题
+   - 凭证问题
+   - Gateway 问题
+   - 还是配对本身的问题
+
+本次调整：
+
+1. 新增 `docs/feishu-debug-triage-matrix.md`
+   - 做成一份飞书联调异常分流表
+   - 先给出总表，再按阶段细分
+2. 分流表覆盖了主要阶段：
+   - 入口层
+   - 新建机器人路径
+   - 关联已有机器人路径
+   - 收尾层
+   - 配对层
+   - 控制面板回看层
+3. 每个阶段都给出：
+   - 典型现象
+   - 优先检查点
+   - 第一动作 / 处理建议
+4. 更新文档入口
+   - `docs/feishu-live-debug-prerequisites.md`
+   - `docs/feishu-dual-path-runbook.md`
+   - `docs/feishu-dual-path-field-record-sheet.md`
+   - `docs/feishu-integration-result-template.md`
+   - `docs/feishu-minimum-acceptance-checklist.md`
+   都已挂上这份异常分流表入口
+
+本轮直接收益：
+
+1. 现在飞书联调材料已经不只是“正常怎么走”，也覆盖了“出问题先怎么分流”。
+2. 这会明显降低你现场卡住时来回猜问题层级的成本。
+3. 双路径联调时，如果某一条卡住，也能更快归因到：
+   - 创建链路
+   - 绑定链路
+   - 配对链路
+   - 还是控制面板回看链路
+
+本轮结论：
+
+1. 飞书主线的文档材料现在已经开始接近“执行 + 记录 + 分流 + 复盘”的完整组合。
+2. 下一步最适合继续推进：
+   - 直接开始真实联调
+   - 或继续补一份“飞书联调最短执行版 SOP”
+
+### 第一百二十七次更新：修复 ModelCenter 误判 Windows 全局 npm OpenClaw shim 为无效安装
+
+背景：
+
+1. 现场联调时，`Env Check` 页面已经显示 OpenClaw 可用，但进入 `AI 提供商 / ModelCenter` 后仍提示：
+   - `OpenClaw CLI command is unavailable`
+   - `Resolved OpenClaw binary does not have an adjacent or parent openclaw package.json`
+2. 报错路径指向 `C:\Users\James\AppData\Roaming\npm\openclaw.cmd`，这是 Windows 全局 npm 常见的 shim 入口，不是实际的 `openclaw` 包根目录。
+3. 这说明当前项目对“命令可执行”和“包元数据可解析”的判断不一致：
+   - `Env Check` 只要 CLI 能跑就认为可用
+   - `ModelCenter` 还要继续向上找 `package.json`
+   - 遇到 npm shim 时就会误判
+
+本次修复：
+
+1. 调整 `electron/main/openclaw-package.ts`
+   - 在常规的“从真实二进制路径向父级回溯 `package.json`”之外
+   - 新增对 shim 布局的补充识别
+2. 新增的 shim 兼容逻辑会在父级回溯失败后继续尝试这些典型 npm 安装结构：
+   - `<prefix>/node_modules/openclaw`
+   - `<prefix>/../node_modules/openclaw`
+   - `<prefix>/../lib/node_modules/openclaw`
+   - `<prefix>/../../lib/node_modules/openclaw`
+3. 这样在 Windows 的 `AppData\\Roaming\\npm\\openclaw.cmd` 场景下，ModelCenter 就能继续定位到真正的 `node_modules\\openclaw\\package.json`，不再把有效安装误报成损坏布局。
+4. 同时补了 `electron/main/__tests__/openclaw-package.test.ts`
+   - 增加 Windows npm global shim layout 的覆盖用例
+   - 防止之后再把这类路径识别回退坏掉
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 尝试执行 `npm test -- --run electron/main/__tests__/openclaw-package.test.ts` 时，环境在 `vite build --mode=test` 阶段出现 `spawn EPERM`，属于当前本机测试进程权限问题，不是本轮改动引入的 TypeScript/构建错误。
+3. 本轮构建仍只有既有的 Vite chunk warning，没有新增构建报错。
+
+本轮结论：
+
+1. 当前这个“Env Check 绿了，但 ModelCenter 还说 OpenClaw 不可用”的前后不一致问题，主因已经在主进程路径解析层修复。
+2. 你现在最适合做的下一步是重新打开本地应用，回到 `AI 提供商 / ModelCenter` 再试一次，看这里是否恢复正常。
+
+### 第一百二十八次更新：修复 custom-openai 仍被 CLI 探测阻塞，改为优先走直连探测并允许配置写入后仅按配置确认
+
+背景：
+
+1. 上一轮修完 Windows 全局 npm shim 之后，`ModelCenter` 已经能正常打开。
+2. 但在 `OpenAI 兼容服务 / custom-openai` 路径里，现场又暴露出两个新问题：
+   - 点击“测试连接并尝试获取模型”后仍出现 `OpenClaw CLI command is unavailable`
+   - 等待一会儿后虽然“下一步”按钮亮了，但提交时又提示“设置默认模型失败”
+3. 这说明 `custom-openai` 虽然界面上是手填 Base URL / API Key / Model ID 的远程兼容接口模式，底层仍有两处残留逻辑在强依赖 OpenClaw CLI：
+   - 连接成功后自动调用 `scanLocalModels`
+   - 保存默认模型后还要求 CLI `models status` 参与最终确认
+
+本次修复：
+
+1. 更新 `electron/main/local-model-probe.ts`
+   - `testLocalConnection` 现在除了返回 `modelCount`，也会直接解析标准 `/models` 响应里的模型列表
+   - 也就是说，如果兼容服务本身就能返回模型清单，Mclaw 不必再额外绕回 CLI 扫描
+2. 更新 `src/pages/ModelCenter.tsx`
+   - 对 `custom-openai` 做专门分流
+   - 当直连测试成功后：
+     - 如果接口直接返回模型列表，就直接用于下拉选择默认模型
+     - 如果没有返回列表，也只显示“连接成功”，允许继续手填默认模型 ID
+   - 不再在这个路径里强制调用 `scanLocalModels`，从而避免再次触发无关的 CLI 不可用报错
+3. 更新 `src/shared/model-config-gateway.ts`
+   - 给默认模型应用流程增加 `allowConfigOnlyConfirmation`
+   - 当 `custom-openai` 提交默认模型时，如果配置已成功写入，但当前环境无法可靠拿到 CLI `models status`，允许按“配置已确认”视为成功
+   - 这样不会再因为 CLI 状态确认缺席而把已经写成功的模型配置误判成失败
+4. 更新 `src/types/electron.d.ts`
+   - 同步补上 `testLocalConnection` 返回 `models` 列表的类型定义
+
+验证：
+
+1. 执行 `npm run build:app` 通过。
+2. 本轮构建仍只有既有的 Vite chunk warning，没有新增构建错误。
+
+本轮结论：
+
+1. `custom-openai` 这条路现在已经从“表面支持手填，底层仍被 CLI 卡住”改成了“优先走直连兼容接口，CLI 只作为可选增强能力”。
+2. 你现在最适合做的下一步是重新打开 `ModelCenter`，再走一遍：
+   - 填 `Base URL`
+   - 填 `API Key`
+   - 填或选择 `默认模型 ID`
+   - 点击“下一步”
+   看这一轮是否已经能顺利进入 IM 渠道步骤。
+
+
+### Update 129: Keep ModelsPage usable when OpenClaw CLI is unavailable but a saved provider snapshot already exists
+
+Context:
+
+1. ModelCenter custom-openai save flow was already unblocked, but ModelsPage still refreshed through CLI status fallback.
+2. When the machine had no working OpenClaw CLI, the page replaced the optimistic saved snapshot with null state and showed the red CLI-unavailable alert.
+
+Changes:
+
+1. Added saved-snapshot detection and CLI-unavailable message detection in src/pages/ModelsPage.tsx.
+2. When the page already has a saved snapshot, CLI-unavailable status failures are now suppressed instead of clearing the page state.
+3. After onConfigured, ModelsPage now performs the first background refresh with allowCliStatusFallback disabled so the just-saved provider card/model can stay visible.
+4. Added unit coverage in src/pages/__tests__/models-page-provider-cleanup.test.ts for snapshot detection and CLI-unavailable suppression.
+
+Validation:
+
+1. npm run typecheck passed.
+2. npm run build:app reached the existing vite/esbuild spawn EPERM environment failure after TypeScript passed.
+3. npx vitest run src/pages/__tests__/models-page-provider-cleanup.test.ts hit the same existing spawn EPERM environment failure before tests could start.
+
+Conclusion:
+
+1. This round removes the blocking ModelsPage red banner in the saved-provider path instead of treating missing CLI as a hard page failure.
+2. Next check: reproduce the custom-openai add flow and confirm the provider/model stays visible after clicking Validate and Add.
+### Update 130: Persist local provider snapshots so saved custom-openai entries survive ModelsPage reload
+- Added `buildLocalProviderConfigSnapshotForSubmit(...)` in `src/pages/ModelCenter.tsx` so local provider setup now persists `models.providers[providerId]` with `enabled`, configured `models`, and `custom-openai.baseUrl` when applicable.
+- Updated `handleLocalProviderSubmit(...)` to write that provider snapshot through `window.api.applyConfigPatchGuarded(...)` after the default model is applied, preventing the next `ModelsPage` refresh from wiping the just-saved provider card.
+- Added regression tests in `src/pages/__tests__/model-center.test.tsx` for local provider snapshot generation, including duplicate-model avoidance for repeated saves.
+- Added a `src/pages/__tests__/models-page-state.test.ts` regression that confirms a saved `custom-openai` config snapshot still renders a provider card and configured model list even when runtime status is unavailable.
+- Validation: `npm run typecheck` passed on April 9, 2026; `npm run build:app` still hits the pre-existing Windows `vite/esbuild spawn EPERM` failure after TypeScript completes.
+### Update 131: Let Direct Chat fall back to saved model snapshots when legacy OpenClaw lacks `models status --json`
+- Updated `electron/main/openclaw-chat-service.ts` so chat availability no longer hard-fails when an older OpenClaw build reports `This OpenClaw build does not support models status --json.` but Mclaw already has saved provider/model snapshots.
+- `buildDashboardChatAvailabilityFromStatus(...)` now returns a compatible degraded-ready state (`canSend: true`) when the gateway is running and saved models are known, so Direct Chat can be used to validate the model by sending a real message.
+- The same compatibility branch still reports `offline` when the gateway is not running, while preserving the saved model list/default model context.
+- Added regression coverage in `electron/main/__tests__/openclaw-chat-service.test.ts` for both the gateway-running and gateway-offline legacy compatibility cases.
+- Validation: `npm run typecheck` passed on April 9, 2026; `npx vitest run electron/main/__tests__/openclaw-chat-service.test.ts` still hits the existing local `vite/esbuild spawn EPERM` startup failure before tests execute.
+
+### Update 132: Prevent custom-openai delete/re-add races and normalize discovered model keys before save
+- Updated `src/pages/ModelCenter.tsx` so directly discovered `custom-openai` models are normalized into provider-qualified keys like `custom-openai/deepseek-chat` before the default-model save pipeline runs.
+- Added `isProviderMutationLocked(...)` and cleanup-lock handling in `src/pages/ModelsPage.tsx` so the add-provider entry stays disabled while a provider delete cleanup task is still running, avoiding the observed delete/re-add overwrite race.
+- Reworked the fallback auth-order cleanup branch in `src/pages/ModelsPage.tsx` so background cleanup, gateway reload, residual auth-store repair, and cleanup-state release now follow one consistent async path.
+- Added regression coverage in `src/pages/__tests__/model-center.test.tsx` for discovered model normalization and in `src/pages/__tests__/models-page-provider-cleanup.test.ts` for provider mutation locking.
+- Validation: `npm run typecheck` passed on April 9, 2026. The Windows-local `vite/esbuild spawn EPERM` issue still prevents reliable Vitest startup in this environment, so typecheck remains the trusted local gate here.
+
+### Update 133: Let Direct Chat reuse saved model snapshots when legacy `models status --json` blocks runtime probing
+- Updated `electron/main/openclaw-chat-service.ts` so Direct Chat no longer treats legacy `models status --json` failures as a hard block when Mclaw already has a saved provider snapshot and default model in config.
+- `resolveChatSelectableModelsFromModelsPage(...)` now reuses configured snapshot models from `models.providers[...]` when the catalog is empty or unavailable, instead of collapsing to an empty selectable-model list.
+- Added saved-config fallback for direct-chat session creation and first-send model resolution, so `createChatSession(...)` / `sendChatMessage(...)` can still target the configured default model even when runtime status probing is unsupported.
+- Added regression coverage in `electron/main/__tests__/openclaw-chat-service.test.ts` for both chat availability recovery and direct-session creation using the saved `custom-openai/deepseek-chat` default model.
+- Validation: `npm run typecheck` passed on April 9, 2026. The local Windows `vite/esbuild spawn EPERM` issue still blocks reliable Vitest/build execution in this environment.
+
+### Update 134: Auto-seed `electron-dist` from the locally installed Electron package so Windows packaging can stay offline-first
+- Updated `scripts/run-electron-builder.mjs` to detect `node_modules/electron/dist` on Windows and automatically generate `electron-dist/electron-v33.4.11-win32-x64.zip` when the offline Electron archive is missing.
+- The packager now reuses the already installed Electron runtime instead of immediately falling back to GitHub, which removes one common reason a fresh local build cannot pick up main-process fixes.
+- Validation: `npm run build:app` passed on April 9, 2026.
+
+### Update 135: Verify the offline Electron archive path end-to-end and restore local Windows packaging output
+- After switching the seeding step to Windows `tar.exe`, `scripts/run-electron-builder.mjs` now produces a usable `electron-dist/electron-v33.4.11-win32-x64.zip` archive from `node_modules/electron/dist`.
+- Re-ran `npm run package:win:dir` and confirmed `electron-builder` resolves `electronDist=D:\workspace\Mclaw\electron-dist` instead of downloading Electron from GitHub.
+- Validation: `npm run package:win:dir` passed on April 9, 2026 and regenerated `release/2026.4.9-v0/win-unpacked/Mclaw.exe`, which now includes the latest Direct Chat fallback changes.
+
+### Update 136: Fall back to a local default-model config patch when Control UI writes succeed but confirmation stays stale
+- Updated `src/shared/model-config-gateway.ts` so `applyDefaultModelWithGatewayReload(...)` no longer fails closed after a successful upstream `config.apply` if the runtime/control snapshot still reports the old model.
+- In that stale-confirmation case, Mclaw now continues into the existing local config patch flow, which is especially important for the `custom-openai` delete-and-readd path where older OpenClaw builds or stale snapshots can delay confirmation.
+- Added regression coverage in `src/shared/__tests__/model-config-gateway.test.ts` for the exact case: upstream write succeeds, `models status --json` remains unsupported/stale, and the local config patch still completes the save.
+- Validation: `npm run typecheck` and `npm run build:app` both passed on April 9, 2026; `npx vitest run src/shared/__tests__/model-config-gateway.test.ts` is still blocked locally by the existing Windows `esbuild spawn EPERM` startup issue.
+
+### Update 137: Let packaged Windows builds discover the bundled OpenClaw runtime even when PATH has no global `openclaw`
+- Updated `electron/main/openclaw-package.ts` so `resolveOpenClawBinaryPath(...)` now falls back to the bundled runtime binary reported by `inspectBundledOpenClawDeliveryStatus(...)` before declaring the CLI unavailable.
+- This directly addresses the packaged `Env Check` failure where the app already contains `resources/openclaw-bundle/runtime/windows-x64/openclaw.cmd`, but startup still says “OpenClaw 核心 安装后仍无法检测到”.
+- Added regression coverage in `electron/main/__tests__/openclaw-package.test.ts` for the Windows packaged-runtime fallback path.
+- Validation: `npm run typecheck` and `npm run build:app` both passed on April 9, 2026; Vitest is still blocked locally by the existing Windows `esbuild spawn EPERM` startup issue.
+
+### Update 138: Make the Direct Chat “启动网关” action visibly react and surface the real failure reason
+- Updated `src/pages/ChatPage.tsx` to track gateway-start pending state and capture the actual `ensureGatewayRunning()` failure summary instead of silently returning `false`.
+- Updated `src/components/dashboard/DashboardChatPanel.tsx` so the empty-state action button now shows a loading state, disables repeat clicks while starting, and renders the gateway-start status/failure message inline under the availability hint.
+- This fixes the “点了启动网关没有反应” experience even when the backend still fails to boot the gateway, because the UI now clearly shows whether it is starting, refreshed, or blocked by a concrete runtime error.
+- Validation: `npm run typecheck` and `npm run build:app` both passed on April 9, 2026.
+
+### Update 139: Auto-prune older release folders after each successful local package build
+- Updated `scripts/run-electron-builder.mjs` so a successful package run now verifies the current `release/<displayVersion>` output exists and then deletes older sibling entries under `release/`, keeping only the newest packaged version to save disk space.
+- This directly implements the current Windows packaging workflow requirement: “每更新出一个版本之后，请删掉先前的版本，释放空间”, instead of relying on manual cleanup after every build.
+- Validation: `npm run typecheck`, `npm run build:app`, and `npm run package:win:dir` all passed on April 9, 2026; the fresh package output was confirmed at `release/2026.4.9-v4/win-unpacked/Mclaw.exe`, and the previous `release/2026.4.9-v3` directory was automatically removed.
+
+### Update 140: Recover Direct Chat send availability after gateway start on legacy OpenClaw builds
+- Updated `src/pages/chat-availability-state.ts` to add `recoverChatAvailabilityAfterGatewayStart(...)`, which upgrades the availability snapshot from `offline` to `degraded` when the gateway startup command already confirmed `running: true` but a legacy OpenClaw build still reports `models status --json` unsupported while saved model snapshots exist.
+- Updated `src/pages/ChatPage.tsx` so the post-start refresh path applies that recovery before deciding whether the composer should stay disabled, preventing the UI from getting stuck in “已启动网关但仍无法发送”的 false negative state.
+- Added regression coverage in `src/pages/__tests__/chat-availability-state.test.ts` for both the positive recovery path and the no-saved-model no-op path.
+- Validation: `npm run typecheck` and `npm run build:app` both passed on April 9, 2026; `npx vitest run src/pages/__tests__/chat-availability-state.test.ts` is still blocked locally by the existing Windows `esbuild spawn EPERM` startup issue.
+
+### Update 141: Make old release cleanup best-effort so a running previous build no longer fails packaging
+- Updated `scripts/run-electron-builder.mjs` so `pruneOlderReleaseBuilds()` now skips locked old release directories with a warning instead of failing the whole package command.
+- This covers the common local-debug case where the previous `win-unpacked/Mclaw.exe` is still running during a new package build: the latest package should still succeed, while the script clearly reports which old folder is still occupied.
+- Validation: during `npm run package:win:dir` on April 9, 2026, `release/2026.4.9-v5/win-unpacked/Mclaw.exe` was successfully generated; the earlier `release/2026.4.9-v4` cleanup was blocked by a Windows file lock, which is now treated as a warning path instead of a hard packaging failure.
+
+### Update 142: Strip the legacy `custom-openai.enabled` flag that breaks OpenClaw 2026.3.24 gateway and health commands
+- I manually ran the bundled Windows runtime (`resources/openclaw-bundle/runtime/windows-x64/openclaw.cmd`) and confirmed the real blocking error is not `models status --json`, but `Invalid config ... models.providers.custom-openai: Unrecognized key: "enabled"` when `health --json` / `doctor --help` touches the current config.
+- Updated `electron/main/openclaw-provider-config-repair.ts` so the existing preflight repair now also removes `$.models.providers.custom-openai.enabled` from on-disk config snapshots before every CLI invocation, while still preserving `baseUrl` and saved model entries.
+- Updated `src/pages/ModelCenter.tsx` so future local `custom-openai` snapshot writes no longer reintroduce that legacy `enabled` field; the local provider card still persists `baseUrl` plus stripped model IDs, but leaves the provider schema compatible with OpenClaw `2026.3.24`.
+- Added regression coverage in `electron/main/__tests__/openclaw-provider-config-repair.test.ts` and `src/pages/__tests__/model-center.test.tsx` for both the auto-repair path and the new no-legacy-flag snapshot behavior.
+- Validation: `npm run typecheck`, `npm run build:app`, and `npm run package:win:dir` all passed on April 9, 2026; the fresh Windows package output was confirmed at `release/2026.4.9-v6/win-unpacked/Mclaw.exe`, and the previous `release/2026.4.9-v5` directory was automatically removed.
+
+### Update 143: Pre-create legacy OpenClaw state directories before CLI bootstrap so gateway health no longer blocks on missing `identity` / `sessions`
+- I re-ran the bundled `OpenClaw 2026.3.24` commands after Update 142 and confirmed the next blocker had shifted to state bootstrap: `health --json` failed at `mkdir ~/.openclaw/identity`, and `doctor --repair --non-interactive` also reported `Failed to create ~/.openclaw/agents/main/sessions`.
+- Added `electron/main/openclaw-state-bootstrap.ts` and wired it into `electron/main/cli.ts` so every Mclaw-driven CLI invocation now pre-creates the legacy state directories that `2026.3.24` expects (`identity`, `credentials`, and `agents/main/sessions`) before health / doctor / gateway commands run.
+- Added regression coverage in `electron/main/__tests__/openclaw-state-bootstrap.test.ts` for the required directory list; local Vitest execution remains blocked by the existing Windows `esbuild spawn EPERM` harness issue, so validation continues through typecheck/build/package.
+- Validation: `npm run typecheck`, `npm run build:app`, and `npm run package:win:dir` all passed on April 9, 2026; the latest Windows package output is `release/2026.4.9-v6/win-unpacked/Mclaw.exe`.
+
+### Update 144: Fallback to foreground `gateway run` on Windows when OpenClaw 2026.3.24 cannot install the Gateway service
+- After the state-directory fix, the bundled `2026.3.24` CLI no longer failed on missing folders, but `doctor --repair --non-interactive` still showed `Gateway service install failed: Error: spawn EPERM`, which means the blocking point had shifted to Scheduled Task / service installation on this Windows environment.
+- Updated `electron/main/cli.ts` to add `gatewayRunInBackground(...)`, which starts `openclaw gateway run --allow-unconfigured --port <effectivePort>` as a detached background process using the resolved bundled runtime and current merged env/config.
+- Updated `electron/main/openclaw-gateway-service.ts` so when `gateway install` fails on Windows with `EPERM` / `permission denied` / `schtasks`-style errors, Mclaw now falls back to that foreground-compatible background run mode instead of hard failing with `service_install_failed`.
+- Validation: `npm run typecheck` and `npm run build:app` both passed on April 9, 2026; `resources/openclaw-bundle/runtime/windows-x64/openclaw.cmd gateway run --help` also confirmed the bundled OpenClaw 2026.3.24 runtime supports the fallback command shape used by this compatibility path.
+
+### Update 145: Harden the legacy Windows foreground gateway fallback so it no longer hangs on false-positive startup
+- I continued along the same blocker chain and tightened two weak spots in the `2026.3.24` compatibility path: first, `electron/main/cli.ts` now keeps short-lived foreground `gateway run` launches under a stabilization window, captures stdout/stderr into `%TEMP%\\qclaw-lite\\gateway-run\\*.log`, and fails early if the compatibility process exits immediately instead of falsely reporting a successful start.
+- I also extended `electron/main/openclaw-state-bootstrap.ts` to create the legacy `identity/device.json` placeholder in addition to the already required `identity`, `credentials`, and `agents/main/sessions` directories, because the next observed `health --json` blocker had shifted from missing folders to opening `~/.openclaw/identity/device.json`.
+- Updated `electron/main/openclaw-gateway-probes.ts` and `electron/main/openclaw-gateway-service.ts` so the readiness loop can accept a successful local TCP port probe as a Windows compatibility fallback when `health --json` is blocked by legacy permission/runtime quirks but the Gateway is in fact already listening on the configured loopback port.
+- Added regression coverage in `electron/main/__tests__/openclaw-state-bootstrap.test.ts` for the placeholder device file and in `electron/main/__tests__/openclaw-gateway-service.test.ts` for the `gateway install -> gateway run -> health blocked but port reachable` recovery path.
+- Validation: `npm run typecheck` passed on April 9, 2026; a direct standalone `npm run build:app` hit a transient Windows file lock on `dist\\favicon.ico`, but the same build step completed successfully inside `npm run package:win:dir`, which produced `release/2026.4.9-v9/win-unpacked/Mclaw.exe` and auto-pruned the previous `release/2026.4.9-v8` folder.
+
+### Update 146: Let `plugin_load_failure` repair also restore configured managed channel plugins before giving up
+- Updated `electron/main/openclaw-gateway-service.ts` so the legacy gateway bootstrap path no longer stops at quarantining incompatible plugins when the initial health probe reports `plugin_load_failure`; it now also asks the existing repair pipeline to restore configured managed channel plugins in the same pass.
+- This matters for the current Windows `OpenClaw 2026.3.24` integration because a stale official/managed channel plugin state can surface as a generic plugin load failure and block Direct Chat even after the gateway process itself is reachable.
+- Updated `electron/main/__tests__/openclaw-gateway-service.test.ts` so the `plugin_load_failure` regression now asserts we pass both `quarantineOfficialManagedPlugins: true` and `restoreConfiguredManagedChannels: true` into the repair path.
+- Cleanup: removed temporary local debugging scripts `tmp_inspect_gateway.cjs`, `tmp_focus_custom_openai.cjs`, `tmp_find_string.cjs`, and `tmp_search_custom_openai.cjs`.
+- Validation: `npx vitest run electron/main/__tests__/openclaw-gateway-service.test.ts -t plugin_load_failure`, `npm run typecheck`, and `npm run package:win:dir` all passed on April 9, 2026; the new packaged build is `release/2026.4.9-v10/win-unpacked/Mclaw.exe`, and the packager auto-pruned the previous `release/2026.4.9-v9` folder.
+
+### Update 147: Add a Control UI readiness fallback for legacy Gateway starts that still stall on health confirmation
+- Updated `electron/main/openclaw-gateway-service.ts` so when `gateway start` has already executed but the legacy health probe still cannot confirm readiness, Mclaw now forces one extra `OpenClaw Control UI` inspection before dropping into the generic `Gateway 尚未完成就绪确认` failure path.
+- If that hidden Control UI inspection can already connect to Gateway with a live client, the startup flow now treats the Gateway as ready and proceeds instead of failing closed on the older `health --json` signal alone; if the inspection cannot connect, its structured diagnostics are still folded back into the later classification path.
+- To support that forced fallback, the gateway service now imports `inspectControlUiAppViaBrowser` directly and reuses the existing projected `controlUiApp` diagnostics object in the final readiness decision.
+- Validation: `npm run typecheck`, `npx vitest run electron/main/__tests__/openclaw-gateway-service.test.ts -t plugin_load_failure`, and `npm run package:win:dir` all passed on April 9, 2026.
+- Packaging: produced `release/2026.4.9-v11/win-unpacked/Mclaw.exe`, and the packager auto-pruned the previous `release/2026.4.9-v10` folder.
+
+### Update 148: When legacy Gateway readiness still stays ambiguous, allow Direct Chat to proceed in degraded compatibility mode
+- The new `v11` screenshot showed the legacy readiness probe still stalling at `Gateway 尚未完成就绪确认`, which means the old `OpenClaw 2026.3.24` path can still fail closed even after `gateway start` has already been issued.
+- Updated `electron/main/openclaw-gateway-service.ts` again so the final legacy readiness branch now accepts a narrow degraded-success path: if `gateway start` succeeded, classification is still only `unknown_runtime_failure`, retry remains safe, and the collected output does **not** indicate any explicit blocker such as plugin load failure, config invalidation, token mismatch, auth failure, permission denial, or network blockage, Mclaw now returns a compatibility-ready result instead of a hard failure.
+- The returned summary is intentionally explicit: `Gateway 启动命令已执行；当前版本未完成就绪确认，已按兼容模式继续尝试对话。` This is meant to unblock Direct Chat on the legacy runtime while we keep using actual send behavior as the next real validation signal.
+- Validation: `npm run typecheck` and `npm run package:win:dir` passed on April 9, 2026.
+- Packaging: produced `release/2026.4.9-v12/win-unpacked/Mclaw.exe`, and the packager auto-pruned the previous `release/2026.4.9-v11` folder.
+
+### Update 149: Relax legacy Direct Chat send gating after explicit gateway start and record why watchdog is not the first fix
+- Diagnosed that the current Windows / `OpenClaw 2026.3.24` blocker is the chat availability gate, not the absence of a gateway watchdog: `ensureGatewayRunning()` may already succeed in compatibility mode, but `ChatPage -> getChatAvailability()` can still fall back to `offline/error` when legacy health or readiness probes stay ambiguous, leaving the composer disabled before the first real message is even attempted.
+- Updated `src/pages/chat-availability-state.ts` so `recoverChatAvailabilityAfterGatewayStart(...)` now recovers more than the `models status --json` case: it also treats `模型已配置，但网关当前未运行` and the generic renderer fallback `聊天状态读取失败，请稍后重试` as recoverable legacy false negatives when a saved model snapshot exists, while still refusing to recover `no-model`.
+- Updated `src/pages/ChatPage.tsx` to keep a short recovery window after an explicit successful gateway start, so the periodic availability refresh no longer immediately drags Direct Chat back into the blocked empty state before the user can send the first validation message.
+- Added regression coverage in `src/pages/__tests__/chat-availability-state.test.ts` for the offline-after-start recovery path and the `no-model` no-op guard, so we can loosen the send gate without reopening a false positive when there is no real saved model.
+- Updated `docs/mclaw-development-roadmap.md`, `docs/mclaw-windows-adaptation-plan.md`, and `docs/mclaw-windows-blockers.md` to record the current technical conclusion: watchdog is still a `Phase 6` item, but the immediate blocker to close first is the local Direct Chat availability/send gate on the legacy `2026.3.24` runtime.
+- Validation: `npm run typecheck` and `npm run package:win:dir` passed on April 10, 2026; the fresh packaged build is `release/2026.4.10-v0/win-unpacked/Mclaw.exe`, and the packager auto-pruned the previous `release/2026.4.9-v12` folder. `npm test -- src/pages/__tests__/chat-availability-state.test.ts` is still blocked locally by the existing Windows `vite/esbuild spawn EPERM` startup issue during `pretest`.
+### Update 150: Recheck Gateway health inside `sendChatMessage()` so legacy false negatives no longer abort the first real send
+- I rechecked the real Windows runtime outside the sandbox on April 10, 2026 and confirmed the packaged bundled `OpenClaw 2026.3.24` can already return healthy results for both `health --json` and `models status --json`; the remaining mismatch was no longer "Gateway truly failed to boot", but "chat send still trusts a stale/ambiguous `ensureGatewayRunning()` result too early".
+- Updated `electron/main/openclaw-chat-service.ts` so `sendChatMessage()` now performs one direct `gatewayHealth()` recheck before failing closed on `gateway-offline`. If the recheck already sees the runtime as healthy, Direct Chat continues through the real send path instead of being blocked by the earlier compatibility false negative.
+- The same patch also reuses that recovered gateway state for upstream session bootstrap and default gateway transport selection, so the first message path no longer diverges between "UI allowed send" and "main process rejected send".
+- Added regression coverage in `electron/main/__tests__/openclaw-chat-service.test.ts` for the exact legacy path: `ensureGateway()` reports unavailable, `gatewayHealth()` immediately confirms healthy, and the first direct-chat send still succeeds.
+- Updated `docs/mclaw-windows-blockers.md` to record the refined root cause and the new backend-side recovery step, so the blocker narrative now matches the real Windows runtime evidence instead of assuming a pure startup failure.
+- Validation: `npm run typecheck` passed on April 10, 2026. `npm test -- electron/main/__tests__/openclaw-chat-service.test.ts` now leaves only 5 pre-existing availability-array failures unrelated to this patch (previously 7 failures before the send recheck fix). `npm run package:win:dir` also passed and produced `release/2026.4.10-v4/win-unpacked/Mclaw.exe`. Auto-prune could not delete `release/2026.4.10-v3` because Windows still holds a file lock from a running old build, so that old folder needs to be released before cleanup can complete.

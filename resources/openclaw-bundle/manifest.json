@@ -15,11 +15,24 @@
         "arch": "x64",
         "directoryName": "windows-x64",
         "version": "2026.3.24"
+      },
+      {
+        "platform": "darwin",
+        "arch": "arm64",
+        "directoryName": "darwin-arm64",
+        "version": "2026.3.24"
+      },
+      {
+        "platform": "darwin",
+        "arch": "x64",
+        "directoryName": "darwin-x64",
+        "version": "2026.3.24"
       }
     ]
   },
   "notes": [
     "Windows x64 runtime validated and active as bundled-runtime.",
-    "macOS runtime payloads are pending and will fall back to bundled-fallback/online-fallback."
+    "macOS darwin-arm64 runtime validated from packaged export and declared as bundled-runtime.",
+    "macOS darwin-x64 runtime validated from packaged export and declared as bundled-runtime."
   ]
 }

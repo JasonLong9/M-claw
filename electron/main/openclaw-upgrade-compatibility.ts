@@ -4,6 +4,13 @@ import type {
   UpgradeCompatibilityAssessment,
   UpgradeCompatibilityStatus,
 } from '../../src/shared/gateway-runtime-reconcile-state'
+import {
+  buildOpenClawMigrationSmokeSummary,
+  buildOpenClawConservativeCompatibilityGuidance,
+  FUTURE_CANDIDATE_OPENCLAW_RELEASE_LINE,
+  isFutureCandidateOpenClawVersion,
+  resolveOpenClawTargetVersionLabel,
+} from '../../src/shared/openclaw-version-policy'
 
 interface ParsedOpenClawVersion {
   major: number
@@ -58,6 +65,7 @@ export function detectOpenClawVersionBand(version: string | null | undefined): O
   if (compareOpenClawVersions(normalized, '2026.3.21') <= 0) return 'openclaw_2026_3_14_to_2026_3_21'
   if (compareOpenClawVersions(normalized, '2026.3.22') === 0) return 'openclaw_2026_3_22'
   if (compareOpenClawVersions(normalized, '2026.3.24') <= 0) return 'openclaw_2026_3_23_to_2026_3_24'
+  if (isFutureCandidateOpenClawVersion(normalized)) return 'openclaw_2026_4_candidate'
   return 'unknown_future'
 }
 
@@ -67,7 +75,9 @@ function resolveCompatibilityStatus(
   currentBand: OpenClawVersionBand
 ): UpgradeCompatibilityStatus {
   if (!currentVersion) return 'unknown_current_version'
-  if (currentBand === 'unknown_future') return 'unknown_future_version'
+  if (currentBand === 'openclaw_2026_4_candidate' || currentBand === 'unknown_future') {
+    return 'unknown_future_version'
+  }
   if (!previousVersion) return 'first_observed'
 
   const comparison = compareOpenClawVersions(currentVersion, previousVersion)
@@ -84,6 +94,9 @@ function buildWarningCodes(
 ): string[] {
   const warnings: string[] = []
   if (!currentVersion) return ['version_unparseable']
+  if (currentBand === 'openclaw_2026_4_candidate') {
+    return ['version_candidate_2026_4', 'version_unknown_future']
+  }
   if (currentBand === 'unknown_future') return ['version_unknown_future']
 
   if (currentBand === 'openclaw_2026_3_22') {
@@ -133,7 +146,10 @@ function build2026_3_22CompatibilitySuffix(warningCodes: string[]): string {
   return details.length > 0 ? ` ${details.join('；')}。` : ''
 }
 
-function build2026_3_24CompatibilitySuffix(warningCodes: string[]): string {
+function build2026_3_24CompatibilitySuffix(
+  warningCodes: string[],
+  currentVersion: string | null
+): string {
   if (warningCodes.length === 0) return ''
 
   const details: string[] = []
@@ -141,10 +157,29 @@ function build2026_3_24CompatibilitySuffix(warningCodes: string[]): string {
     details.push('需要重新确认 Gateway/Auth 运行时是否已消费当前 pinned 版本的配置')
   }
   if (warningCodes.includes('official_doctor_fix_migration_prioritized_in_2026_3_24_pin_window')) {
-    details.push('回退到 3.24 时应优先复用官方 doctor --fix 迁移路径')
+    details.push(`回退到 ${resolveOpenClawTargetVersionLabel(currentVersion)} 时应优先复用官方 doctor --fix 迁移路径`)
   }
 
   return details.length > 0 ? ` ${details.join('；')}。` : ''
+}
+
+function build2026_4CandidateCompatibilitySuffix(warningCodes: string[]): string {
+  if (!warningCodes.includes('version_candidate_2026_4')) return ''
+  return ` 当前版本落在 ${FUTURE_CANDIDATE_OPENCLAW_RELEASE_LINE} 候选线，应先完成记忆目录、Agent 协同与升级回退迁移验证。`
+}
+
+function buildMigrationSmokeSummarySuffix(
+  currentVersion: string | null,
+  previousVersion: string | null
+): string {
+  const summary = buildOpenClawMigrationSmokeSummary({
+    fromVersion: previousVersion,
+    toVersion: currentVersion,
+  })
+
+  if (!summary.recommendedChecks.length) return ''
+
+  return ` 迁移 smoke：路径=${summary.migrationPath}；baseline backup=${summary.needsBaselineBackup ? '需要' : '不需要'}；记忆目录审计=${summary.memoryAuditRequired ? '需要' : '不需要'}；Agent 协同审计=${summary.agentAuditRequired ? '需要' : '不需要'}。`
 }
 
 function buildSummary(
@@ -158,19 +193,25 @@ function buildSummary(
     currentBand === 'openclaw_2026_3_22'
       ? build2026_3_22CompatibilitySuffix(warningCodes)
       : currentBand === 'openclaw_2026_3_23_to_2026_3_24'
-        ? build2026_3_24CompatibilitySuffix(warningCodes)
-        : ''
+        ? build2026_3_24CompatibilitySuffix(warningCodes, currentVersion)
+        : currentBand === 'openclaw_2026_4_candidate'
+          ? build2026_4CandidateCompatibilitySuffix(warningCodes)
+          : ''
+  const migrationSmokeSuffix = buildMigrationSmokeSummarySuffix(currentVersion, previousVersion)
   switch (status) {
     case 'first_observed':
-      return `首次记录到 OpenClaw 版本 ${currentVersion}，当前版本段为 ${currentBand}。${suffix}`.trim()
+      return `首次记录到 OpenClaw 版本 ${currentVersion}，当前版本段为 ${currentBand}。${suffix}${migrationSmokeSuffix}`.trim()
     case 'upgrade_detected':
-      return `检测到 OpenClaw 从 ${previousVersion} 升级到 ${currentVersion}。${suffix}`.trim()
+      return `检测到 OpenClaw 从 ${previousVersion} 升级到 ${currentVersion}。${suffix}${migrationSmokeSuffix}`.trim()
     case 'downgrade_detected':
-      return `检测到 OpenClaw 从 ${previousVersion} 回退到 ${currentVersion}。${suffix}`.trim()
+      return `检测到 OpenClaw 从 ${previousVersion} 回退到 ${currentVersion}。${suffix}${migrationSmokeSuffix}`.trim()
     case 'steady_state':
-      return `OpenClaw 版本维持在 ${currentVersion}，当前版本段为 ${currentBand}。${suffix}`.trim()
+      return `OpenClaw 版本维持在 ${currentVersion}，当前版本段为 ${currentBand}。${suffix}${migrationSmokeSuffix}`.trim()
     case 'unknown_future_version':
-      return `OpenClaw 版本 ${currentVersion} 超出当前审计范围，应进入保守兼容模式。`
+      if (currentBand === 'openclaw_2026_4_candidate') {
+        return `OpenClaw 版本 ${currentVersion} 已进入候选版本线。${buildOpenClawConservativeCompatibilityGuidance(currentVersion)}${migrationSmokeSuffix}`.trim()
+      }
+      return `OpenClaw 版本 ${currentVersion} 超出当前审计范围，应进入保守兼容模式。${suffix}${migrationSmokeSuffix}`.trim()
     case 'unknown_current_version':
       return '当前 OpenClaw 版本无法可靠解析，应进入保守兼容模式。'
     default:

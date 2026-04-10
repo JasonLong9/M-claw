@@ -30,6 +30,56 @@ function normalizeDetails(details: string): string | undefined {
   return normalized || undefined
 }
 
+function createWindowsNodeInstallerIssue(
+  kind: Extract<
+    NodeInstallerIssueKind,
+    'missing-installer' | 'not-admin-user' | 'blocked-by-policy' | 'user-cancelled' | 'permission-denied' | 'installer-failed'
+  >,
+  details = ''
+): NodeInstallerIssue {
+  const baseIssue = createNodeInstallerIssue(kind, details)
+
+  if (kind === 'missing-installer') {
+    return {
+      ...baseIssue,
+      message: 'Windows 安装器文件不存在或已被系统清理，自动安装无法继续。请重新触发安装；如果仍失败，请直接从 Node 官网手动下载安装包。',
+    }
+  }
+
+  if (kind === 'not-admin-user') {
+    return {
+      ...baseIssue,
+      message: '当前 Windows 账户没有管理员权限，无法继续自动安装 Node.js。请切换到管理员账户，或联系设备管理员处理。',
+    }
+  }
+
+  if (kind === 'blocked-by-policy') {
+    return {
+      ...baseIssue,
+      message: 'Windows 安全策略、SmartScreen 或企业管控策略阻止了 Node.js 安装器。请联系管理员放行，或改为从 Node 官网手动安装。',
+    }
+  }
+
+  if (kind === 'user-cancelled') {
+    return {
+      ...baseIssue,
+      message: '你已取消 Windows 安装授权或安装流程，因此 Node.js 未安装。请重新开始，或改为手动安装 Node.js。',
+    }
+  }
+
+  if (kind === 'permission-denied') {
+    return {
+      ...baseIssue,
+      message: '安装 Node.js 时权限不足。请确认当前账号具备管理员权限，并在 Windows 弹出 UAC 提示时选择允许。',
+    }
+  }
+
+  return {
+    ...baseIssue,
+    message: 'Windows Node.js 安装器执行失败。请稍后重试；如果仍然失败，建议直接从 Node 官网手动安装。',
+  }
+}
+
 export function createNodeInstallerIssue(
   kind: NodeInstallerIssueKind,
   details = ''
@@ -95,7 +145,7 @@ export function createNodeInstallerIssue(
     return {
       kind,
       title: '当前账户没有管理员权限',
-      message: '自动安装 Node.js 需要 macOS 管理员权限。请使用管理员账户登录，或联系设备管理员处理。',
+      message: '自动安装 Node.js 需要管理员权限。请使用管理员账户登录，或联系设备管理员处理。',
       details: normalizedDetails,
     }
   }
@@ -104,7 +154,7 @@ export function createNodeInstallerIssue(
     return {
       kind,
       title: '系统策略阻止了安装',
-      message: 'macOS 安全策略或企业设备管理策略阻止了这个 Node.js 安装包。请联系管理员放行，或改为手动安装 Node.js。',
+      message: '系统安全策略或企业设备管理策略阻止了这个 Node.js 安装包。请联系管理员放行，或改为手动安装 Node.js。',
       details: normalizedDetails,
     }
   }
@@ -131,7 +181,7 @@ export function createNodeInstallerIssue(
     return {
       kind,
       title: '没有足够权限安装 Node.js',
-      message: '安装 Node.js 时权限不足。请确认当前账号具备管理员权限，并允许系统弹出的安装授权。',
+      message: '安装 Node.js 时权限不足。请确认当前账号具备管理员权限，并允许系统弹出的安装授权或 UAC 提示。',
       details: normalizedDetails,
     }
   }
@@ -227,6 +277,64 @@ export function classifyMacNodeInstallerFailure(rawError: string): NodeInstaller
   }
 
   return createNodeInstallerIssue('installer-failed', raw)
+}
+
+export function classifyWindowsNodeInstallerFailure(rawError: string): NodeInstallerIssue {
+  const raw = String(rawError || '').trim()
+  const normalized = raw.toLowerCase()
+
+  if (!raw) {
+    return createWindowsNodeInstallerIssue('installer-failed')
+  }
+
+  if (
+    normalized.includes('user canceled') ||
+    normalized.includes('user cancelled') ||
+    normalized.includes('operation was canceled') ||
+    normalized.includes('operation was cancelled') ||
+    normalized.includes('cancelled by user') ||
+    normalized.includes('canceled by user') ||
+    normalized.includes('1602')
+  ) {
+    return createWindowsNodeInstallerIssue('user-cancelled', raw)
+  }
+
+  if (
+    normalized.includes('access is denied') ||
+    normalized.includes('access denied') ||
+    normalized.includes('eacces') ||
+    normalized.includes('eperm') ||
+    normalized.includes('administrator privileges') ||
+    normalized.includes('requires elevation') ||
+    normalized.includes('must be an administrator') ||
+    normalized.includes('requested operation requires elevation')
+  ) {
+    return createWindowsNodeInstallerIssue('permission-denied', raw)
+  }
+
+  if (
+    normalized.includes('group policy') ||
+    normalized.includes('smartscreen') ||
+    normalized.includes('windows protected your pc') ||
+    normalized.includes('defender smartscreen') ||
+    normalized.includes('blocked by your system administrator') ||
+    normalized.includes('blocked by administrator') ||
+    normalized.includes('blocked by policy')
+  ) {
+    return createWindowsNodeInstallerIssue('blocked-by-policy', raw)
+  }
+
+  if (
+    normalized.includes('this installation package could not be opened') ||
+    normalized.includes('this installation package could not be found') ||
+    normalized.includes('the system cannot find the file specified') ||
+    normalized.includes('no such file or directory') ||
+    normalized.includes('does not exist')
+  ) {
+    return createWindowsNodeInstallerIssue('missing-installer', raw)
+  }
+
+  return createWindowsNodeInstallerIssue('installer-failed', raw)
 }
 
 export function classifyNodeInstallerDownloadFailure(rawError: string): NodeInstallerIssue {

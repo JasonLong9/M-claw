@@ -224,6 +224,8 @@ export default function DashboardChatPanel({
   connectedModels,
   defaultModel,
   availabilityMessage,
+  gatewayActionPending,
+  gatewayActionMessage,
   onOpenSettings,
   onEnsureGatewayRunning,
 }: {
@@ -233,6 +235,8 @@ export default function DashboardChatPanel({
   connectedModels: string[]
   defaultModel?: string
   availabilityMessage?: string
+  gatewayActionPending?: boolean
+  gatewayActionMessage?: string
   onOpenSettings: () => void
   onEnsureGatewayRunning: () => Promise<boolean>
 }) {
@@ -1401,6 +1405,11 @@ export default function DashboardChatPanel({
                     ? '先完成 AI 提供商配置后，这里就可以直接验证模型是否真正可用。'
                     : '启动网关后，这里会直接复用当前 OpenClaw 路由进行本地对话。'}
                 </Text>
+                {gatewayActionMessage && (
+                  <Alert color={canSend ? 'blue' : 'warning'} variant="light" mt="sm">
+                    <Text size="xs">{gatewayActionMessage}</Text>
+                  </Alert>
+                )}
                 {availabilityState !== 'loading' && (
                   <Group mt="sm" gap="xs">
                     {isModelUnavailable ? (
@@ -1408,8 +1417,15 @@ export default function DashboardChatPanel({
                       去 AI 设置
                     </Button>
                   ) : (
-                    <Button variant="light" color="warning" size="xs" onClick={() => void onEnsureGatewayRunning()}>
-                      {isDegraded ? '重试连接' : '启动网关'}
+                    <Button
+                      variant="light"
+                      color="warning"
+                      size="xs"
+                      onClick={() => void onEnsureGatewayRunning()}
+                      loading={gatewayActionPending}
+                      disabled={gatewayActionPending}
+                    >
+                      {gatewayActionPending ? '正在启动网关...' : isDegraded ? '重试连接' : '启动网关'}
                     </Button>
                     )}
                   </Group>

@@ -2,6 +2,7 @@ const childProcess = process.getBuiltinModule('child_process') as typeof import(
 const fs = process.getBuiltinModule('fs') as typeof import('node:fs')
 const path = process.getBuiltinModule('path') as typeof import('node:path')
 import { getNamedCommandLookupInvocation } from './command-capabilities'
+import { inspectBundledOpenClawDeliveryStatus } from './openclaw-bundled-manifest'
 import { listExecutablePathCandidates } from './runtime-path-discovery'
 import { resolveSafeWorkingDirectory } from './runtime-working-directory'
 
@@ -33,6 +34,12 @@ interface ResolveOpenClawBinaryPathFromNpmPrefixOptions {
 interface ResolvedOpenClawPackageLayout {
   binaryPath: string
   resolvedBinaryPath: string
+  packageRoot: string
+  packageJsonPath: string
+  packageJson: Record<string, unknown>
+}
+
+interface OpenClawPackageLocation {
   packageRoot: string
   packageJsonPath: string
   packageJson: Record<string, unknown>
@@ -218,7 +225,7 @@ async function resolvePackageLayout(
     throw new Error('Node fs.promises is unavailable in this runtime')
   }
   const resolvedBinaryPath = await fsPromises.realpath(binaryPath)
-  const packageLocation = await findNearestOpenClawPackageLocation(path.dirname(resolvedBinaryPath), fsPromises)
+  const packageLocation = await findOpenClawPackageLocation(binaryPath, resolvedBinaryPath, fsPromises)
   if (!packageLocation) {
     throw new Error(
       `Resolved OpenClaw binary does not have an adjacent or parent openclaw package.json: ${resolvedBinaryPath}`
@@ -239,11 +246,7 @@ async function resolvePackageLayout(
 async function findNearestOpenClawPackageLocation(
   startDir: string,
   fsPromises: typeof fs.promises
-): Promise<{
-  packageRoot: string
-  packageJsonPath: string
-  packageJson: Record<string, unknown>
-} | null> {
+): Promise<OpenClawPackageLocation | null> {
   let currentDir = startDir
 
   while (true) {
@@ -277,6 +280,75 @@ async function findNearestOpenClawPackageLocation(
   }
 }
 
+async function findOpenClawPackageLocation(
+  binaryPath: string,
+  resolvedBinaryPath: string,
+  fsPromises: typeof fs.promises
+): Promise<OpenClawPackageLocation | null> {
+  const nearestPackage = await findNearestOpenClawPackageLocation(path.dirname(resolvedBinaryPath), fsPromises)
+  if (nearestPackage) return nearestPackage
+
+  for (const candidateRoot of listShimPackageRootCandidates(binaryPath, resolvedBinaryPath)) {
+    const packageLocation = await readOpenClawPackageLocation(candidateRoot, fsPromises)
+    if (packageLocation) return packageLocation
+  }
+
+  return null
+}
+
+function listShimPackageRootCandidates(binaryPath: string, resolvedBinaryPath: string): string[] {
+  const candidateRoots: string[] = []
+  const seen = new Set<string>()
+
+  for (const currentPath of [binaryPath, resolvedBinaryPath]) {
+    const trimmed = String(currentPath || '').trim()
+    if (!trimmed) continue
+
+    const binaryDir = path.dirname(trimmed)
+    const binaryName = path.basename(trimmed).toLowerCase()
+    const parentDir = path.dirname(binaryDir)
+    const grandParentDir = path.dirname(parentDir)
+    const rootsToCheck = [
+      path.join(binaryDir, 'node_modules', 'openclaw'),
+      path.join(parentDir, 'node_modules', 'openclaw'),
+    ]
+
+    if (binaryName === 'openclaw' || binaryName === 'openclaw.cmd' || binaryName === 'openclaw.exe') {
+      rootsToCheck.push(path.join(parentDir, 'lib', 'node_modules', 'openclaw'))
+      rootsToCheck.push(path.join(grandParentDir, 'lib', 'node_modules', 'openclaw'))
+    }
+
+    for (const root of rootsToCheck) {
+      const normalized = path.normalize(root)
+      const key = process.platform === 'win32' ? normalized.toLowerCase() : normalized
+      if (seen.has(key)) continue
+      seen.add(key)
+      candidateRoots.push(normalized)
+    }
+  }
+
+  return candidateRoots
+}
+
+async function readOpenClawPackageLocation(
+  packageRoot: string,
+  fsPromises: typeof fs.promises
+): Promise<OpenClawPackageLocation | null> {
+  const packageJsonPath = path.join(packageRoot, 'package.json')
+  try {
+    const rawPackageJson = await fsPromises.readFile(packageJsonPath, 'utf8')
+    const packageJson = JSON.parse(rawPackageJson) as Record<string, unknown>
+    if (packageJson.name !== 'openclaw') return null
+    return {
+      packageRoot,
+      packageJsonPath,
+      packageJson,
+    }
+  } catch {
+    return null
+  }
+}
+
 export async function resolveOpenClawBinaryPath(
   options: ResolveOpenClawPackageOptions = {}
 ): Promise<string> {
@@ -298,6 +370,13 @@ export async function resolveOpenClawBinaryPath(
       (await resolveNpmGlobalPrefix(runtime))
     const fallbackCandidate = findKnownCommandCandidate(runtime, npmPrefix, options.fileExists)
     if (fallbackCandidate) return fallbackCandidate
+    const bundledRuntimeBinaryPath = inspectBundledOpenClawDeliveryStatus({
+      cwd: process.cwd(),
+      resourcesPath: process.resourcesPath,
+      env: runtime.env,
+      platform: runtime.platform,
+    }).runtimeBinaryPath
+    if (bundledRuntimeBinaryPath) return bundledRuntimeBinaryPath
     throw toActionableCommandLookupError('openclaw', error)
   }
 }

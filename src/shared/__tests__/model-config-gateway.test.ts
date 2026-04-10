@@ -727,6 +727,88 @@ describe('applyDefaultModelWithGatewayReload', () => {
     expect(reloadGatewayAfterModelChange).not.toHaveBeenCalled()
   })
 
+  it('falls back to a local config patch when the upstream write succeeds but confirmation never catches up', async () => {
+    let currentConfig: Record<string, any> | null = {
+      agents: {
+        defaults: {
+          model: {
+            primary: 'custom-openai/old-model',
+          },
+        },
+      },
+    }
+    const readConfig = vi.fn(async () => currentConfig)
+    const applyConfigPatchGuarded = vi.fn(async ({ afterConfig }: { afterConfig: Record<string, any> }) => {
+      currentConfig = afterConfig
+      return { ok: true, wrote: true }
+    })
+
+    const result = await applyDefaultModelWithGatewayReload({
+      model: 'custom-openai/deepseek-chat',
+      readConfig,
+      applyUpstreamModelWrite: async () => ({
+        ok: true,
+        wrote: true,
+        gatewayReloaded: true,
+        source: 'control-ui-config.apply',
+      }),
+      applyConfigPatchGuarded,
+      readUpstreamState: async () => ({
+        ok: true,
+        source: 'control-ui-app',
+        fallbackUsed: false,
+        diagnostics: {
+          upstreamAvailable: true,
+          connected: true,
+          hasClient: true,
+          hasHelloSnapshot: true,
+          hasHealthResult: false,
+          hasSessionsState: false,
+          hasModelCatalogState: false,
+          appKeys: [],
+        },
+        data: {
+          source: 'control-ui-app',
+          connected: true,
+          hasClient: true,
+          appKeys: [],
+          modelStatusLike: {
+            defaultModel: 'custom-openai/old-model',
+          },
+        },
+      }),
+      getModelStatus: async () => ({
+        ok: false,
+        message: 'This OpenClaw build does not support models status --json.',
+      }),
+      reloadGatewayAfterModelChange: async () => ({ ok: true, running: true }),
+      confirmationPolicy: {
+        timeoutMs: 1,
+        initialIntervalMs: 1,
+        maxIntervalMs: 1,
+        backoffFactor: 1,
+      },
+      allowConfigOnlyConfirmation: true,
+    })
+
+    expect(result).toEqual({
+      ok: true,
+      modelApplied: true,
+      gatewayReloaded: false,
+      writeSource: 'local-config-patch',
+    })
+    expect(applyConfigPatchGuarded).toHaveBeenCalledTimes(1)
+    expect(currentConfig).toEqual({
+      agents: {
+        defaults: {
+          model: {
+            primary: 'custom-openai/deepseek-chat',
+          },
+        },
+      },
+    })
+  })
+
   it('falls back to local config mutation when the upstream write path is unavailable', async () => {
     const applyConfigPatchGuarded = vi.fn(async () => ({ ok: true, wrote: true }))
 

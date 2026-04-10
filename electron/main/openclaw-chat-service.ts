@@ -32,6 +32,7 @@ import {
   resolveModelsPageActiveModel,
   resolveVisibleConfiguredActiveModel,
 } from '../../src/shared/model-catalog-state'
+import { extractConfiguredDefaultModel } from '../../src/shared/model-config-gateway'
 import { getModelProviderAliasCandidates } from '../../src/lib/model-provider-aliases'
 import {
   areRuntimeModelsEquivalent,
@@ -740,6 +741,60 @@ function isModelAllowedByStatus(model: string, allowedModels: Iterable<string>):
   return Boolean(findEquivalentRuntimeModelKey(normalizedModel, candidates))
 }
 
+function isUnsupportedModelsStatusJsonError(
+  modelStatus: ModelConfigCommandResult<Record<string, any>>
+): boolean {
+  if (modelStatus?.ok) return false
+  const combined = [
+    String(modelStatus?.message || '').trim(),
+    String(modelStatus?.stderr || '').trim(),
+    String(modelStatus?.stdout || '').trim(),
+  ]
+    .filter(Boolean)
+    .join('\n')
+    .toLowerCase()
+
+  if (!combined) return false
+  return combined.includes('does not support models status --json')
+    || combined.includes('does not support model status --json')
+}
+
+function collectConfiguredSnapshotModelKeys(config: Record<string, any> | null): string[] {
+  const providers =
+    config?.models?.providers && typeof config.models.providers === 'object' && !Array.isArray(config.models.providers)
+      ? (config.models.providers as Record<string, unknown>)
+      : {}
+  const keys = new Set<string>()
+
+  for (const [providerId, providerConfig] of Object.entries(providers)) {
+    if (!providerConfig || typeof providerConfig !== 'object' || Array.isArray(providerConfig)) continue
+
+    const models = Array.isArray((providerConfig as Record<string, unknown>).models)
+      ? ((providerConfig as Record<string, unknown>).models as unknown[])
+      : []
+    for (const entry of models) {
+      const modelId = String(
+        typeof entry === 'string'
+          ? entry
+          : (entry as Record<string, unknown>)?.id ?? (entry as Record<string, unknown>)?.key ?? ''
+      ).trim()
+      if (!modelId) continue
+      keys.add(`${String(providerId || '').trim()}/${modelId}`)
+    }
+  }
+
+  return Array.from(keys)
+}
+
+async function readSavedConfiguredDefaultChatModel(): Promise<string | undefined> {
+  try {
+    const config = await readConfig()
+    return extractConfiguredDefaultModel(config) || undefined
+  } catch {
+    return undefined
+  }
+}
+
 export function buildDashboardChatAvailabilityFromStatus(params: {
   gatewayRunning: boolean
   modelStatus: ModelConfigCommandResult<Record<string, any>>
@@ -756,6 +811,38 @@ export function buildDashboardChatAvailabilityFromStatus(params: {
       : undefined)
 
   if (!params.modelStatus.ok) {
+    const fallbackConnectedModels = connectedModels.length > 0
+      ? connectedModels
+      : (defaultModel ? [defaultModel] : [])
+
+    if (fallbackConnectedModels.length > 0 && isUnsupportedModelsStatusJsonError(params.modelStatus)) {
+      if (!params.gatewayRunning) {
+        return {
+          state: 'offline',
+          ready: false,
+          canSend: false,
+          reason: 'gateway-offline',
+          gatewayRunning: false,
+          connectedModels: fallbackConnectedModels,
+          defaultModel,
+          agentId: DEFAULT_CHAT_AGENT_ID,
+          message: '当前 OpenClaw 版本不支持 models status --json，但已检测到已保存模型；启动网关后可继续尝试对话。',
+        }
+      }
+
+      return {
+        state: 'degraded',
+        ready: false,
+        canSend: true,
+        reason: 'model-status-error',
+        gatewayRunning: true,
+        connectedModels: fallbackConnectedModels,
+        defaultModel,
+        agentId: DEFAULT_CHAT_AGENT_ID,
+        message: '当前 OpenClaw 版本不支持 models status --json，已按已保存模型配置继续；请直接发送一条消息验证运行时可用性。',
+      }
+    }
+
     return {
       state: 'error',
       ready: false,
@@ -825,13 +912,6 @@ async function resolveChatSelectableModelsFromModelsPage(params: {
   const statusData = params.modelStatus?.ok ? params.modelStatus.data || {} : null
   const activeModelHint = resolveModelsPageActiveModel(statusData, config)
 
-  if (catalog.length === 0) {
-    return {
-      connectedModels: [],
-      defaultModel: activeModelHint || undefined,
-    }
-  }
-
   const catalogState = resolveModelsPageCatalogState({
     catalog,
     envVars,
@@ -840,7 +920,17 @@ async function resolveChatSelectableModelsFromModelsPage(params: {
     preferredModelKey: activeModelHint,
     mode: 'available',
   })
-  const connectedModels = normalizeModelList(catalogState.visibleCatalog.map((item) => item.key))
+  const scopedConfiguredCatalog =
+    catalogState.visibleCatalog.length > 0 ? catalogState.visibleCatalog : catalogState.scopedCatalog
+  const snapshotConnectedModels = collectConfiguredSnapshotModelKeys(config)
+  const baseConnectedModels = normalizeModelList([
+    ...scopedConfiguredCatalog.map((item) => item.key),
+    ...snapshotConnectedModels,
+  ])
+  const connectedModels = normalizeModelList([
+    ...baseConnectedModels,
+    ...(baseConnectedModels.length > 0 || extractConfiguredDefaultModel(config) ? [activeModelHint] : []),
+  ])
   const defaultModel = resolveVisibleConfiguredActiveModel({
     statusData,
     configData: config,
@@ -1151,9 +1241,9 @@ async function tryResolveCreateChatSessionDefaultModel(
   const readModelStatusFn = options.readModelStatus ?? defaultReadModelStatus
   try {
     const modelStatus = await readModelStatusFn()
-    return resolveDefaultModelFromStatus(modelStatus)
+    return resolveDefaultModelFromStatus(modelStatus) || await readSavedConfiguredDefaultChatModel()
   } catch {
-    return undefined
+    return readSavedConfiguredDefaultChatModel()
   }
 }
 
@@ -3298,6 +3388,7 @@ export async function sendChatMessage(
 
   const discoverOpenClawFn = options.discoverOpenClaw ?? discoverOpenClawInstallations
   const ensureGatewayFn = options.ensureGateway ?? ensureGatewayRunning
+  const getGatewayHealthFn = options.getGatewayHealth ?? gatewayHealth
   const readModelStatusFn = options.readModelStatus ?? defaultReadModelStatus
   const repairAgentAuthProfiles = options.repairAgentAuthProfiles ?? defaultRepairAgentAuthProfiles
   const repairMainAuthProfiles = options.repairMainAuthProfiles ?? defaultRepairMainAuthProfiles
@@ -3322,13 +3413,16 @@ export async function sendChatMessage(
   try {
     modelStatus = await readModelStatusFn()
     rawDefaultModel = resolveRawDefaultModelFromStatus(modelStatus)
-    defaultModel = resolveDefaultModelFromStatus(modelStatus)
+    defaultModel = resolveDefaultModelFromStatus(modelStatus) || await readSavedConfiguredDefaultChatModel()
+    rawDefaultModel = rawDefaultModel || defaultModel
     targetModel = resolveTargetChatModel({
       localSessionState,
       matchedSession,
       defaultModel,
     })
   } catch {
+    defaultModel = await readSavedConfiguredDefaultChatModel()
+    rawDefaultModel = defaultModel
     targetModel = resolveTargetChatModel({
       localSessionState,
       matchedSession,
@@ -3457,7 +3551,30 @@ export async function sendChatMessage(
   })
 
   const ensuredGateway = await ensureGatewayAvailable()
+  let gatewayRecoveredByHealthRecheck = false
   if (!ensuredGateway.ok || !ensuredGateway.running) {
+    const gatewayHealthRecheck = await Promise.resolve(
+      typeof getGatewayHealthFn === 'function' ? getGatewayHealthFn() : null
+    ).catch(() => null)
+    gatewayRecoveredByHealthRecheck = Boolean(gatewayHealthRecheck?.running)
+    if (gatewayRecoveredByHealthRecheck) {
+      appendChatTrace({
+        operation: 'send',
+        stage: 'gateway-health-recheck-recovered',
+        sessionId,
+        sessionKey: persistedSessionKey || undefined,
+        historySource: traceHistorySource,
+        confirmedModel:
+          String(matchedSession?.model || localSessionState?.model || targetModel || '').trim() || undefined,
+        intentSelectedModel: String(localSessionState?.selectedModel || targetModel || '').trim() || undefined,
+        failureClass: 'connection',
+        message:
+          'Gateway ensure returned unavailable, but a direct health recheck confirmed the runtime is already up. Proceeding with send.',
+      })
+    }
+  }
+  const gatewayOperational = Boolean(ensuredGateway.ok && ensuredGateway.running) || gatewayRecoveredByHealthRecheck
+  if (!gatewayOperational) {
     const messageText = getCliFailureMessage(ensuredGateway, '网关当前不可用，暂时无法发送消息')
     const canSafelyFallbackToCli =
       !persistedSessionKey &&
@@ -3493,7 +3610,7 @@ export async function sendChatMessage(
     rawDefaultModel,
     preferredModel: targetModel,
   })
-  if (ensuredGateway.ok && ensuredGateway.running && shouldBootstrapTrustedSession) {
+  if (gatewayOperational && shouldBootstrapTrustedSession) {
     const bootstrapResult = await createUpstreamDirectChatSession({
       model: targetModel,
       options,
@@ -3571,7 +3688,7 @@ export async function sendChatMessage(
     }
   }
 
-  if (!options.chatTransport && ensuredGateway.ok && ensuredGateway.running) {
+  if (!options.chatTransport && gatewayOperational) {
     chatTransport = persistedSessionKey ? browserGatewayTransport : defaultGatewayTransport
   }
 

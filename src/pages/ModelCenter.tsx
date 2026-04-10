@@ -67,10 +67,99 @@ export function buildLocalProviderEnvUpdatesForSubmit(params: {
   return {}
 }
 
+function normalizeLocalProviderConfigModels(models: unknown): Array<{ id: string; name: string }> {
+  if (!Array.isArray(models)) return []
+
+  return models
+    .map((entry) => {
+      if (typeof entry === 'string') {
+        const modelId = String(entry || '').trim()
+        return modelId ? { id: modelId, name: modelId } : null
+      }
+
+      const modelId = String(entry?.id ?? entry?.key ?? '').trim()
+      if (!modelId) return null
+
+      return {
+        id: modelId,
+        name: String(entry?.name || modelId).trim() || modelId,
+      }
+    })
+    .filter((entry): entry is { id: string; name: string } => Boolean(entry))
+}
+
+function extractLocalProviderModelId(modelKey: string, providerId: string): string {
+  const normalizedModelKey = String(modelKey || '').trim()
+  if (!normalizedModelKey) return ''
+  if (!normalizedModelKey.includes('/')) return normalizedModelKey
+
+  const [rawProviderId, ...rest] = normalizedModelKey.split('/')
+  const providerCandidates = new Set(uniqueProviderCandidates(getModelProviderAliasCandidates(providerId)))
+  if (!providerCandidates.has(normalizeProviderCandidate(rawProviderId))) {
+    return normalizedModelKey
+  }
+
+  return rest.join('/').trim()
+}
+
+export function buildLocalProviderConfigSnapshotForSubmit(params: {
+  currentConfig: Record<string, any> | null
+  providerId: string
+  baseUrl: string
+  selectedModel: string
+}): Record<string, any> {
+  const providerId = String(params.providerId || '').trim()
+  const baseUrl = String(params.baseUrl || '').trim()
+  const selectedModel = String(params.selectedModel || '').trim()
+
+  const nextConfig =
+    params.currentConfig && typeof params.currentConfig === 'object' && !Array.isArray(params.currentConfig)
+      ? { ...params.currentConfig }
+      : {}
+  const nextModels =
+    nextConfig.models && typeof nextConfig.models === 'object' && !Array.isArray(nextConfig.models)
+      ? { ...nextConfig.models }
+      : {}
+  const nextProviders =
+    nextModels.providers && typeof nextModels.providers === 'object' && !Array.isArray(nextModels.providers)
+      ? { ...nextModels.providers }
+      : {}
+  const currentProviderConfig =
+    nextProviders[providerId] && typeof nextProviders[providerId] === 'object' && !Array.isArray(nextProviders[providerId])
+      ? { ...nextProviders[providerId] }
+      : {}
+
+  const modelId = extractLocalProviderModelId(selectedModel, providerId)
+  const providerModels = normalizeLocalProviderConfigModels(currentProviderConfig.models)
+  if (modelId && !providerModels.some((entry) => entry.id === modelId)) {
+    providerModels.unshift({
+      id: modelId,
+      name: modelId,
+    })
+  }
+
+  const nextProviderConfig: Record<string, any> = {
+    ...currentProviderConfig,
+    ...(providerModels.length > 0 ? { models: providerModels } : {}),
+    ...(providerId === 'custom-openai' && baseUrl ? { baseUrl } : {}),
+  }
+  if (providerId === 'custom-openai') {
+    delete nextProviderConfig.enabled
+  } else {
+    nextProviderConfig.enabled = true
+  }
+  nextProviders[providerId] = nextProviderConfig
+  nextModels.providers = nextProviders
+  nextConfig.models = nextModels
+
+  return nextConfig
+}
+
 interface LocalConnectionTestResult {
   ok: boolean
   reachable: boolean
   modelCount?: number
+  models?: LocalModelOption[]
   error?: string
   latencyMs?: number
 }
@@ -233,8 +322,8 @@ export function resolveModelCenterProviderDisplayCopy(params: {
 
   if (providerId === 'custom-openai') {
     return {
-      name: '本地 OpenAI 兼容端点',
-      hint: '连接 LM Studio、LocalAI 或其他本地 / 自托管 OpenAI 兼容服务。',
+      name: 'OpenAI 兼容服务',
+      hint: '连接远程、自托管或本地 OpenAI 兼容服务，支持手填 Base URL、API Key 与模型 ID。',
     }
   }
 
@@ -526,12 +615,24 @@ function normalizeLocalScanModelOptions(
   return models
 }
 
+export function normalizeLocalDiscoveredModelOptions(
+  models: unknown,
+  providerId: string
+): LocalModelOption[] {
+  return normalizeLocalScanModelOptions({ models }, providerId)
+}
+
 export function getLocalDiscoveryDisplay(
   connectionTest: LocalConnectionTestState,
   scanning: boolean,
   scanResult: LocalScanResult | null,
-  hasBaseUrl: boolean
+  hasBaseUrl: boolean,
+  providerId: string
 ): LocalDiscoveryDisplay {
+  const modelTargetLabel = providerId === 'custom-openai' ? '模型' : '本地模型'
+  const idleActionLabel = providerId === 'custom-openai' ? '连接并尝试发现模型' : '连接并发现本地模型'
+  const emptyStateLabel = providerId === 'custom-openai' ? '尝试获取模型' : '获取本地模型'
+
   if (connectionTest.testing || scanning) {
     return {
       buttonColor: 'brand',
@@ -544,7 +645,7 @@ export function getLocalDiscoveryDisplay(
     if (scanResult.ok) {
       return {
         buttonColor: 'teal',
-        message: `连接成功，已发现 ${scanResult.modelCount ?? 0} 个本地模型`,
+        message: `连接成功，已发现 ${scanResult.modelCount ?? 0} 个${modelTargetLabel}`,
         messageColor: 'teal',
       }
     }
@@ -574,7 +675,7 @@ export function getLocalDiscoveryDisplay(
 
   return {
     buttonColor: 'brand',
-    message: hasBaseUrl ? '点击右侧按钮可连接并发现本地模型' : '填写 Base URL 后可获取本地模型',
+    message: hasBaseUrl ? `点击右侧按钮可${idleActionLabel}` : `填写 Base URL 后可${emptyStateLabel}`,
     messageColor: 'dimmed',
   }
 }
@@ -1729,6 +1830,7 @@ export default function ModelCenter({
   const requiresCustomConfig = methodRequiresCustomConfig(selectedMethod)
   const unsupportedReason = getUnsupportedMethodReason(selectedMethod)
   const isLocal = isLocalProvider(selectedProviderId)
+  const isCustomOpenAIProvider = selectedProviderId === 'custom-openai'
   const localDefaults = isLocal ? LOCAL_PROVIDER_DEFAULTS[selectedProviderId] : null
   const busy = phase === 'authing' || phase === 'verifying'
   const interactionLocked = busy || installingOAuthDependency || scanning
@@ -1743,8 +1845,15 @@ export default function ModelCenter({
     connectionTest,
     scanning,
     scanResult,
-    Boolean(localBaseUrl.trim())
+    Boolean(localBaseUrl.trim()),
+    selectedProviderId
   )
+  const localModelSelectionRequired = isLocal && !isCustomOpenAIProvider
+  const localSubmitModelId = selectedLocalModel.trim()
+  const canSubmitLocalProvider =
+    Boolean(localBaseUrl.trim())
+    && Boolean(localSubmitModelId)
+    && (!localModelSelectionRequired || Boolean(selectedLocalModel))
   const capabilitiesLoadingDisplay = useMemo(
     () => buildCapabilitiesLoadingDisplay(capabilitiesLoadingElapsedMs),
     [capabilitiesLoadingElapsedMs]
@@ -2072,6 +2181,17 @@ export default function ModelCenter({
       })
       setConnectionTest({ testing: false, result })
 
+      if (isCustomOpenAIProvider && result.ok) {
+        const models = normalizeLocalDiscoveredModelOptions(result.models, selectedProviderId)
+        if (models.length > 0) {
+          setScanResult({ ok: true, modelCount: models.length, models })
+          setSelectedLocalModel(models[0].key)
+        } else {
+          setScanResult({ ok: true, modelCount: result.modelCount ?? 0, models: [] })
+        }
+        return
+      }
+
       // Auto-scan models on successful connection
       if (result.ok) {
         setScanning(true)
@@ -2152,7 +2272,11 @@ export default function ModelCenter({
 
   const handleLocalProviderSubmit = async () => {
     if (!isLocal) return
-    if (!selectedLocalModel) {
+    if (!localSubmitModelId) {
+      setError(isCustomOpenAIProvider ? '请先填写默认模型 ID' : '请先发现模型并选择一个默认模型')
+      return
+    }
+    if (localModelSelectionRequired && !selectedLocalModel) {
       setError('请先发现模型并选择一个默认模型')
       return
     }
@@ -2192,13 +2316,14 @@ export default function ModelCenter({
 
       setStatusText('正在应用默认模型...')
       const applyResult = await applyDefaultModelWithGatewayReload({
-        model: selectedLocalModel,
+        model: localSubmitModelId,
         readConfig: () => window.api.readConfig(),
         readUpstreamState: () => window.api.getModelUpstreamState(),
         applyUpstreamModelWrite: (request) => window.api.applyModelConfigViaUpstream(request),
         applyConfigPatchGuarded: (request) => window.api.applyConfigPatchGuarded(request),
         getModelStatus: () => window.api.getModelStatus(),
         reloadGatewayAfterModelChange: () => window.api.reloadGatewayAfterModelChange(),
+        allowConfigOnlyConfirmation: isCustomOpenAIProvider,
       })
       if (!applyResult.ok) {
         setPhase('ready')
@@ -2212,6 +2337,31 @@ export default function ModelCenter({
         return
       }
 
+      setStatusText('正在保存提供商快照...')
+      const currentConfig = await window.api.readConfig().catch(() => null)
+      const providerSnapshotConfig = buildLocalProviderConfigSnapshotForSubmit({
+        currentConfig,
+        providerId: selectedProviderId,
+        baseUrl: localBaseUrl,
+        selectedModel: localSubmitModelId,
+      })
+      const providerSnapshotWriteResult = await window.api.applyConfigPatchGuarded({
+        beforeConfig: currentConfig,
+        afterConfig: providerSnapshotConfig,
+        reason: 'unknown',
+      })
+      if (!providerSnapshotWriteResult?.ok) {
+        setPhase('ready')
+        setStatusText('')
+        setError(
+          toUserFacingCliFailureMessage({
+            stderr: providerSnapshotWriteResult?.message,
+            fallback: '默认模型已保存，但提供商快照写入失败',
+          })
+        )
+        return
+      }
+
       setPhase('ready')
       setStatusText('')
       onConfigured({
@@ -2220,7 +2370,7 @@ export default function ModelCenter({
         methodType: 'custom',
         providerStatusIds: [selectedProviderId],
         needsInitialization: false,
-        preferredModelKey: selectedLocalModel,
+        preferredModelKey: localSubmitModelId,
       })
     } catch (e: any) {
       setPhase('ready')
@@ -2693,7 +2843,7 @@ export default function ModelCenter({
                         loading={connectionTest.testing || scanning}
                         className="shrink-0 whitespace-nowrap sm:min-w-[132px]"
                       >
-                        获取本地模型
+                        {isCustomOpenAIProvider ? '测试连接并尝试获取模型' : '获取本地模型'}
                       </Button>
                     </div>
 
@@ -2714,8 +2864,24 @@ export default function ModelCenter({
                       />
                       <Text size="xs" c="dimmed" mt={4} className="!text-[11px]">
                         {selectedProviderId === 'custom-openai'
-                          ? '留空时将按本地无认证 OpenAI 兼容端点处理，不发送 Authorization 头。'
+                          ? '无鉴权 endpoint 可留空；如果你的远程服务要求认证，请填写可用 API Key。'
                           : '留空时会写入本地注册占位 Key，帮助 OpenClaw 正确识别该 provider。'}
+                      </Text>
+                    </div>
+                  )}
+
+                  {isCustomOpenAIProvider && (
+                    <div className="mb-4">
+                      <TextInput
+                        label="默认模型 ID"
+                        value={selectedLocalModel}
+                        onChange={(e) => setSelectedLocalModel(e.currentTarget.value)}
+                        placeholder="例如：gpt-4.1-mini / claude-sonnet-4-20250514"
+                        disabled={interactionLocked}
+                        size="sm"
+                      />
+                      <Text size="xs" c="dimmed" mt={4} className="!text-[11px]">
+                        如果接口支持列模型，可以先点上方按钮自动发现；如果不支持，也可以直接手填要使用的模型 ID。
                       </Text>
                     </div>
                   )}
@@ -2725,12 +2891,12 @@ export default function ModelCenter({
                       {scanResult.ok ? (
                         <>
                           <Text size="xs" c="teal">
-                            {`✅ 发现 ${scanResult.modelCount ?? 0} 个模型`}
+                            {`✅ 发现 ${scanResult.modelCount ?? 0} 个${isCustomOpenAIProvider ? '可用模型' : '模型'}`}
                           </Text>
                           {scanResult.models && scanResult.models.length > 0 && (
                             <div className="mt-3">
                               <Select
-                                label="选择默认模型"
+                                label={isCustomOpenAIProvider ? '从已发现模型中选择默认模型' : '选择默认模型'}
                                 value={selectedLocalModel}
                                 onChange={(value) => setSelectedLocalModel(value || '')}
                                 data={scanResult.models.map((m) => ({
@@ -2744,7 +2910,9 @@ export default function ModelCenter({
                           )}
                           {scanResult.models && scanResult.models.length === 0 && (
                             <Text size="xs" c="dimmed" mt="xs">
-                              未发现可用模型，请确认本地服务已加载模型。
+                              {isCustomOpenAIProvider
+                                ? '接口未返回模型列表，请直接手填默认模型 ID。'
+                                : '未发现可用模型，请确认本地服务已加载模型。'}
                             </Text>
                           )}
                         </>
@@ -2769,7 +2937,7 @@ export default function ModelCenter({
                     size="md"
                     mt="md"
                     onClick={handleLocalProviderSubmit}
-                    disabled={interactionLocked || !localBaseUrl.trim() || !selectedLocalModel || busy}
+                    disabled={interactionLocked || !canSubmitLocalProvider || busy}
                     loading={busy}
                   >
                     {busy ? '配置中...' : submitIdleLabel}

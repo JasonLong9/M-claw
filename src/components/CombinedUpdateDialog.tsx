@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Alert, Button, Group, Loader, Modal, Paper, SimpleGrid, Stack, Text, Title } from '@mantine/core'
 import type { CombinedUpdateCheckResult, CombinedUpdateRunResult } from '../shared/openclaw-phase4'
+import {
+  buildOpenClawMigrationSmokeSummary,
+  resolveOpenClawTargetVersionLabel,
+} from '../shared/openclaw-version-policy'
 
 export default function CombinedUpdateDialog({
   open,
@@ -38,6 +42,13 @@ export default function CombinedUpdateDialog({
 
   if (!open) return null
 
+  const targetVersion = resolveOpenClawTargetVersionLabel(check?.openclaw.targetVersion)
+  const migrationSmoke = check
+    ? buildOpenClawMigrationSmokeSummary({
+        fromVersion: check.openclaw.currentVersion,
+        toVersion: check.openclaw.targetVersion,
+      })
+    : null
   const openclawCanRunInCombined = Boolean(
     check &&
       check.openclaw.policyState === 'supported_not_target' &&
@@ -90,8 +101,8 @@ export default function CombinedUpdateDialog({
               </Text>
               <Stack gap={8} mt="md">
                 <Text size="sm">当前版本：{check.openclaw.currentVersion || '未知'}</Text>
-                <Text size="sm">目标版本：{check.openclaw.targetVersion || '未知'}</Text>
-                <Text size="sm">组合更新资格：{openclawCanRunInCombined ? '可升级到 2026.3.24' : '当前不支持组合更新'}</Text>
+                <Text size="sm">目标版本：{targetVersion}</Text>
+                <Text size="sm">组合更新资格：{openclawCanRunInCombined ? `可升级至 ${targetVersion}` : '当前不支持组合更新'}</Text>
               </Stack>
             </Paper>
 
@@ -107,6 +118,21 @@ export default function CombinedUpdateDialog({
             </Paper>
           </SimpleGrid>
 
+          {migrationSmoke && (
+            <Paper withBorder radius="xl" p="md" mt="md">
+              <Text size="xs" c="dimmed" tt="uppercase" fw={600} style={{ letterSpacing: '0.2em' }}>
+                OpenClaw 迁移诊断
+              </Text>
+              <Stack gap={8} mt="md">
+                <Text size="sm">迁移路径：{migrationSmoke.migrationPath}</Text>
+                <Text size="sm">baseline backup：{migrationSmoke.needsBaselineBackup ? '需要' : '不需要'}</Text>
+                <Text size="sm">保守兼容模式：{migrationSmoke.requiresConservativeMode ? '需要' : '不需要'}</Text>
+                <Text size="sm">记忆目录审计：{migrationSmoke.memoryAuditRequired ? '需要' : '不需要'}</Text>
+                <Text size="sm">Agent 协同审计：{migrationSmoke.agentAuditRequired ? '需要' : '不需要'}</Text>
+              </Stack>
+            </Paper>
+          )}
+
           {(check.warnings.length > 0 || error) && (
             <Alert color="yellow" variant="light" mt="md">
               {check.warnings.map((warning) => (
@@ -115,6 +141,23 @@ export default function CombinedUpdateDialog({
                 </Text>
               ))}
               {error && <Text size="sm" lh={1.6}>{error}</Text>}
+            </Alert>
+          )}
+
+          {migrationSmoke && migrationSmoke.recommendedChecks.length > 0 && (
+            <Alert
+              color={migrationSmoke.requiresConservativeMode ? 'yellow' : 'blue'}
+              variant="light"
+              mt="md"
+            >
+              <Text size="sm" fw={500}>
+                组合更新前建议先完成：
+              </Text>
+              {migrationSmoke.recommendedChecks.map((item) => (
+                <Text key={item} size="sm" lh={1.6}>
+                  {item}
+                </Text>
+              ))}
             </Alert>
           )}
 

@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { assessRuntimeIntakeDecision } from './openclaw-runtime-intake-decision.mjs'
 
 const repoRoot = process.cwd()
 const bundleRoot = path.join(repoRoot, 'resources', 'openclaw-bundle')
@@ -174,6 +175,15 @@ function probeBinary(binaryPath, runtimeDir) {
 const allowCrossPlatformStructureOnly = hasFlag('--allow-cross-platform-structure-only')
 const target = resolveProbeTarget()
 const { packageManifestPath, binary } = validateStructure(target)
+const expectedVersionArg = takeArg('--version')
+const decision =
+  target.source === 'runtime-dir' && expectedVersionArg
+    ? assessRuntimeIntakeDecision({
+        runtimeDir: target.runtimeDir,
+        expectedVersion: expectedVersionArg,
+        packageManifestPath,
+      })
+    : null
 
 info(`source=${target.source}`)
 info(`runtimeDir=${path.relative(repoRoot, target.runtimeDir)}`)
@@ -181,6 +191,21 @@ info(`platform=${target.platform}`)
 info(`arch=${target.arch}`)
 info(`packageManifest=${path.relative(repoRoot, packageManifestPath)}`)
 info(`binary=${path.relative(repoRoot, binary)}`)
+if (decision) {
+  info(`intakeDecision=${decision.intakeDecision}`)
+  info(`packageVersion=${decision.packageVersion || 'unknown'}`)
+  info(`pinnedVersion=${decision.pinnedVersion || 'unknown'}`)
+  if (decision.notes) {
+    info(`notes=${path.relative(repoRoot, decision.notes.path)}`)
+    info(`notes.sourceVersion=${decision.sourceVersion || 'unknown'}`)
+    info(`notes.copiedVersion=${decision.copiedVersion || 'unknown'}`)
+  } else {
+    info('notes=missing')
+  }
+  for (const reason of decision.decisionReasons) {
+    info(`decisionReason=${reason}`)
+  }
+}
 
 if (!canExecuteOnCurrentHost(target.platform, target.arch)) {
   if (!allowCrossPlatformStructureOnly) {

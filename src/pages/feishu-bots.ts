@@ -17,12 +17,14 @@ export interface FeishuBotItem {
   enabled: boolean
   isDefault: boolean
   agentId: string
+  provisionSource: 'created' | 'linked' | 'unknown'
 }
 
 export interface AddFeishuBotInput {
   name: string
   appId: string
   appSecret: string
+  provisionSource?: 'created' | 'linked'
 }
 
 function cloneConfig(config: Record<string, any> | null): Record<string, any> {
@@ -82,6 +84,11 @@ export function listFeishuBots(config: Record<string, any> | null): FeishuBotIte
       enabled: feishu.enabled !== false,
       isDefault: true,
       agentId: getFeishuManagedAgentId(DEFAULT_FEISHU_ACCOUNT_ID),
+      provisionSource: (normalizeText(feishu.mclawProvisionSource) === 'created'
+        ? 'created'
+        : normalizeText(feishu.mclawProvisionSource) === 'linked'
+          ? 'linked'
+          : 'unknown'),
     })
   }
 
@@ -98,6 +105,11 @@ export function listFeishuBots(config: Record<string, any> | null): FeishuBotIte
         enabled: account.enabled !== false,
         isDefault: false,
         agentId: getFeishuManagedAgentId(accountId),
+        provisionSource: (normalizeText(account.mclawProvisionSource) === 'created'
+          ? 'created'
+          : normalizeText(account.mclawProvisionSource) === 'linked'
+            ? 'linked'
+            : 'unknown'),
       })
     }
   }
@@ -131,6 +143,7 @@ export function addFeishuBotConfig(
   const name = normalizeText(input.name)
   const appId = normalizeText(input.appId)
   const appSecret = normalizeText(input.appSecret)
+  const provisionSource = input.provisionSource === 'created' ? 'created' : 'linked'
 
   if (!name) throw new Error('Bot 名称不能为空')
   if (!appId) throw new Error('App ID 不能为空')
@@ -154,6 +167,7 @@ export function addFeishuBotConfig(
     name,
     appId,
     appSecret,
+    mclawProvisionSource: provisionSource,
     dmPolicy: DEFAULT_FEISHU_CHANNEL_SETTINGS.dmPolicy,
     domain: normalizeText(feishu.domain) || DEFAULT_FEISHU_CHANNEL_SETTINGS.domain,
     groupPolicy: normalizeText(feishu.groupPolicy) || DEFAULT_FEISHU_CHANNEL_SETTINGS.groupPolicy,
