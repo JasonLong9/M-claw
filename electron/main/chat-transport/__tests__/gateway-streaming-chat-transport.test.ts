@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetOpenClawLegacyEnvWarningsForTests } from '../../openclaw-legacy-env-migration'
-import { createGatewayStreamingChatTransport } from '../gateway-streaming-chat-transport'
+import {
+  createGatewayStreamingChatTransport,
+  OPENCLAW_WEBCHAT_CLIENT_ID,
+  OPENCLAW_WEBCHAT_CLIENT_MODE,
+  OPENCLAW_WEBCHAT_CLIENT_VERSION,
+} from '../gateway-streaming-chat-transport'
 
 class FakeWebSocket {
   static readonly CONNECTING = 0
@@ -56,6 +61,7 @@ describe('gateway streaming chat transport', () => {
   it('streams assistant deltas from gateway chat events', async () => {
     const deltas: Array<{ text: string; delta: string; model?: string }> = []
     const sentPayloads: Array<Record<string, unknown>> = []
+    let connectClient: Record<string, unknown> | undefined
     const transport = createGatewayStreamingChatTransport({
       readConfig: async () => ({
         gateway: {
@@ -70,6 +76,7 @@ describe('gateway streaming chat transport', () => {
       createSocket: () =>
         new FakeWebSocket((frame, socket) => {
           if (frame.method === 'connect') {
+            connectClient = (frame.params?.client || {}) as Record<string, unknown>
             socket.emit('message', {
               data: JSON.stringify({
                 type: 'res',
@@ -148,6 +155,13 @@ describe('gateway streaming chat transport', () => {
     })
 
     expect(result.ok).toBe(true)
+    expect(connectClient).toEqual(
+      expect.objectContaining({
+        id: OPENCLAW_WEBCHAT_CLIENT_ID,
+        mode: OPENCLAW_WEBCHAT_CLIENT_MODE,
+        version: OPENCLAW_WEBCHAT_CLIENT_VERSION,
+      })
+    )
     expect(result.streamedText).toBe('你好，我在。')
     expect(result.streamedModel).toBe('zai/glm-5')
     expect(sentPayloads[0]?.model).toBeUndefined()
@@ -548,7 +562,7 @@ describe('gateway streaming chat transport', () => {
     })
 
     expect(result.ok).toBe(false)
-    expect(result.stderr).toContain('cannot safely continue an explicit external session key')
+    expect(result.stderr).toContain('session key')
     expect(fallbackTransport.run).not.toHaveBeenCalled()
   })
 

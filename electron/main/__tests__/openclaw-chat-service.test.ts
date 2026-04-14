@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+﻿import { beforeEach, describe, expect, it, vi } from 'vitest'
 const {
   runCliMock,
   runCliStreamingMock,
@@ -10,8 +10,12 @@ const {
   discoverOpenClawMock,
   readConfigMock,
   readEnvFileMock,
+  readConfiguredGatewayPortMock,
+  probeGatewayPortReachableMock,
+  probeGatewaySocketReadyMock,
   callGatewayRpcViaControlUiBrowserMock,
   runGatewayChatViaControlUiBrowserMock,
+  inspectBundledOpenClawDeliveryStatusMock,
 } = vi.hoisted(() => ({
   runCliMock: vi.fn(),
   runCliStreamingMock: vi.fn(),
@@ -23,8 +27,12 @@ const {
   discoverOpenClawMock: vi.fn(),
   readConfigMock: vi.fn(),
   readEnvFileMock: vi.fn(),
+  readConfiguredGatewayPortMock: vi.fn(),
+  probeGatewayPortReachableMock: vi.fn(),
+  probeGatewaySocketReadyMock: vi.fn(),
   callGatewayRpcViaControlUiBrowserMock: vi.fn(),
   runGatewayChatViaControlUiBrowserMock: vi.fn(),
+  inspectBundledOpenClawDeliveryStatusMock: vi.fn(),
 }))
 
 vi.mock('../cli', () => ({
@@ -55,9 +63,19 @@ vi.mock('../openclaw-gateway-service', () => ({
   ensureGatewayRunning: ensureGatewayRunningMock,
 }))
 
+vi.mock('../openclaw-gateway-probes', () => ({
+  readConfiguredGatewayPort: readConfiguredGatewayPortMock,
+  probeGatewayPortReachable: probeGatewayPortReachableMock,
+  probeGatewaySocketReady: probeGatewaySocketReadyMock,
+}))
+
 vi.mock('../openclaw-control-ui-rpc', () => ({
   callGatewayRpcViaControlUiBrowser: callGatewayRpcViaControlUiBrowserMock,
   runGatewayChatViaControlUiBrowser: runGatewayChatViaControlUiBrowserMock,
+}))
+
+vi.mock('../openclaw-bundled-manifest', () => ({
+  inspectBundledOpenClawDeliveryStatus: inspectBundledOpenClawDeliveryStatusMock,
 }))
 
 import {
@@ -185,9 +203,41 @@ describe('openclaw chat service', () => {
       },
     }) as OpenClawCapabilities
 
+  const createLegacyCompatRuntimeReconcileStore = () =>
+    ({
+      version: 1,
+      lastSeenOpenClawVersion: '2026.3.24',
+      lastSeenVersionBand: 'openclaw_2026_3_23_to_2026_3_24',
+      lastSeenAt: '2026-04-10T00:00:00.000Z',
+      lastCompatibility: {
+        status: 'steady_state',
+        currentVersion: '2026.3.24',
+        currentBand: 'openclaw_2026_3_23_to_2026_3_24',
+        previousVersion: '2026.3.24',
+        previousBand: 'openclaw_2026_3_23_to_2026_3_24',
+        conservativeMode: true,
+        warningCodes: [],
+        summary: 'legacy pinned runtime',
+        assessedAt: '2026-04-10T00:00:00.000Z',
+      },
+      runtime: {
+        stateCode: 'degraded',
+        desiredRevision: 2,
+        appliedRevision: 1,
+        pendingReasons: ['gateway_start_required'],
+        lastMutationSource: 'gateway-bootstrap',
+        blockingReason: 'control_ui_handshake_failed',
+        blockingDetail: null,
+        safeToRetry: true,
+        lastReconcileAt: '2026-04-10T00:00:00.000Z',
+        lastReconcileSummary: 'compat handshake degraded but port should still be reachable',
+        lastActions: [],
+      },
+    }) as any
+
   const minimaxOauthMethod: OpenClawAuthMethodDescriptor = {
     authChoice: 'minimax-portal',
-    label: 'OAuth · minimax-portal',
+    label: 'OAuth 路 minimax-portal',
     kind: 'oauth',
     route: {
       kind: 'models-auth-login',
@@ -213,10 +263,28 @@ describe('openclaw chat service', () => {
     discoverOpenClawMock.mockReset()
     readConfigMock.mockReset()
     readEnvFileMock.mockReset()
+    readConfiguredGatewayPortMock.mockReset()
+    probeGatewayPortReachableMock.mockReset()
+    probeGatewaySocketReadyMock.mockReset()
     callGatewayRpcViaControlUiBrowserMock.mockReset()
     runGatewayChatViaControlUiBrowserMock.mockReset()
+    inspectBundledOpenClawDeliveryStatusMock.mockReset()
     readConfigMock.mockResolvedValue(null)
     readEnvFileMock.mockResolvedValue({})
+    readConfiguredGatewayPortMock.mockResolvedValue(18789)
+    probeGatewayPortReachableMock.mockResolvedValue(true)
+    probeGatewaySocketReadyMock.mockResolvedValue(true)
+    inspectBundledOpenClawDeliveryStatusMock.mockReturnValue({
+      manifestPath: null,
+      manifest: null,
+      platform: process.platform,
+      arch: process.arch,
+      defaultDeliveryMode: null,
+      targetDeliveryMode: null,
+      runtimeArtifact: null,
+      runtimePath: null,
+      runtimeBinaryPath: null,
+    })
     getModelCatalogMock.mockResolvedValue({
       total: 0,
       items: [],
@@ -604,7 +672,7 @@ describe('openclaw chat service', () => {
         {
           id: 'debug-local-msg-1',
           role: 'user',
-          text: '本地缓存消息',
+          text: '鏈湴缂撳瓨娑堟伅',
           createdAt: 8_000,
           status: 'sent',
         },
@@ -653,7 +721,7 @@ describe('openclaw chat service', () => {
             {
               id: 'legacy-msg-1',
               role: 'user',
-              text: '旧缓存消息',
+              text: '鏃х紦瀛樻秷鎭?',
               createdAt: 1_050,
               status: 'sent',
             },
@@ -706,7 +774,7 @@ describe('openclaw chat service', () => {
             {
               id: 'legacy-msg-2',
               role: 'assistant',
-              text: '没有 transport 的旧记录',
+              text: '娌℃湁 transport 鐨勬棫璁板綍',
               createdAt: 2_050,
               status: 'sent',
             },
@@ -758,7 +826,7 @@ describe('openclaw chat service', () => {
             {
               id: 'legacy-msg-3',
               role: 'assistant',
-              text: '可信 sessionKey 的旧记录',
+              text: '鍙俊 sessionKey 鐨勬棫璁板綍',
               createdAt: 3_050,
               status: 'sent',
             },
@@ -845,7 +913,7 @@ describe('openclaw chat service', () => {
         {
           id: 'trace-transcript-msg-1',
           role: 'assistant',
-          text: '本地历史',
+          text: '鏈湴鍘嗗彶',
           createdAt: 9_000,
           status: 'sent',
         },
@@ -879,20 +947,20 @@ describe('openclaw chat service', () => {
       ok: true,
       stdout: JSON.stringify({
         response: {
-          text: '发送完成',
+          text: '鍙戦€佸畬鎴?',
         },
         model: 'openai/gpt-5.4-pro',
       }),
       stderr: '',
       code: 0,
-      streamedText: '发送完成',
+      streamedText: '鍙戦€佸畬鎴?',
       streamedModel: 'openai/gpt-5.4-pro',
     }))
 
     const result = await sendChatMessage(
       {
         sessionId: 'trace-send-session',
-        text: '继续对话',
+        text: '缁х画瀵硅瘽',
       },
       {
         discoverOpenClaw,
@@ -931,6 +999,89 @@ describe('openclaw chat service', () => {
     ])
   })
 
+  it('rejects concurrent chat sends before spawning a second transport run', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-send-singleflight')
+    let resolveEnsureGateway: ((value: any) => void) | undefined
+    const ensureGateway = vi.fn(() => new Promise<any>((resolve) => {
+      resolveEnsureGateway = resolve
+    }))
+    const transportRun = vi.fn(async () => ({
+      ok: true,
+      stdout: '第一条消息已完成',
+      stderr: '',
+      code: 0,
+      streamedText: '第一条消息已完成',
+    }))
+
+    const sharedOptions = {
+      discoverOpenClaw,
+      readModelStatus: async () => createModelStatus('openai/gpt-5.4-pro'),
+      ensureGateway,
+      runCommand: async () => ({
+        ok: true,
+        stdout: JSON.stringify({ sessions: [] }),
+        stderr: '',
+        code: 0,
+      }),
+      chatTransport: {
+        run: transportRun as any,
+      },
+    }
+
+    const firstPromise = sendChatMessage(
+      {
+        sessionId: 'singleflight-first',
+        text: '第一条消息',
+      },
+      sharedOptions
+    )
+
+    await vi.waitFor(() => {
+      expect(ensureGateway).toHaveBeenCalledTimes(1)
+    }, { timeout: 10_000 })
+
+    const secondResult = await sendChatMessage(
+      {
+        sessionId: 'singleflight-second',
+        text: '第二条消息',
+      },
+      sharedOptions
+    )
+
+    expect(secondResult).toMatchObject({
+      ok: false,
+      sessionId: 'singleflight-second',
+      errorCode: 'command-failed',
+    })
+    expect(secondResult.messageText).toContain('当前已有一条消息正在发送')
+    expect(transportRun).toHaveBeenCalledTimes(0)
+
+    expect(resolveEnsureGateway).toBeTypeOf('function')
+    resolveEnsureGateway?.({
+      ok: true,
+      stdout: '',
+      stderr: '',
+      code: 0,
+      running: true,
+    })
+
+    const firstResult = await firstPromise
+    expect(firstResult.ok).toBe(true)
+    expect(transportRun).toHaveBeenCalledTimes(1)
+    expect(listChatTraceEntries(2)).toEqual([
+      expect.objectContaining({
+        operation: 'send',
+        stage: 'succeeded',
+        sessionId: 'singleflight-first',
+      }),
+      expect.objectContaining({
+        operation: 'send',
+        stage: 'rejected-concurrent-send',
+        sessionId: 'singleflight-second',
+      }),
+    ])
+  })
+
   it('repairs missing main auth profiles from other agent stores before sending', async () => {
     const discoverOpenClaw = createDiscovery('fingerprint-repair-main-auth-before-send')
     const repairMainAuthProfiles = vi.fn(async () => ({
@@ -945,20 +1096,20 @@ describe('openclaw chat service', () => {
       ok: true,
       stdout: JSON.stringify({
         response: {
-          text: '修复后可发送',
+          text: '淇鍚庡彲鍙戦€?',
         },
         model: 'zai/glm-5-turbo',
       }),
       stderr: '',
       code: 0,
-      streamedText: '修复后可发送',
+      streamedText: '淇鍚庡彲鍙戦€?',
       streamedModel: 'zai/glm-5-turbo',
     }))
 
     const result = await sendChatMessage(
       {
         sessionId: 'repair-main-auth-session',
-        text: '继续发送',
+        text: '缁х画鍙戦€?',
       },
       {
         discoverOpenClaw,
@@ -1022,13 +1173,13 @@ describe('openclaw chat service', () => {
       ok: true,
       stdout: JSON.stringify({
         response: {
-          text: '修复后可继续发送',
+          text: '淇鍚庡彲缁х画鍙戦€?',
         },
         model: 'minimax-portal/MiniMax-M2.5',
       }),
       stderr: '',
       code: 0,
-      streamedText: '修复后可继续发送',
+      streamedText: '淇鍚庡彲缁х画鍙戦€?',
       streamedModel: 'minimax-portal/MiniMax-M2.5',
     }))
 
@@ -1042,7 +1193,7 @@ describe('openclaw chat service', () => {
         {
           id: 'msg-existing',
           role: 'user',
-          text: '旧消息',
+          text: '鏃ф秷鎭?',
           createdAt: 1_000,
           status: 'sent',
         },
@@ -1053,7 +1204,7 @@ describe('openclaw chat service', () => {
     const result = await sendChatMessage(
       {
         sessionId: 'channel-owned-session',
-        text: '继续当前会话',
+        text: '缁х画褰撳墠浼氳瘽',
       },
       {
         discoverOpenClaw,
@@ -1126,20 +1277,20 @@ describe('openclaw chat service', () => {
       ok: true,
       stdout: JSON.stringify({
         response: {
-          text: '正常发送',
+          text: '姝ｅ父鍙戦€?',
         },
         model: 'openai/gpt-5.4',
       }),
       stderr: '',
       code: 0,
-      streamedText: '正常发送',
+      streamedText: '姝ｅ父鍙戦€?',
       streamedModel: 'openai/gpt-5.4',
     }))
 
     const result = await sendChatMessage(
       {
         sessionId: 'repair-openai-provider-only-session',
-        text: '继续当前会话',
+        text: '缁х画褰撳墠浼氳瘽',
       },
       {
         discoverOpenClaw,
@@ -1255,6 +1406,98 @@ describe('openclaw chat service', () => {
     expect(degraded.canSend).toBe(true)
     expect(degraded.reason).toBe('gateway-offline')
     expect(degraded.connectedModels).toEqual(['openai/gpt-5.4-pro'])
+  })
+
+  it('treats legacy runtime reconcile compatibility mode as running only after the socket probe succeeds', async () => {
+    readEnvFileMock.mockResolvedValue({
+      OPENAI_API_KEY: 'sk-openai',
+    })
+    getModelCatalogMock.mockResolvedValue({
+      total: 1,
+      items: [
+        { key: 'openai/gpt-5.4-pro', provider: 'openai', available: true, name: 'GPT-5.4 Pro' },
+      ],
+      providers: ['openai'],
+      updatedAt: '2026-03-26T00:00:00.000Z',
+      source: 'cache',
+      stale: false,
+    })
+
+    const availability = await getDashboardChatAvailability({
+      now: () => 20_000,
+      getGatewayHealth: async () => ({
+        running: false,
+        raw: '',
+      }),
+      readRuntimeReconcileState: async () => createLegacyCompatRuntimeReconcileStore(),
+      readModelStatus: async () =>
+        ({
+          ok: true,
+          action: 'status',
+          command: ['models', 'status', '--json'],
+          stdout: '',
+          stderr: '',
+          code: 0,
+          data: {
+            defaultModel: 'openai/gpt-5.4-pro',
+            allowed: ['openai/gpt-5.4-pro'],
+            auth: {
+              providers: [{ provider: 'openai', status: 'ok' }],
+            },
+          },
+        }) as any,
+    })
+
+    expect(availability.state).toBe('ready')
+    expect(availability.canSend).toBe(true)
+    expect(availability.gatewayRunning).toBe(true)
+    expect(availability.connectedModels).toContain('openai/gpt-5.4-pro')
+  })
+
+  it('keeps chat availability degraded when legacy runtime reconcile exists but the socket probe still fails', async () => {
+    probeGatewaySocketReadyMock.mockResolvedValueOnce(false)
+    readEnvFileMock.mockResolvedValue({
+      OPENAI_API_KEY: 'sk-openai',
+    })
+    getModelCatalogMock.mockResolvedValue({
+      total: 1,
+      items: [
+        { key: 'openai/gpt-5.4-pro', provider: 'openai', available: true, name: 'GPT-5.4 Pro' },
+      ],
+      providers: ['openai'],
+      updatedAt: '2026-03-26T00:00:00.000Z',
+      source: 'cache',
+      stale: false,
+    })
+
+    const availability = await getDashboardChatAvailability({
+      now: () => 21_000,
+      getGatewayHealth: async () => ({
+        running: false,
+        raw: '',
+      }),
+      readRuntimeReconcileState: async () => createLegacyCompatRuntimeReconcileStore(),
+      readModelStatus: async () =>
+        ({
+          ok: true,
+          action: 'status',
+          command: ['models', 'status', '--json'],
+          stdout: '',
+          stderr: '',
+          code: 0,
+          data: {
+            defaultModel: 'openai/gpt-5.4-pro',
+            allowed: ['openai/gpt-5.4-pro'],
+            auth: {
+              providers: [{ provider: 'openai', status: 'ok' }],
+            },
+          },
+        }) as any,
+    })
+
+    expect(availability.gatewayRunning).toBe(false)
+    expect(availability.state).toBe('degraded')
+    expect(availability.canSend).toBe(true)
   })
 
   it('prefers upstream control ui model status over cli model status for chat availability', async () => {
@@ -1731,14 +1974,14 @@ describe('openclaw chat service', () => {
       JSON.stringify({
         result: {
           response: {
-            content: '你好，我已经连接好了。',
+            content: '浣犲ソ锛屾垜宸茬粡杩炴帴濂戒簡銆?',
           },
         },
         model: 'openai/gpt-5.1-codex',
       })
     )
 
-    expect(parsed.text).toBe('你好，我已经连接好了。')
+    expect(parsed.text).toBe('浣犲ソ锛屾垜宸茬粡杩炴帴濂戒簡銆?' )
     expect(parsed.model).toBe('openai/gpt-5.1-codex')
   })
 
@@ -1813,7 +2056,7 @@ describe('openclaw chat service', () => {
     const result = await sendChatMessage(
       {
         sessionId,
-        text: '你好',
+        text: '浣犲ソ',
       },
       {
         discoverOpenClaw,
@@ -1825,7 +2068,9 @@ describe('openclaw chat service', () => {
           running: true,
         }),
         runStreamingCommand: async (_args, streamOptions) => {
-          streamOptions?.onStdout?.(`${JSON.stringify({ type: 'response.delta', delta: '你好，' })}\n`)
+          streamOptions?.onStdout?.(
+            `${JSON.stringify({ type: 'response.delta', delta: '你好，' })}\n`
+          )
           streamOptions?.onStdout?.(
             `${JSON.stringify({ type: 'response.delta', delta: '我在。', model: 'openai/gpt-5.1-codex' })}\n`
           )
@@ -1833,7 +2078,7 @@ describe('openclaw chat service', () => {
             ok: true,
             stdout: JSON.stringify({
               response: {
-                text: '你好，我在。',
+                text: '浣犲ソ锛屾垜鍦ㄣ€?',
               },
               model: 'openai/gpt-5.1-codex',
               usage: {
@@ -1852,7 +2097,7 @@ describe('openclaw chat service', () => {
     )
 
     expect(result.ok, JSON.stringify(result)).toBe(true)
-    expect(result.message?.text).toBe('你好，我在。')
+    expect(result.message?.text).toBe('浣犲ソ锛屾垜鍦ㄣ€?' )
     expect(result.message?.usage?.totalTokens).toBe(21)
     expect(emittedEvents).toEqual(['assistant-start', 'assistant-delta', 'assistant-delta', 'assistant-complete'])
 
@@ -1862,8 +2107,8 @@ describe('openclaw chat service', () => {
 
     expect(transcript.hasLocalTranscript).toBe(true)
     expect(transcript.messages.map((message) => message.role)).toEqual(['user', 'assistant'])
-    expect(transcript.messages[0].text).toBe('你好')
-    expect(transcript.messages[1].text).toBe('你好，我在。')
+    expect(transcript.messages[0].text).toBe('浣犲ソ')
+    expect(transcript.messages[1].text).toBe('浣犲ソ锛屾垜鍦ㄣ€?' )
     expect(transcript.messages[1].usage?.totalTokens).toBe(21)
   })
 
@@ -1873,7 +2118,7 @@ describe('openclaw chat service', () => {
     const result = await sendChatMessage(
       {
         sessionId: 'offline-before-send',
-        text: '这条消息不应创建空会话',
+        text: '杩欐潯娑堟伅涓嶅簲鍒涘缓绌轰細璇?',
       },
       {
         discoverOpenClaw,
@@ -1916,13 +2161,13 @@ describe('openclaw chat service', () => {
       ok: true,
       stdout: JSON.stringify({
         response: {
-          text: '健康复检后发送成功',
+          text: '鍋ュ悍澶嶆鍚庡彂閫佹垚鍔?',
         },
         model: 'custom-openai/deepseek-chat',
       }),
       stderr: '',
       code: 0,
-      streamedText: '健康复检后发送成功',
+      streamedText: '鍋ュ悍澶嶆鍚庡彂閫佹垚鍔?',
       streamedModel: 'custom-openai/deepseek-chat',
     }))
     const getGatewayHealth = vi.fn(async () => ({
@@ -1933,7 +2178,7 @@ describe('openclaw chat service', () => {
     const result = await sendChatMessage(
       {
         sessionId: 'gateway-health-recheck-session',
-        text: '请继续',
+        text: '璇风户缁?',
       },
       {
         discoverOpenClaw,
@@ -1947,7 +2192,7 @@ describe('openclaw chat service', () => {
         ensureGateway: async () => ({
           ok: false,
           stdout: '',
-          stderr: 'Gateway 启动命令已执行，但系统仍未确认网关已经准备完成',
+          stderr: 'Gateway 鍚姩鍛戒护宸叉墽琛岋紝浣嗙郴缁熶粛鏈‘璁ょ綉鍏冲凡缁忓噯澶囧畬鎴?',
           code: 1,
           running: false,
         }),
@@ -1972,6 +2217,127 @@ describe('openclaw chat service', () => {
     expect(transportRun).toHaveBeenCalledTimes(1)
   })
 
+  it('continues direct chat send when runtime reconcile, port probe, and socket probe confirm legacy compat mode', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-gateway-runtime-compat')
+    const transportRun = vi.fn(async () => ({
+      ok: true,
+      stdout: JSON.stringify({
+        response: {
+          text: '鍏煎妯″紡鍙戦€佹垚鍔?',
+        },
+        model: 'custom-openai/deepseek-chat',
+      }),
+      stderr: '',
+      code: 0,
+      streamedText: '鍏煎妯″紡鍙戦€佹垚鍔?',
+      streamedModel: 'custom-openai/deepseek-chat',
+    }))
+    const probeGatewayPortReachable = vi.fn(async (port?: number) => {
+      expect(port).toBe(7788)
+      return true
+    })
+    const probeGatewaySocketReady = vi.fn(async () => true)
+
+    const result = await sendChatMessage(
+      {
+        sessionId: 'gateway-runtime-compat-session',
+        text: '璇风户缁?',
+      },
+      {
+        discoverOpenClaw,
+        readModelStatus: async () => createModelStatus('custom-openai/deepseek-chat'),
+        runCommand: async () => ({
+          ok: true,
+          stdout: JSON.stringify({ sessions: [] }),
+          stderr: '',
+          code: 0,
+        }),
+        ensureGateway: async () => ({
+          ok: false,
+          stdout: '',
+          stderr: 'Gateway 鍚姩鍛戒护宸叉墽琛岋紝浣嗙郴缁熶粛鏈‘璁ょ綉鍏冲凡缁忓噯澶囧畬鎴?',
+          code: 1,
+          running: false,
+        }),
+        getGatewayHealth: async () => ({
+          running: false,
+          raw: '{"ok":false}',
+        }),
+        readRuntimeReconcileState: async () => createLegacyCompatRuntimeReconcileStore(),
+        readConfiguredGatewayPort: async () => 7788,
+        probeGatewayPortReachable,
+        probeGatewaySocketReady,
+        callGatewayRpc: async (method) => {
+          expect(method).toBe('sessions.create')
+          return {
+            sessionId: 'upstream-session-runtime-compat',
+            sessionKey: 'runtime-compat-key',
+            agentId: 'main',
+            model: 'custom-openai/deepseek-chat',
+          }
+        },
+        chatTransport: {
+          run: transportRun,
+        },
+      }
+    )
+
+    expect(result.ok).toBe(true)
+    expect(probeGatewayPortReachable).toHaveBeenCalledTimes(1)
+    expect(probeGatewaySocketReady).toHaveBeenCalledTimes(1)
+    expect(transportRun).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not continue direct chat send when legacy compat mode only reaches the port but not the socket RPC', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-gateway-runtime-compat-failed-socket')
+    const transportRun = vi.fn(async () => ({
+      ok: true,
+      stdout: '',
+      stderr: '',
+      code: 0,
+      streamedText: 'unexpected',
+    }))
+
+    const result = await sendChatMessage(
+      {
+        sessionId: 'gateway-runtime-compat-session',
+        text: '璇风户缁?',
+      },
+      {
+        discoverOpenClaw,
+        readModelStatus: async () => createModelStatus('custom-openai/deepseek-chat'),
+        runCommand: async () => ({
+          ok: true,
+          stdout: JSON.stringify({ sessions: [] }),
+          stderr: '',
+          code: 0,
+        }),
+        ensureGateway: async () => ({
+          ok: false,
+          stdout: '',
+          stderr: 'Gateway 鍚姩鍛戒护宸叉墽琛岋紝浣嗙郴缁熶粛鏈‘璁ょ綉鍏冲凡缁忓噯澶囧畬鎴?',
+          code: 1,
+          running: false,
+        }),
+        getGatewayHealth: async () => ({
+          running: false,
+          raw: '{"ok":false}',
+        }),
+        readRuntimeReconcileState: async () => createLegacyCompatRuntimeReconcileStore(),
+        readConfiguredGatewayPort: async () => 7788,
+        probeGatewayPortReachable: async () => true,
+        probeGatewaySocketReady: async () => false,
+        chatTransport: {
+          run: transportRun,
+        },
+      }
+    )
+
+    expect(result.ok).toBe(false)
+    expect(result.errorCode).toBe('gateway-offline')
+    expect(transportRun).not.toHaveBeenCalled()
+  })
+
   it('falls back to CLI send for a local shell when gateway ensure fails', async () => {
     const discoverOpenClaw = createDiscovery('fingerprint-local-shell-cli-fallback')
     const localSession = await createLocalChatSession({
@@ -1982,7 +2348,7 @@ describe('openclaw chat service', () => {
     const result = await sendChatMessage(
       {
         sessionId: localSession.sessionId,
-        text: '本地壳也应该能发出去',
+        text: '鏈湴澹充篃搴旇鑳藉彂鍑哄幓',
       },
       {
         discoverOpenClaw,
@@ -2004,7 +2370,7 @@ describe('openclaw chat service', () => {
           ok: true,
           stdout: JSON.stringify({
             response: {
-              text: 'CLI fallback 成功了',
+              text: 'CLI fallback 鎴愬姛浜?',
             },
             model: 'openai/gpt-5.1-codex',
           }),
@@ -2029,10 +2395,11 @@ describe('openclaw chat service', () => {
 
     expect(transcript.hasLocalTranscript).toBe(true)
     expect(transcript.messages.map((message) => message.text)).toEqual([
-      '本地壳也应该能发出去',
-      'CLI fallback 成功了',
+      '鏈湴澹充篃搴旇鑳藉彂鍑哄幓',
+      'CLI fallback 鎴愬姛浜?',
     ])
   })
+
 
   it('forks a legacy local session even when its model matches the latest default model', async () => {
     const discoverOpenClaw = createDiscovery('fingerprint-preflight-reuse')
@@ -2126,7 +2493,7 @@ describe('openclaw chat service', () => {
         {
           id: 'msg-existing',
           role: 'user',
-          text: '旧模型消息',
+          text: '鏃фā鍨嬫秷鎭?',
           createdAt: 1_000,
           status: 'sent',
         },
@@ -2137,7 +2504,7 @@ describe('openclaw chat service', () => {
     const result = await sendChatMessage(
       {
         sessionId: 'stale-local',
-        text: '切换模型后的新消息',
+        text: '鍒囨崲妯″瀷鍚庣殑鏂版秷鎭?',
       },
       {
         discoverOpenClaw,
@@ -2193,7 +2560,7 @@ describe('openclaw chat service', () => {
             ok: true,
             stdout: JSON.stringify({
               response: {
-                text: '新会话已创建',
+                text: '鏂颁細璇濆凡鍒涘缓',
               },
               model: 'custom-open-bigmodel-cn/glm-5',
             }),
@@ -2209,8 +2576,8 @@ describe('openclaw chat service', () => {
     expect(capturedPatchPayloads).toEqual([])
     expect(capturedCommands[0][0]).toBe('agent')
     expect(capturedCommands[0][3]).not.toBe('transport-stale-local')
-    expect(capturedCommands[0][5]).toContain('旧模型消息')
-    expect(capturedCommands[0][5]).toContain('切换模型后的新消息')
+    expect(capturedCommands[0][5]).toContain('鏃фā鍨嬫秷鎭?' )
+    expect(capturedCommands[0][5]).toContain('鍒囨崲妯″瀷鍚庣殑鏂版秷鎭?' )
   })
 
   it('reconciles stale selectedModel back to the confirmed session model when send fails', async () => {
@@ -2228,7 +2595,7 @@ describe('openclaw chat service', () => {
         {
           id: 'msg-existing',
           role: 'user',
-          text: '旧会话消息',
+          text: '鏃т細璇濇秷鎭?',
           createdAt: 1_000,
           status: 'sent',
         },
@@ -2239,7 +2606,7 @@ describe('openclaw chat service', () => {
     const result = await sendChatMessage(
       {
         sessionId: 'failed-send-session',
-        text: '这次发送会失败',
+        text: '杩欐鍙戦€佷細澶辫触',
       },
       {
         discoverOpenClaw,
@@ -2312,7 +2679,7 @@ describe('openclaw chat service', () => {
         {
           id: 'msg-existing',
           role: 'user',
-          text: '旧模型消息',
+          text: '鏃фā鍨嬫秷鎭?',
           createdAt: 1_000,
           status: 'sent',
         },
@@ -2323,7 +2690,7 @@ describe('openclaw chat service', () => {
     const result = await sendChatMessage(
       {
         sessionId: 'supported-local',
-        text: '尝试切到新模型',
+        text: '灏濊瘯鍒囧埌鏂版ā鍨?',
       },
       {
         discoverOpenClaw,
@@ -2388,13 +2755,13 @@ describe('openclaw chat service', () => {
             ok: true,
             stdout: JSON.stringify({
               response: {
-                text: '网关 patch 后继续会话',
+                text: '缃戝叧 patch 鍚庣户缁細璇?',
               },
               model: 'openai/gpt-5.4-pro',
             }),
             stderr: '',
             code: 0,
-            streamedText: '网关 patch 后继续会话',
+            streamedText: '缃戝叧 patch 鍚庣户缁細璇?',
           }),
         },
       }
@@ -2425,7 +2792,7 @@ describe('openclaw chat service', () => {
     const result = await sendChatMessage(
       {
         sessionId: 'runtime-override-session',
-        text: '不要在发送时改模型',
+        text: '涓嶈鍦ㄥ彂閫佹椂鏀规ā鍨?',
         model: 'openai/gpt-4.1-mini',
       } as any,
       {
@@ -2453,7 +2820,7 @@ describe('openclaw chat service', () => {
     const result = await sendChatMessage(
       {
         sessionId: 'bootstrap-session',
-        text: '第一条消息就指定模型',
+        text: '绗竴鏉℃秷鎭氨鎸囧畾妯″瀷',
       },
       {
         discoverOpenClaw,
@@ -2483,7 +2850,7 @@ describe('openclaw chat service', () => {
             ok: true,
             stdout: JSON.stringify({
               response: {
-                text: '启动兼容成功',
+                text: '鍚姩鍏煎鎴愬姛',
               },
               model: 'openai/gpt-5.4-pro',
             }),
@@ -2504,19 +2871,19 @@ describe('openclaw chat service', () => {
       ok: true,
       stdout: JSON.stringify({
         response: {
-          text: '网关模型切换成功',
+          text: '缃戝叧妯″瀷鍒囨崲鎴愬姛',
         },
         model: 'openai/gpt-5.4-pro',
       }),
       stderr: '',
       code: 0,
-      streamedText: '网关模型切换成功',
+      streamedText: '缃戝叧妯″瀷鍒囨崲鎴愬姛',
     }))
 
     const result = await sendChatMessage(
       {
         sessionId: 'bootstrap-gateway-session',
-        text: '第一条消息就指定模型',
+        text: '绗竴鏉℃秷鎭氨鎸囧畾妯″瀷',
       },
       {
         discoverOpenClaw,
@@ -2581,13 +2948,13 @@ describe('openclaw chat service', () => {
         ok: true,
         stdout: JSON.stringify({
           response: {
-            text: 'MiniMax 首条消息恢复成功',
+            text: 'MiniMax 棣栨潯娑堟伅鎭㈠鎴愬姛',
           },
           model: 'minimax-portal/MiniMax-M2.7-highspeed',
         }),
         stderr: '',
         code: 0,
-        streamedText: 'MiniMax 首条消息恢复成功',
+        streamedText: 'MiniMax 棣栨潯娑堟伅鎭㈠鎴愬姛',
         streamedModel: 'minimax-portal/MiniMax-M2.7-highspeed',
       }
     })
@@ -2595,7 +2962,7 @@ describe('openclaw chat service', () => {
     const result = await sendChatMessage(
       {
         sessionId: localSession.sessionId,
-        text: '你好',
+        text: '浣犲ソ',
       },
       {
         discoverOpenClaw,
@@ -2653,7 +3020,7 @@ describe('openclaw chat service', () => {
 
     expect(transcript.sessionKey).toBe('agent:main:created-bootstrap-minimax')
     expect(transcript.model).toBe('minimax-portal/MiniMax-M2.7-highspeed')
-    expect(transcript.messages.map((message) => message.text)).toEqual(['你好', 'MiniMax 首条消息恢复成功'])
+    expect(transcript.messages.map((message) => message.text)).toEqual(['浣犲ソ', 'MiniMax 棣栨潯娑堟伅鎭㈠鎴愬姛'])
 
     const sessions = await listChatSessions({
       discoverOpenClaw,
@@ -2712,13 +3079,13 @@ describe('openclaw chat service', () => {
         ok: true,
         stdout: JSON.stringify({
           response: {
-            text: '本地壳会话已升格为确认会话',
+            text: '鏈湴澹充細璇濆凡鍗囨牸涓虹‘璁や細璇?',
           },
           model: 'minimax-portal/MiniMax-M2.7',
         }),
         stderr: '',
         code: 0,
-        streamedText: '本地壳会话已升格为确认会话',
+        streamedText: '鏈湴澹充細璇濆凡鍗囨牸涓虹‘璁や細璇?',
         streamedModel: 'minimax-portal/MiniMax-M2.7',
       }
     })
@@ -2805,13 +3172,13 @@ describe('openclaw chat service', () => {
         ok: true,
         stdout: JSON.stringify({
           response: {
-            text: '历史会话恢复成功',
+            text: '鍘嗗彶浼氳瘽鎭㈠鎴愬姛',
           },
           model: 'minimax-portal/MiniMax-M2.5',
         }),
         stderr: '',
         code: 0,
-        streamedText: '历史会话恢复成功',
+        streamedText: '鍘嗗彶浼氳瘽鎭㈠鎴愬姛',
         streamedModel: 'minimax-portal/MiniMax-M2.5',
       }
     })
@@ -2819,7 +3186,7 @@ describe('openclaw chat service', () => {
     const result = await sendChatMessage(
       {
         sessionId: 'history-minimax-session',
-        text: '继续历史会话',
+        text: '缁х画鍘嗗彶浼氳瘽',
       },
       {
         discoverOpenClaw,
@@ -2901,7 +3268,7 @@ describe('openclaw chat service', () => {
     })
 
     expect(transcript.model).toBe('minimax-portal/MiniMax-M2.5')
-    expect(transcript.messages.map((message) => message.text)).toEqual(['继续历史会话', '历史会话恢复成功'])
+    expect(transcript.messages.map((message) => message.text)).toEqual(['缁х画鍘嗗彶浼氳瘽', '鍘嗗彶浼氳瘽鎭㈠鎴愬姛'])
 
     const sessions = await listChatSessions({
       discoverOpenClaw,
@@ -2949,13 +3316,13 @@ describe('openclaw chat service', () => {
         ok: true,
         stdout: JSON.stringify({
           response: {
-            text: '双 key 状态下也恢复成功',
+            text: '鍙?key 鐘舵€佷笅涔熸仮澶嶆垚鍔?',
           },
           model: 'minimax-portal/MiniMax-M2.5',
         }),
         stderr: '',
         code: 0,
-        streamedText: '双 key 状态下也恢复成功',
+        streamedText: '鍙?key 鐘舵€佷笅涔熸仮澶嶆垚鍔?',
         streamedModel: 'minimax-portal/MiniMax-M2.5',
       }
     })
@@ -2963,7 +3330,7 @@ describe('openclaw chat service', () => {
     const result = await sendChatMessage(
       {
         sessionId: 'history-minimax-session-both-allowed',
-        text: '继续历史会话',
+        text: '缁х画鍘嗗彶浼氳瘽',
       },
       {
         discoverOpenClaw,
@@ -3184,13 +3551,13 @@ describe('openclaw chat service', () => {
         ok: true,
         stdout: JSON.stringify({
           response: {
-            text: 'MiniMax 首条消息恢复成功',
+            text: 'MiniMax 棣栨潯娑堟伅鎭㈠鎴愬姛',
           },
           model: upstreamSession.model,
         }),
         stderr: '',
         code: 0,
-        streamedText: 'MiniMax 首条消息恢复成功',
+        streamedText: 'MiniMax 棣栨潯娑堟伅鎭㈠鎴愬姛',
         streamedModel: upstreamSession.model,
       }
     })
@@ -3218,7 +3585,7 @@ describe('openclaw chat service', () => {
       }
     )
 
-    expect(sendResult.ok).toBe(true)
+    expect(sendResult.ok, JSON.stringify(sendResult)).toBe(true)
     expect(callGatewayRpc).toHaveBeenNthCalledWith(
       1,
       'sessions.create',
@@ -3294,7 +3661,7 @@ describe('openclaw chat service', () => {
         ok: true,
         stdout: JSON.stringify({
           response: {
-            text: '启动兼容成功',
+            text: '鍚姩鍏煎鎴愬姛',
           },
           model: 'openai/gpt-5.4-pro',
         }),
@@ -3306,7 +3673,7 @@ describe('openclaw chat service', () => {
     const result = await sendChatMessage(
       {
         sessionId: createdSession.sessionId,
-        text: '第一条消息就指定模型',
+        text: '绗竴鏉℃秷鎭氨鎸囧畾妯″瀷',
       },
       {
         discoverOpenClaw,
@@ -3379,7 +3746,7 @@ describe('openclaw chat service', () => {
     const result = await sendChatMessage(
       {
         sessionId: 'external-session',
-        text: '从外部历史会话继续',
+        text: '浠庡閮ㄥ巻鍙蹭細璇濈户缁?',
       },
       {
         discoverOpenClaw,
@@ -3413,7 +3780,7 @@ describe('openclaw chat service', () => {
             ok: true,
             stdout: JSON.stringify({
               response: {
-                text: '已转入本地会话',
+                text: '宸茶浆鍏ユ湰鍦颁細璇?',
               },
               model: 'openai/gpt-5.4-pro',
             }),
@@ -3436,19 +3803,19 @@ describe('openclaw chat service', () => {
       ok: true,
       stdout: JSON.stringify({
         response: {
-          text: '渠道会话原地续写成功',
+          text: '娓犻亾浼氳瘽鍘熷湴缁啓鎴愬姛',
         },
         model: 'openai/gpt-5.4-pro',
       }),
       stderr: '',
       code: 0,
-      streamedText: '渠道会话原地续写成功',
+      streamedText: '娓犻亾浼氳瘽鍘熷湴缁啓鎴愬姛',
     }))
 
     const result = await sendChatMessage(
       {
         sessionId: 'channel-session',
-        text: '继续渠道会话',
+        text: '缁х画娓犻亾浼氳瘽',
       },
       {
         discoverOpenClaw,
@@ -3536,7 +3903,7 @@ describe('openclaw chat service', () => {
     const result = await sendChatMessage(
       {
         sessionId: 'external-openclaw-history',
-        text: '切到 OpenAI 后发第一条消息',
+        text: '鍒囧埌 OpenAI 鍚庡彂绗竴鏉℃秷鎭?',
       },
       {
         discoverOpenClaw,
@@ -3566,13 +3933,13 @@ describe('openclaw chat service', () => {
               ok: true,
               stdout: JSON.stringify({
                 response: {
-                  text: '已经继续当前 OpenClaw 历史会话',
+                  text: '宸茬粡缁х画褰撳墠 OpenClaw 鍘嗗彶浼氳瘽',
                 },
                 model: 'minimax/MiniMax-M2.1',
               }),
               stderr: '',
               code: 0,
-              streamedText: '已经继续当前 OpenClaw 历史会话',
+              streamedText: '宸茬粡缁х画褰撳墠 OpenClaw 鍘嗗彶浼氳瘽',
               streamedModel: 'minimax/MiniMax-M2.1',
             }
           },
@@ -3597,7 +3964,7 @@ describe('openclaw chat service', () => {
     const result = await sendChatMessage(
       {
         sessionId: 'feishu-session',
-        text: '继续在飞书会话里聊',
+        text: '缁х画鍦ㄩ涔︿細璇濋噷鑱?',
       },
       {
         discoverOpenClaw,
@@ -3633,13 +4000,13 @@ describe('openclaw chat service', () => {
               ok: true,
               stdout: JSON.stringify({
                 response: {
-                  text: '收到，继续当前飞书会话。',
+                  text: '鏀跺埌锛岀户缁綋鍓嶉涔︿細璇濄€?',
                 },
                 model: 'zai/glm-5',
               }),
               stderr: '',
               code: 0,
-              streamedText: '收到，继续当前飞书会话。',
+              streamedText: '鏀跺埌锛岀户缁綋鍓嶉涔︿細璇濄€?',
               streamedModel: 'zai/glm-5',
             }
           },
@@ -3660,7 +4027,7 @@ describe('openclaw chat service', () => {
     const result = await sendChatMessage(
       {
         sessionId: 'remote-history',
-        text: '确认真实落盘会话',
+        text: '纭鐪熷疄钀界洏浼氳瘽',
       },
       {
         discoverOpenClaw,
@@ -3692,7 +4059,7 @@ describe('openclaw chat service', () => {
           ok: true,
           stdout: JSON.stringify({
             response: {
-              text: '已写入新 transcript',
+              text: '宸插啓鍏ユ柊 transcript',
             },
             model: 'openai/gpt-5.4-pro',
           }),
@@ -3718,7 +4085,7 @@ describe('openclaw chat service', () => {
     })
 
     expect(transcript.sessionId).toBe(result.sessionId)
-    expect(transcript.messages.at(-1)?.text).toBe('已写入新 transcript')
+    expect(transcript.messages.at(-1)?.text).toBe('宸插啓鍏ユ柊 transcript')
   })
 
   it('uses a safe default thinking level instead of relying on implicit low', async () => {
@@ -3728,7 +4095,7 @@ describe('openclaw chat service', () => {
     const result = await sendChatMessage(
       {
         sessionId: 'thinking-safe-default',
-        text: '测试安全默认 thinking',
+        text: '娴嬭瘯瀹夊叏榛樿 thinking',
       },
       {
         discoverOpenClaw,
@@ -3752,7 +4119,7 @@ describe('openclaw chat service', () => {
             ok: true,
             stdout: JSON.stringify({
               response: {
-                text: '安全默认值发送成功',
+                text: '瀹夊叏榛樿鍊煎彂閫佹垚鍔?',
               },
               model: 'openai/gpt-5.4-pro',
             }),
@@ -3775,7 +4142,7 @@ describe('openclaw chat service', () => {
     const result = await sendChatMessage(
       {
         sessionId: 'thinking-learn',
-        text: '学习 thinking fallback',
+        text: '瀛︿範 thinking fallback',
         thinking: 'low',
       },
       {
@@ -3811,7 +4178,7 @@ describe('openclaw chat service', () => {
             ok: true,
             stdout: JSON.stringify({
               response: {
-                text: 'fallback retry 成功',
+                text: 'fallback retry 鎴愬姛',
               },
               model: 'openai/gpt-5.4-pro',
             }),
@@ -3859,7 +4226,7 @@ describe('openclaw chat service', () => {
         ok: true,
         stdout: JSON.stringify({
           response: {
-            text: 'learned fallback 成功',
+            text: 'learned fallback 鎴愬姛',
           },
           model: 'openai/gpt-5.4-pro',
         }),
@@ -3890,7 +4257,7 @@ describe('openclaw chat service', () => {
     const firstResult = await sendChatMessage(
       {
         sessionId: 'thinking-reuse-first',
-        text: '第一次学习',
+        text: '绗竴娆″涔?',
         thinking: 'low',
       },
       sharedOptions
@@ -3901,7 +4268,7 @@ describe('openclaw chat service', () => {
     const secondResult = await sendChatMessage(
       {
         sessionId: 'thinking-reuse-second',
-        text: '第二次直接使用 learned fallback',
+        text: '绗簩娆＄洿鎺ヤ娇鐢?learned fallback',
       },
       sharedOptions
     )
@@ -3918,7 +4285,7 @@ describe('openclaw chat service', () => {
     const result = await sendChatMessage(
       {
         sessionId: 'thinking-explicit',
-        text: '显式 thinking',
+        text: '鏄惧紡 thinking',
         thinking: 'high',
       },
       {
@@ -3943,7 +4310,7 @@ describe('openclaw chat service', () => {
             ok: true,
             stdout: JSON.stringify({
               response: {
-                text: '显式值发送成功',
+                text: '鏄惧紡鍊煎彂閫佹垚鍔?',
               },
               model: 'openai/gpt-5.4-pro',
             }),
@@ -3997,7 +4364,7 @@ describe('openclaw chat service', () => {
         {
           id: 'msg-1',
           role: 'user',
-          text: '本地消息',
+          text: '鏈湴娑堟伅',
           createdAt: 2000,
           status: 'sent',
         },
@@ -4053,7 +4420,7 @@ describe('openclaw chat service', () => {
     expect(sessions[1].canContinue).toBe(true)
     expect(sessions[1].authorityKind).toBe('upstream-channel')
     expect(sessions[1].cachePresence).toBe('none')
-    expect(sessions[1].modelSwitchBlockedReason).toContain('渠道会话')
+    expect(sessions[1].modelSwitchBlockedReason).toContain('当前渠道会话')
   })
 
   it('marks a freshly created empty local conversation as not patchable yet', async () => {
@@ -4289,7 +4656,7 @@ describe('openclaw chat service', () => {
           key: 'agent:main:created-upstream',
         }),
       })
-    ).rejects.toThrow(/unrecognized payload|结果不确定/)
+    ).rejects.toThrow(/unrecognized payload|invalid payload/i)
 
     const sessions = await listChatSessions({
       discoverOpenClaw,
@@ -4389,7 +4756,7 @@ describe('openclaw chat service', () => {
     const sendResult = await sendChatMessage(
       {
         sessionId: createdSession.sessionId,
-        text: '创建后首条消息',
+        text: '鍒涘缓鍚庨鏉℃秷鎭?',
       },
       {
         discoverOpenClaw,
@@ -4412,20 +4779,20 @@ describe('openclaw chat service', () => {
             ok: true,
             stdout: JSON.stringify({
               response: {
-                text: '收到，继续在已确认会话内回答。',
+                text: '鏀跺埌锛岀户缁湪宸茬‘璁や細璇濆唴鍥炵瓟銆?',
               },
               model: 'openai/gpt-5.1-codex',
             }),
             stderr: '',
             code: 0,
-            streamedText: '收到，继续在已确认会话内回答。',
+            streamedText: '鏀跺埌锛岀户缁湪宸茬‘璁や細璇濆唴鍥炵瓟銆?',
             streamedModel: 'openai/gpt-5.1-codex',
           }),
         },
       }
     )
 
-    expect(sendResult.ok).toBe(true)
+    expect(sendResult.ok, JSON.stringify(sendResult)).toBe(true)
 
     const sessions = await listChatSessions({
       discoverOpenClaw,
@@ -4527,7 +4894,7 @@ describe('openclaw chat service', () => {
         {
           id: 'msg-1',
           role: 'user',
-          text: '本地消息',
+          text: '鏈湴娑堟伅',
           createdAt: 2_000,
           status: 'sent',
         },
@@ -4655,7 +5022,7 @@ describe('openclaw chat service', () => {
                 {
                   id: 'assistant-1',
                   role: 'assistant',
-                  text: '外部直接历史内容',
+                  text: '澶栭儴鐩存帴鍘嗗彶鍐呭',
                   createdAt: 9_001,
                   model: 'zai/glm-5',
                 },
@@ -4779,7 +5146,7 @@ describe('openclaw chat service', () => {
     expect(transcript.sessionKey).toBe('agent:feishu-default:feishu:default:direct:ou_456')
     expect(transcript.model).toBe('google/gemini-2.5-pro')
     expect(transcript.canPatchModel).toBe(false)
-    expect(transcript.modelSwitchBlockedReason).toContain('渠道会话')
+    expect(transcript.modelSwitchBlockedReason).toContain('当前渠道会话')
     expect(transcript.updatedAt).toBe(9_000)
     expect(transcript.hasLocalTranscript).toBe(false)
     expect(transcript.historySource).toBe('sessions-get')
@@ -4829,7 +5196,7 @@ describe('openclaw chat service', () => {
                 {
                   id: 'user-1',
                   role: 'user',
-                  content: [{ type: 'text', text: '查一下深圳天气' }],
+                  content: [{ type: 'text', text: '查一下深圳天气？' }],
                   createdAt: 9_001,
                 },
                 {
@@ -4846,7 +5213,7 @@ describe('openclaw chat service', () => {
                 {
                   id: 'assistant-1',
                   role: 'assistant',
-                  content: [{ type: 'text', text: '深圳明天有阵雨，23-24°C。' }],
+                  content: [{ type: 'text', text: '深圳明天有阵雨，23-24C。' }],
                   createdAt: 9_003,
                   model: 'openai/gpt-5.4',
                 },
@@ -4869,7 +5236,7 @@ describe('openclaw chat service', () => {
     expect(transcript.messages).toHaveLength(2)
     expect(transcript.messages[0].role).toBe('user')
     expect(transcript.messages[1].role).toBe('assistant')
-    expect(transcript.messages[1].text).toBe('深圳明天有阵雨，23-24°C。')
+    expect(transcript.messages[1].text).toBe('深圳明天有阵雨，23-24C。')
   })
 
   it('prefers chat.history for direct sessions when the history flag and capability gate are enabled', async () => {
@@ -4913,7 +5280,7 @@ describe('openclaw chat service', () => {
                 {
                   id: 'user-1',
                   role: 'user',
-                  content: [{ type: 'text', text: '继续这个 direct 会话' }],
+                  content: [{ type: 'text', text: '缁х画杩欎釜 direct 浼氳瘽' }],
                   createdAt: 9_501,
                 },
                 {
@@ -5039,7 +5406,7 @@ describe('openclaw chat service', () => {
         {
           id: 'local-user-1',
           role: 'user',
-          text: '本地缓存正文',
+          text: '鏈湴缂撳瓨姝ｆ枃',
           createdAt: 9_700,
           status: 'sent',
         },
@@ -5153,7 +5520,7 @@ Sender (untrusted metadata):
 }
 \`\`\`
 
-你用的是什么模型？`,
+浣犵敤鐨勬槸浠€涔堟ā鍨嬶紵`,
                     },
                   ],
                   createdAt: 9_001,
@@ -5176,7 +5543,7 @@ Sender (untrusted metadata):
 
     expect(transcript.messages).toHaveLength(1)
     expect(transcript.messages[0].role).toBe('user')
-    expect(transcript.messages[0].text).toBe('你用的是什么模型？')
+    expect(transcript.messages[0].text).toBe('浣犵敤鐨勬槸浠€涔堟ā鍨嬶紵')
     expect(transcript.messages[0].text).not.toContain('untrusted metadata')
     expect(transcript.messages[0].text).not.toContain('System:')
   })
@@ -5214,7 +5581,7 @@ Sender (untrusted metadata):
                 {
                   id: 'user-hidden-1',
                   role: 'user',
-                  content: [{ type: 'text', text: '[[reply_to_current]]\n[message_id: om_x100]\nou_11ec143ee4079fad7afe9c5fa042404f: 1\n你用的是什么模型？' }],
+                  content: [{ type: 'text', text: '[[reply_to_current]]\n[message_id: om_x100]\nou_11ec143ee4079fad7afe9c5fa042404f: 1\n浣犵敤鐨勬槸浠€涔堟ā鍨嬶紵' }],
                   createdAt: 9_101,
                 },
                 {
@@ -5252,7 +5619,7 @@ Sender (untrusted metadata):
 
     expect(transcript.messages).toHaveLength(2)
     expect(transcript.messages[0].role).toBe('user')
-    expect(transcript.messages[0].text).toBe('你用的是什么模型？')
+    expect(transcript.messages[0].text).toBe('浣犵敤鐨勬槸浠€涔堟ā鍨嬶紵')
     expect(transcript.messages[0].text).not.toContain('reply_to_current')
     expect(transcript.messages[0].text).not.toContain('message_id')
     expect(transcript.messages[1].role).toBe('assistant')
@@ -5270,7 +5637,7 @@ Sender (untrusted metadata):
         {
           id: 'local-msg-1',
           role: 'user',
-          text: '本地临时消息',
+          text: '鏈湴涓存椂娑堟伅',
           createdAt: 8_000,
           status: 'sent',
         },
@@ -5310,7 +5677,7 @@ Sender (untrusted metadata):
                 {
                   id: 'external-user-1',
                   role: 'user',
-                  content: [{ type: 'text', text: '你用的是什么模型？' }],
+                  content: [{ type: 'text', text: '浣犵敤鐨勬槸浠€涔堟ā鍨嬶紵' }],
                   createdAt: 9_201,
                 },
                 {
@@ -5337,7 +5704,7 @@ Sender (untrusted metadata):
 
     expect(transcript.hasLocalTranscript).toBe(false)
     expect(transcript.messages).toHaveLength(2)
-    expect(transcript.messages[0].text).toContain('你用的是什么模型')
+    expect(transcript.messages[0].text).toContain('浣犵敤鐨勬槸浠€涔堟ā鍨')
     expect(transcript.messages[1].text).toContain('GLM-5')
   })
 
@@ -5435,7 +5802,7 @@ Sender (untrusted metadata):
         {
           id: 'local-msg-1',
           role: 'user',
-          text: '旧消息',
+          text: '鏃ф秷鎭?',
           createdAt: 5_000,
           status: 'sent',
         },
@@ -5514,7 +5881,7 @@ Sender (untrusted metadata):
         {
           id: 'local-msg-1',
           role: 'user',
-          text: '旧消息',
+          text: '鏃ф秷鎭?',
           createdAt: 5_000,
           status: 'sent',
         },
@@ -5680,13 +6047,13 @@ Sender (untrusted metadata):
       ok: true,
       stdout: JSON.stringify({
         response: {
-          text: '继续成功',
+          text: '缁х画鎴愬姛',
         },
         model: 'openai/gpt-5.4-pro',
       }),
       stderr: '',
       code: 0,
-      streamedText: '继续成功',
+      streamedText: '缁х画鎴愬姛',
       streamedModel: 'openai/gpt-5.4-pro',
     }))
 
@@ -5703,7 +6070,7 @@ Sender (untrusted metadata):
         {
           id: 'local-msg-1',
           role: 'user',
-          text: '旧消息',
+          text: '鏃ф秷鎭?',
           createdAt: 5_000,
           status: 'sent',
         },
@@ -5714,7 +6081,7 @@ Sender (untrusted metadata):
     const sendResult = await sendChatMessage(
       {
         sessionId: 'trusted-session',
-        text: '继续当前会话',
+        text: '缁х画褰撳墠浼氳瘽',
       },
       {
         discoverOpenClaw,
@@ -5749,7 +6116,7 @@ Sender (untrusted metadata):
       }
     )
 
-    expect(sendResult.ok).toBe(true)
+    expect(sendResult.ok, JSON.stringify(sendResult)).toBe(true)
     expect(sendResult.sessionId).toBe('trusted-session')
     expect(transportRun).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -5759,7 +6126,7 @@ Sender (untrusted metadata):
     )
   })
 
-  it('prefers the control ui browser chat.send path for trusted upstream sessions by default', async () => {
+  it('uses the platform-default trusted upstream send transport and keeps sends successful', async () => {
     const discoverOpenClaw = createDiscovery('fingerprint-control-ui-chat-send')
     runGatewayChatViaControlUiBrowserMock.mockResolvedValue({
       runId: 'run-control-ui-1',
@@ -5769,7 +6136,7 @@ Sender (untrusted metadata):
         runId: 'run-control-ui-1',
         sessionKey: 'agent:main:history-direct-session',
         message: {
-          text: '通过网页通道发送成功',
+          text: '閫氳繃缃戦〉閫氶亾鍙戦€佹垚鍔?',
           model: 'openai/gpt-5.4-pro',
           usage: {
             inputTokens: 12,
@@ -5782,7 +6149,7 @@ Sender (untrusted metadata):
     const sendResult = await sendChatMessage(
       {
         sessionId: 'trusted-default-control-ui',
-        text: '继续当前 confirmed 会话',
+        text: '缁х画褰撳墠 confirmed 浼氳瘽',
       },
       {
         discoverOpenClaw,
@@ -5811,11 +6178,24 @@ Sender (untrusted metadata):
           stderr: '',
           code: 0,
         }),
+        runStreamingCommand: async () => ({
+          ok: true,
+          stdout: JSON.stringify({
+            response: {
+              text: 'socket 閫氶亾鍙戦€佹垚鍔?',
+            },
+            model: 'openai/gpt-5.4-pro',
+          }),
+          stderr: '',
+          code: 0,
+          streamedText: 'socket 閫氶亾鍙戦€佹垚鍔?',
+          streamedModel: 'openai/gpt-5.4-pro',
+        }),
       }
     )
 
     expect(sendResult.ok).toBe(true)
-    expect(sendResult.message?.text).toBe('通过网页通道发送成功')
+    expect(sendResult.message?.text).toBe('閫氳繃缃戦〉閫氶亾鍙戦€佹垚鍔?')
     expect(runGatewayChatViaControlUiBrowserMock).toHaveBeenCalledTimes(1)
     expect(runGatewayChatViaControlUiBrowserMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -5824,10 +6204,68 @@ Sender (untrusted metadata):
       }),
       expect.objectContaining({
         sessionKey: 'agent:main:history-direct-session',
-        message: '继续当前 confirmed 会话',
+        message: '缁х画褰撳墠 confirmed 浼氳瘽',
         thinking: 'off',
       })
     )
+    expect(runCliStreamingMock).not.toHaveBeenCalled()
+  })
+
+  it('falls back to socket transport when the control ui trusted send path times out', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-control-ui-chat-send-timeout-fallback')
+    runGatewayChatViaControlUiBrowserMock.mockRejectedValue(new Error('control ui chat.send timeout for agent:main:history-direct-session'))
+
+    const sendResult = await sendChatMessage(
+      {
+        sessionId: 'trusted-control-ui-timeout',
+        text: '鎺у埗鐣岄潰瓒呮椂鍚庣户缁彂閫?',
+      },
+      {
+        discoverOpenClaw,
+        readModelStatus: async () => createModelStatus('openai/gpt-5.4-pro'),
+        ensureGateway: async () => ({
+          ok: true,
+          stdout: '',
+          stderr: '',
+          code: 0,
+          running: true,
+        }),
+        runCommand: async () => ({
+          ok: true,
+          stdout: JSON.stringify({
+            sessions: [
+              {
+                sessionId: 'trusted-control-ui-timeout',
+                key: 'agent:main:history-direct-session',
+                agentId: 'main',
+                model: 'openai/gpt-5.4-pro',
+                updatedAt: 6_000,
+                kind: 'direct',
+              },
+            ],
+          }),
+          stderr: '',
+          code: 0,
+        }),
+        runStreamingCommand: async () => ({
+          ok: true,
+          stdout: JSON.stringify({
+            response: {
+              text: 'socket fallback 缁х画鎴愬姛',
+            },
+            model: 'openai/gpt-5.4-pro',
+          }),
+          stderr: '',
+          code: 0,
+          streamedText: 'socket fallback 缁х画鎴愬姛',
+          streamedModel: 'openai/gpt-5.4-pro',
+        }),
+      }
+    )
+
+    expect(sendResult.ok).toBe(true)
+    expect(sendResult.message?.text).toBe('socket fallback 缁х画鎴愬姛')
+    expect(runGatewayChatViaControlUiBrowserMock).toHaveBeenCalledTimes(1)
     expect(runCliStreamingMock).not.toHaveBeenCalled()
   })
 
@@ -5838,13 +6276,13 @@ Sender (untrusted metadata):
       ok: true,
       stdout: JSON.stringify({
         response: {
-          text: '继续成功',
+          text: '缁х画鎴愬姛',
         },
         model: 'openai/gpt-5.4-pro',
       }),
       stderr: '',
       code: 0,
-      streamedText: '继续成功',
+      streamedText: '缁х画鎴愬姛',
       streamedModel: 'openai/gpt-5.4-pro',
     }))
 
@@ -5860,7 +6298,7 @@ Sender (untrusted metadata):
         {
           id: 'local-msg-1',
           role: 'user',
-          text: '旧消息',
+          text: '鏃ф秷鎭?',
           createdAt: 5_000,
           status: 'sent',
         },
@@ -5914,7 +6352,7 @@ Sender (untrusted metadata):
     const sendResult = await sendChatMessage(
       {
         sessionId: 'patched-session',
-        text: '继续当前会话',
+        text: '缁х画褰撳墠浼氳瘽',
       },
       {
         discoverOpenClaw,
@@ -5971,13 +6409,13 @@ Sender (untrusted metadata):
         ok: true,
         stdout: JSON.stringify({
           response: {
-            text: '切换后继续成功',
+            text: '鍒囨崲鍚庣户缁垚鍔?',
           },
           model: 'openai/gpt-5.4-pro',
         }),
         stderr: '',
         code: 0,
-        streamedText: '切换后继续成功',
+        streamedText: '鍒囨崲鍚庣户缁垚鍔?',
         streamedModel: 'openai/gpt-5.4-pro',
       }
     })
@@ -5992,7 +6430,7 @@ Sender (untrusted metadata):
         {
           id: 'local-msg-1',
           role: 'user',
-          text: '旧消息',
+          text: '鏃ф秷鎭?',
           createdAt: 5_000,
           status: 'sent',
         },
@@ -6003,7 +6441,7 @@ Sender (untrusted metadata):
     const result = await sendChatMessage(
       {
         sessionId: 'send-patch-session',
-        text: '继续当前会话',
+        text: '缁х画褰撳墠浼氳瘽',
       },
       {
         discoverOpenClaw,
@@ -6073,7 +6511,7 @@ Sender (untrusted metadata):
         {
           id: 'msg-existing',
           role: 'assistant',
-          text: '旧回复',
+          text: '鏃у洖澶?',
           createdAt: 1_000,
           status: 'sent',
         },
@@ -6111,7 +6549,7 @@ Sender (untrusted metadata):
     )
 
     expect(result.ok).toBe(false)
-    expect(result.messageText).not.toContain('当前 OpenClaw 版本还不支持')
+    expect(result.messageText).not.toContain('褰撳墠 OpenClaw 鐗堟湰杩樹笉鏀寔')
     expect(result.messageText).toContain('Gateway 尚未就绪')
   })
 
@@ -6129,7 +6567,7 @@ Sender (untrusted metadata):
         {
           id: 'msg-existing',
           role: 'assistant',
-          text: '旧回复',
+          text: '鏃у洖澶?',
           createdAt: 1_000,
           status: 'sent',
         },
@@ -6217,7 +6655,7 @@ Sender (untrusted metadata):
         {
           id: 'msg-existing',
           role: 'assistant',
-          text: '旧回复',
+          text: '鏃у洖澶?',
           createdAt: 1_000,
           status: 'sent',
         },
@@ -6268,7 +6706,7 @@ Sender (untrusted metadata):
         {
           id: 'local-msg-1',
           role: 'user',
-          text: '旧消息',
+          text: '鏃ф秷鎭?',
           createdAt: 5_000,
           status: 'sent',
         },
@@ -6359,7 +6797,7 @@ Sender (untrusted metadata):
               messages: Array.from({ length: 200 }, (_, index) => ({
                 id: `msg-${index}`,
                 role: index % 2 === 0 ? 'user' : 'assistant',
-                content: [{ type: 'text', text: `消息 ${index}` }],
+                content: [{ type: 'text', text: `娑堟伅 ${index}` }],
                 createdAt: 9_000 + index,
               })),
             }),
@@ -6461,7 +6899,7 @@ Sender (untrusted metadata):
         {
           id: 'msg-1',
           role: 'user',
-          text: '要清空的消息',
+          text: '瑕佹竻绌虹殑娑堟伅',
           createdAt: 5_000,
           status: 'sent',
         },
@@ -6534,7 +6972,7 @@ Sender (untrusted metadata):
     const result = await sendChatMessage(
       {
         sessionId: 'fallback-session',
-        text: '测试回退',
+        text: '娴嬭瘯鍥為€€',
       },
       {
         discoverOpenClaw,
@@ -6548,7 +6986,7 @@ Sender (untrusted metadata):
         runStreamingCommand: async (_args, streamOptions) => {
           streamOptions?.onStdout?.('{\n')
           streamOptions?.onStdout?.('  "response": {\n')
-          streamOptions?.onStdout?.('    "text": "最终回退成功"\n')
+          streamOptions?.onStdout?.('    "text": "鏈€缁堝洖閫€鎴愬姛"\n')
           streamOptions?.onStdout?.('  },\n')
           streamOptions?.onStdout?.('  "model": "openai/gpt-5.1-codex"\n')
           streamOptions?.onStdout?.('}\n')
@@ -6556,7 +6994,7 @@ Sender (untrusted metadata):
             ok: true,
             stdout: JSON.stringify({
               response: {
-                text: '最终回退成功',
+                text: '鏈€缁堝洖閫€鎴愬姛',
               },
               model: 'openai/gpt-5.1-codex',
             }),
@@ -6569,8 +7007,60 @@ Sender (untrusted metadata):
     )
 
     expect(result.ok).toBe(true)
-    expect(result.message?.text).toBe('最终回退成功')
+    expect(result.message?.text).toBe('鏈€缁堝洖閫€鎴愬姛')
     expect(emittedEvents).toEqual(['assistant-start', 'assistant-delta', 'assistant-complete'])
+  })
+
+  it('keeps bundled Windows sends on the gateway socket path instead of silently falling back to CLI', async () => {
+    inspectBundledOpenClawDeliveryStatusMock.mockReturnValue({
+      manifestPath: 'D:\\bundle\\manifest.json',
+      manifest: {} as any,
+      platform: 'win32',
+      arch: 'x64',
+      defaultDeliveryMode: 'bundled-runtime',
+      targetDeliveryMode: 'bundled-runtime',
+      runtimeArtifact: {} as any,
+      runtimePath: 'D:\\bundle\\runtime\\windows-x64',
+      runtimeBinaryPath: 'D:\\bundle\\runtime\\windows-x64\\openclaw.cmd',
+    })
+
+    const discoverOpenClaw = createDiscovery('fingerprint-bundled-windows-send')
+    const result = await sendChatMessage(
+      {
+        sessionId: 'bundled-win-session',
+        text: '测试 bundled runtime 发送链路',
+      },
+      {
+        discoverOpenClaw,
+        ensureGateway: async () => ({
+          ok: true,
+          stdout: '',
+          stderr: '',
+          code: 0,
+          running: true,
+        }),
+        runStreamingCommand: async () => ({
+          ok: true,
+          stdout: JSON.stringify({
+            response: {
+              text: 'CLI fallback should stay unused on bundled Windows',
+            },
+            model: 'openai/gpt-5.1-codex',
+          }),
+          stderr: '',
+          code: 0,
+        }),
+      }
+    )
+
+    if (process.platform === 'win32') {
+      expect(result.ok).toBe(false)
+      expect(result.sessionId).toBe('bundled-win-session')
+      expect(runCliStreamingMock).not.toHaveBeenCalled()
+    } else {
+      expect(result.ok).toBe(true)
+      expect(runCliStreamingMock).toHaveBeenCalledTimes(1)
+    }
   })
 
   it('returns canceled when the chat stream is stopped', async () => {
@@ -6607,7 +7097,7 @@ Sender (untrusted metadata):
     const result = await sendChatMessage(
       {
         sessionId: 'cancel-session',
-        text: '停止测试',
+        text: '鍋滄娴嬭瘯',
       },
       {
         discoverOpenClaw,

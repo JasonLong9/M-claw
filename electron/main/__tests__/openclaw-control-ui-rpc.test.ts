@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+﻿import { describe, expect, it, vi } from 'vitest'
 import {
   buildOpenClawControlUiUrl,
   callGatewayRpcViaControlUiBrowser,
@@ -77,7 +77,8 @@ describe('openclaw control ui rpc', () => {
 
     expect(loadedUrl).toBe('http://127.0.0.1:18789/ops/#token=gateway-token')
     expect(executeJavaScript).toHaveBeenCalledTimes(1)
-    expect(executedScript).toContain('openclaw-app')
+    expect(executedScript).toContain(`customElements.whenDefined('openclaw-app')`)
+    expect(executedScript).toContain(`app.client.request(method, params)`)
     expect(executedScript).toContain('"sessions.patch"')
     expect(executedScript).toContain('"agent:main:transport-123"')
     expect(result).toEqual({
@@ -206,7 +207,7 @@ describe('openclaw control ui rpc', () => {
                 payload: {
                   state: 'final',
                   message: {
-                    text: '来自 control ui 的最终回答',
+                    text: 'from control ui final reply',
                   },
                 },
               }
@@ -216,7 +217,7 @@ describe('openclaw control ui rpc', () => {
       },
       {
         sessionKey: 'agent:main:trusted-session',
-        message: '继续会话',
+        message: '缁х画浼氳瘽',
         thinking: 'off',
         timeoutMs: 10_000,
       }
@@ -224,15 +225,17 @@ describe('openclaw control ui rpc', () => {
 
     expect(loadedUrl).toBe('http://127.0.0.1:18789/#token=gateway-token')
     expect(executedScript).toContain(`"agent:main:trusted-session"`)
+    expect(executedScript).toContain(`customElements.whenDefined('openclaw-app')`)
     expect(executedScript).toContain(`'chat.send'`)
-    expect(executedScript).toContain(`"继续会话"`)
+    expect(executedScript).toContain(`client.request('chat.send'`)
+    expect(executedScript).toContain(`"缁х画浼氳瘽"`)
     expect(result).toEqual({
       runId: 'run-123',
       sessionKey: 'agent:main:trusted-session',
       payload: {
         state: 'final',
         message: {
-          text: '来自 control ui 的最终回答',
+          text: 'from control ui final reply',
         },
       },
     })

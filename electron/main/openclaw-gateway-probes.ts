@@ -1,4 +1,10 @@
-import { readConfig, runCli, runShell, type CliResult } from './cli'
+import { readConfig, readEnvFile, runCli, runShell, type CliResult } from './cli'
+import {
+  callGatewayRpcViaSocket,
+  OPENCLAW_WEBCHAT_CLIENT_ID,
+  OPENCLAW_WEBCHAT_CLIENT_MODE,
+  OPENCLAW_WEBCHAT_CLIENT_VERSION,
+} from './chat-transport/gateway-streaming-chat-transport'
 import { classifyGatewayRuntimeState } from '../../src/shared/gateway-runtime-diagnostics'
 import {
   DEFAULT_GATEWAY_PORT,
@@ -142,6 +148,31 @@ export async function probeGatewayPortReachable(port = DEFAULT_GATEWAY_PORT): Pr
     socket.once('timeout', () => finalize(false))
     socket.once('error', () => finalize(false))
   })
+}
+
+export async function probeGatewaySocketReady(timeoutMs = 2_500): Promise<boolean> {
+  try {
+    await callGatewayRpcViaSocket(
+      {
+        readConfig,
+        readEnvFile,
+      },
+      'sessions.list',
+      {
+        limit: 1,
+        includeDerivedTitles: false,
+      },
+      {
+        clientId: OPENCLAW_WEBCHAT_CLIENT_ID,
+        clientMode: OPENCLAW_WEBCHAT_CLIENT_MODE,
+        clientVersion: OPENCLAW_WEBCHAT_CLIENT_VERSION,
+        timeoutMs,
+      }
+    )
+    return true
+  } catch {
+    return false
+  }
 }
 
 export async function probeGatewayTokenFromConfig(): Promise<string | null> {

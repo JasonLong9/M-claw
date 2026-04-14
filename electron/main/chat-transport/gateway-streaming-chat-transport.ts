@@ -12,6 +12,7 @@ import type {
 import { assertNoSendTimeModelOverride } from '../chat-model-switching-invariant'
 import { loadOpenClawGatewayRuntime } from '../openclaw-gateway-runtime'
 import { buildOpenClawLegacyEnvPatch, resolveOpenClawEnvValue } from '../openclaw-legacy-env-migration'
+import { PINNED_OPENCLAW_VERSION } from '../../../src/shared/openclaw-version-policy'
 
 const { randomUUID } = process.getBuiltinModule('node:crypto') as typeof import('node:crypto')
 
@@ -20,6 +21,10 @@ const GATEWAY_REQUEST_TIMEOUT_MS = 15_000
 const GATEWAY_STREAM_TIMEOUT_MS = 10 * 60 * 1000
 
 type GatewayClientMode = 'webchat' | 'ui' | 'backend'
+
+export const OPENCLAW_WEBCHAT_CLIENT_ID = 'openclaw-control-ui'
+export const OPENCLAW_WEBCHAT_CLIENT_MODE: GatewayClientMode = 'webchat'
+export const OPENCLAW_WEBCHAT_CLIENT_VERSION = `v${PINNED_OPENCLAW_VERSION}`
 
 interface GatewayChatTransportDependencies {
   readConfig: () => Promise<Record<string, any> | null>
@@ -37,6 +42,8 @@ interface GatewayConnectionSettings {
   clientMode: GatewayClientMode
   clientVersion: string
 }
+
+type GatewaySocketConstructor = new (url: string) => WebSocket
 
 interface GatewayRpcCallOptions {
   clientId?: string
@@ -381,9 +388,9 @@ async function resolveGatewayConnectionSettings(
           url,
           token,
           password: toOptionalString(auth?.password),
-          clientId: 'qclaw-ui',
-          clientMode: 'ui',
-          clientVersion: 'qclaw-lite',
+          clientId: OPENCLAW_WEBCHAT_CLIENT_ID,
+          clientMode: OPENCLAW_WEBCHAT_CLIENT_MODE,
+          clientVersion: OPENCLAW_WEBCHAT_CLIENT_VERSION,
         }
       }
     }
@@ -398,9 +405,9 @@ async function resolveGatewayConnectionSettings(
   return {
     url,
     token,
-    clientId: 'qclaw-ui',
-    clientMode: 'ui',
-    clientVersion: 'qclaw-lite',
+    clientId: OPENCLAW_WEBCHAT_CLIENT_ID,
+    clientMode: OPENCLAW_WEBCHAT_CLIENT_MODE,
+    clientVersion: OPENCLAW_WEBCHAT_CLIENT_VERSION,
   }
 }
 
@@ -410,11 +417,22 @@ function overrideGatewayConnectionSettings(
 ): GatewayConnectionSettings {
   return {
     ...settings,
-    clientId: String(options.clientId || settings.clientId || 'qclaw-lite').trim() || 'qclaw-lite',
-    clientMode: options.clientMode || settings.clientMode,
+    clientId:
+      String(options.clientId || settings.clientId || OPENCLAW_WEBCHAT_CLIENT_ID).trim()
+      || OPENCLAW_WEBCHAT_CLIENT_ID,
+    clientMode: options.clientMode || settings.clientMode || OPENCLAW_WEBCHAT_CLIENT_MODE,
     clientVersion:
-      String(options.clientVersion || settings.clientVersion || 'qclaw-lite').trim() || 'qclaw-lite',
+      String(options.clientVersion || settings.clientVersion || OPENCLAW_WEBCHAT_CLIENT_VERSION).trim()
+      || OPENCLAW_WEBCHAT_CLIENT_VERSION,
   }
+}
+
+function resolveGatewaySocketConstructor(): GatewaySocketConstructor {
+  const candidate = globalThis.WebSocket
+  if (typeof candidate !== 'function') {
+    throw new Error('gateway websocket runtime unavailable: WebSocket is not defined')
+  }
+  return candidate as GatewaySocketConstructor
 }
 
 function isGatewayEventFrame(value: unknown): value is GatewayEventFrame {
@@ -670,7 +688,7 @@ async function runFallbackTransport(
       ok: false,
       stdout: '',
       stderr:
-        'gateway transport unavailable and CLI fallback cannot safely continue an explicit external session key',
+        '当前会话绑定的是上游显式 session key；网关 transport 不可用时，不能安全地切换到本地 CLI 续写该会话。',
       code: 1,
       streamedText: '',
     }
@@ -695,7 +713,12 @@ export function createGatewayStreamingChatTransport(
   const readConfig = deps.readConfig
   const readEnvFile = deps.readEnvFile
   const fallbackTransport = deps.fallbackTransport
-  const createSocket = deps.createSocket || ((url) => new WebSocket(url))
+  const createSocket =
+    deps.createSocket ||
+    ((url) => {
+      const WebSocketConstructor = resolveGatewaySocketConstructor()
+      return new WebSocketConstructor(url)
+    })
   const loadGatewayRuntime = deps.loadGatewayRuntime || loadOpenClawGatewayRuntime
 
   return {
@@ -894,7 +917,12 @@ export async function callGatewayRpcViaSocket(
 ): Promise<unknown> {
   const readConfig = deps.readConfig
   const readEnvFile = deps.readEnvFile
-  const createSocket = deps.createSocket || ((url) => new WebSocket(url))
+  const createSocket =
+    deps.createSocket ||
+    ((url) => {
+      const WebSocketConstructor = resolveGatewaySocketConstructor()
+      return new WebSocketConstructor(url)
+    })
   const loadGatewayRuntime = deps.loadGatewayRuntime || loadOpenClawGatewayRuntime
   const [config, envFile] = await Promise.all([readConfig(), readEnvFile()])
   const settings = await resolveGatewayConnectionSettings(config, envFile, loadGatewayRuntime)
@@ -904,9 +932,9 @@ export async function callGatewayRpcViaSocket(
 
   const client = new MinimalGatewaySocketClient(
     overrideGatewayConnectionSettings(settings, {
-      clientId: options.clientId || 'qclaw-ui',
-      clientMode: options.clientMode || 'ui',
-      clientVersion: options.clientVersion || 'qclaw-lite',
+      clientId: options.clientId || OPENCLAW_WEBCHAT_CLIENT_ID,
+      clientMode: options.clientMode || OPENCLAW_WEBCHAT_CLIENT_MODE,
+      clientVersion: options.clientVersion || OPENCLAW_WEBCHAT_CLIENT_VERSION,
     }),
     createSocket,
     () => {}

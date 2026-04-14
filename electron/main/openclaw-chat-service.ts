@@ -22,6 +22,8 @@ import type {
 } from '../../src/shared/chat-panel'
 import type { OpenClawDiscoveryResult } from '../../src/shared/openclaw-phase1'
 import { parseChatSessionSourceFromKey } from '../../src/shared/dashboard-chat-session-source'
+import type { OpenClawRuntimeReconcileStore } from '../../src/shared/gateway-runtime-reconcile-state'
+import { resolveEffectiveGatewayRunning } from '../../src/shared/gateway-effective-running'
 import {
   CHAT_REPLY_REJECTED_PATH_PATTERN,
   sanitizeAssistantRawFallbackText,
@@ -54,6 +56,9 @@ import { createCliChatTransport } from './chat-transport/cli-chat-transport'
 import {
   callGatewayRpcViaSocket,
   createGatewayStreamingChatTransport,
+  OPENCLAW_WEBCHAT_CLIENT_ID,
+  OPENCLAW_WEBCHAT_CLIENT_MODE,
+  OPENCLAW_WEBCHAT_CLIENT_VERSION,
 } from './chat-transport/gateway-streaming-chat-transport'
 import type { ChatTransport, CliLikeResult, RunStreamingCommand } from './chat-transport/chat-transport-types'
 import { loadOpenClawCapabilities, type OpenClawCapabilities } from './openclaw-capabilities'
@@ -61,13 +66,17 @@ import type { ModelConfigCommandResult } from './openclaw-model-config'
 import { getModelStatus } from './openclaw-model-config'
 import { getModelCatalog } from './openclaw-model-catalog'
 import { gatewayHealth, readConfig, readEnvFile, runCli, runCliStreaming, type RunCliStreamOptions } from './cli'
+import { probeGatewayPortReachable, probeGatewaySocketReady, readConfiguredGatewayPort } from './openclaw-gateway-probes'
+import { classifySendErrorCode } from './chat-send-error-code'
 import { discoverOpenClawInstallations } from './openclaw-install-discovery'
 import {
   callGatewayRpcViaControlUiBrowser,
   runGatewayChatViaControlUiBrowser,
 } from './openclaw-control-ui-rpc'
 import { ensureGatewayRunning } from './openclaw-gateway-service'
+import { readOpenClawRuntimeReconcileStore } from './openclaw-runtime-reconcile'
 import { getOpenClawUpstreamModelState } from './openclaw-upstream-model-state'
+import { inspectBundledOpenClawDeliveryStatus } from './openclaw-bundled-manifest'
 import {
   appendLocalChatMessages,
   clearLocalChatTranscript,
@@ -93,6 +102,7 @@ const CHAT_AVAILABILITY_SELECTABLE_MODELS_CACHE_TTL_MS = 12_000
 const CHAT_MODEL_SWITCH_UNSUPPORTED_MESSAGE = '当前 OpenClaw 版本还不支持在聊天窗口内切换模型，请升级 OpenClaw 后重试'
 const CHAT_SESSION_MODEL_PATCH_UNAVAILABLE_MESSAGE = '当前会话还没有可切换的 OpenClaw session，请先发送一条消息后再试'
 const CHAT_TRACE_HISTORY_LIMIT = 200
+const CHAT_CONCURRENT_SEND_BLOCKED_MESSAGE = '当前已有一条消息正在发送，请等待当前回答完成或先停止回答。'
 
 interface ChatSelectableModelResolution {
   connectedModels: string[]
@@ -135,6 +145,8 @@ const dashboardChatAvailabilitySelectableModelsCache: {
   inFlightFingerprint: '',
 }
 
+let inFlightChatSendPromise: Promise<ChatSendResult> | null = null
+
 export function resetDashboardChatAvailabilityTrackerForTests(): void {
   chatAvailabilityTracker.consecutiveGatewayFailures = 0
   chatAvailabilityTracker.lastHealthyAt = 0
@@ -147,6 +159,7 @@ export function resetDashboardChatAvailabilityTrackerForTests(): void {
   dashboardChatAvailabilitySelectableModelsCache.value = null
   dashboardChatAvailabilitySelectableModelsCache.inFlight = null
   dashboardChatAvailabilitySelectableModelsCache.inFlightFingerprint = ''
+  inFlightChatSendPromise = null
   chatTraceStore.entries = []
   chatTraceStore.nextId = 1
 }
@@ -169,6 +182,40 @@ export function listChatTraceEntries(limit = 50): ChatTraceEntry[] {
   return chatTraceStore.entries.slice(-normalizedLimit).reverse()
 }
 
+function shouldForceBundledWindowsGatewaySocketTransport(): boolean {
+  if (process.platform !== 'win32') return false
+  if (!hasGatewaySocketRuntimeSupport()) return false
+  const bundledRuntimeBinaryPath = inspectBundledOpenClawDeliveryStatus({
+    platform: process.platform,
+    arch: process.arch,
+    env: process.env,
+  }).runtimeBinaryPath
+  return Boolean(String(bundledRuntimeBinaryPath || '').trim())
+}
+
+function hasGatewaySocketRuntimeSupport(): boolean {
+  return typeof globalThis.WebSocket === 'function'
+}
+
+function buildChatFailureTraceMessage(
+  result: Pick<CliLikeResult, 'stdout' | 'stderr'> | null | undefined,
+  messageText: string
+): string {
+  const fallbackMessage = String(messageText || '').trim() || '聊天消息发送失败'
+  if (!result) return fallbackMessage
+
+  for (const candidate of [result.stderr, result.stdout]) {
+    const normalized = String(candidate || '').trim()
+    if (!normalized) continue
+    if (normalized === fallbackMessage) continue
+    if (normalized.length > 240) continue
+    if (normalized.startsWith('{') || normalized.startsWith('[')) continue
+    return `${fallbackMessage} · ${normalized}`
+  }
+
+  return fallbackMessage
+}
+
 interface GatewayHealthLike {
   running: boolean
   raw: string
@@ -186,6 +233,10 @@ interface OpenClawChatServiceOptions {
   getGatewayHealth?: () => Promise<GatewayHealthLike>
   ensureGateway?: () => Promise<GatewayEnsureLike>
   readModelStatus?: () => Promise<ModelConfigCommandResult<Record<string, any>>>
+  readRuntimeReconcileState?: () => Promise<OpenClawRuntimeReconcileStore>
+  readConfiguredGatewayPort?: () => Promise<number>
+  probeGatewayPortReachable?: (port?: number) => Promise<boolean>
+  probeGatewaySocketReady?: (timeoutMs?: number) => Promise<boolean>
   loadCapabilities?: () => Promise<OpenClawCapabilities>
   discoverOpenClaw?: () => Promise<OpenClawDiscoveryResult>
   now?: () => number
@@ -728,9 +779,13 @@ export async function getChatSessionDebugSnapshot(
 
 function normalizeModelList(value: unknown): string[] {
   if (!Array.isArray(value)) return []
-  return value
-    .map((item) => String(item || '').trim())
-    .filter(Boolean)
+  const unique = new Set<string>()
+  for (const item of value) {
+    const normalized = String(item || '').trim()
+    if (!normalized || unique.has(normalized)) continue
+    unique.add(normalized)
+  }
+  return Array.from(unique)
 }
 
 function isModelAllowedByStatus(model: string, allowedModels: Iterable<string>): boolean {
@@ -1085,6 +1140,53 @@ async function defaultReadModelStatus(): Promise<ModelConfigCommandResult<Record
   return getModelStatus()
 }
 
+async function readRuntimeReconcileStateSafely(
+  reader: () => Promise<OpenClawRuntimeReconcileStore>
+): Promise<OpenClawRuntimeReconcileStore | null> {
+  try {
+    return await reader()
+  } catch {
+    return null
+  }
+}
+
+function isGatewayCompatRunningFromRuntimeStore(
+  runtimeStore: OpenClawRuntimeReconcileStore | null | undefined
+): boolean {
+  return resolveEffectiveGatewayRunning({
+    healthRunning: false,
+    runtimeStore: runtimeStore || null,
+  })
+}
+
+async function confirmGatewayCompatPortReachable(params: {
+  runtimeStore: OpenClawRuntimeReconcileStore | null | undefined
+  readConfiguredGatewayPort: () => Promise<number>
+  probeGatewayPortReachable: (port?: number) => Promise<boolean>
+  probeGatewaySocketReady: (timeoutMs?: number) => Promise<boolean>
+}): Promise<{
+  running: boolean
+  port?: number
+}> {
+  if (!isGatewayCompatRunningFromRuntimeStore(params.runtimeStore)) {
+    return { running: false }
+  }
+
+  const port = await params.readConfiguredGatewayPort().catch(() => undefined)
+  const reachable = await params.probeGatewayPortReachable(port).catch(() => false)
+  if (!reachable) {
+    return {
+      running: false,
+      port,
+    }
+  }
+  const socketReady = await params.probeGatewaySocketReady().catch(() => false)
+  return {
+    running: reachable && socketReady,
+    port,
+  }
+}
+
 async function defaultRepairAgentAuthProfiles(params: {
   providerIds: string[]
   agentId?: string
@@ -1201,6 +1303,29 @@ async function defaultCallGatewayRpc(
   params: unknown,
   timeoutMs?: number
 ): Promise<unknown> {
+  if (process.platform === 'win32') {
+    try {
+      return await callGatewayRpcViaSocket(
+        {
+          readConfig,
+          readEnvFile,
+        },
+        method,
+        params,
+        {
+          clientId: OPENCLAW_WEBCHAT_CLIENT_ID,
+          clientMode: OPENCLAW_WEBCHAT_CLIENT_MODE,
+          clientVersion: OPENCLAW_WEBCHAT_CLIENT_VERSION,
+          timeoutMs,
+        }
+      )
+    } catch (socketError) {
+      if (!shouldFallbackToControlUiGatewayCall(socketError)) {
+        throw socketError
+      }
+    }
+  }
+
   try {
     return await callGatewayRpcViaControlUiBrowser(
       {
@@ -1227,9 +1352,9 @@ async function defaultCallGatewayRpc(
     method,
     params,
     {
-      clientId: 'qclaw-ui',
-      clientMode: 'ui',
-      clientVersion: 'qclaw-lite',
+      clientId: OPENCLAW_WEBCHAT_CLIENT_ID,
+      clientMode: OPENCLAW_WEBCHAT_CLIENT_MODE,
+      clientVersion: OPENCLAW_WEBCHAT_CLIENT_VERSION,
       timeoutMs,
     }
   )
@@ -1513,14 +1638,23 @@ function shouldFallbackToCliGatewayCall(error: unknown): boolean {
   return /gateway (?:streaming|control ui) config unavailable/i.test(message)
 }
 
+function shouldFallbackToControlUiGatewayCall(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '')
+  return /gateway (?:streaming )?config unavailable|gateway connect challenge timeout|gateway not connected|gateway request timeout|gateway request failed|gateway closed|gateway socket is not open|gateway connect challenge missing nonce|gateway websocket runtime unavailable|websocket is not defined/i.test(
+    message
+  )
+}
+
 function shouldFallbackToSocketGatewayCall(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error || '')
-  return /gateway control ui config unavailable|control ui page load timeout|openclaw-app not found/i.test(message)
+  return /gateway control ui config unavailable|control ui page load timeout|openclaw-app not found|gateway call failed|expected property name or '}' in json|unexpected token .*json|invalid json/i.test(
+    message
+  )
 }
 
 function shouldFallbackToSocketGatewaySend(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error || '')
-  return /gateway control ui config unavailable|control ui page load timeout|openclaw-app not found|control ui connection timeout/i.test(
+  return /gateway control ui config unavailable|control ui page load timeout|openclaw-app not found|control ui connection timeout|control ui chat\.send timeout|control ui request timeout|control ui disconnected|gateway call failed|expected property name or '}' in json|unexpected token .*json|invalid json/i.test(
     message
   )
 }
@@ -2410,31 +2544,27 @@ function buildSeededTurnMessage(messages: ChatMessage[], nextUserText: string): 
   ].join('\n')
 }
 
-function classifySendErrorCode(message: string): Exclude<ChatSendResult['errorCode'], undefined> {
-  const normalized = String(message || '').trim().toLowerCase()
-  if (!normalized) return 'command-failed'
-  if (/timeout|timed out/.test(normalized)) return 'timeout'
-  if (/gateway/.test(normalized) && /offline|unreachable|failed|not running|not loaded/.test(normalized)) {
-    return 'gateway-offline'
-  }
-  return 'command-failed'
-}
-
 export async function getDashboardChatAvailability(
   options: OpenClawChatServiceOptions = {}
 ): Promise<DashboardChatAvailability> {
   const getGatewayHealthFn = options.getGatewayHealth ?? gatewayHealth
   const readModelStatusFn = options.readModelStatus ?? defaultReadModelStatus
+  const readRuntimeReconcileStateFn = options.readRuntimeReconcileState ?? readOpenClawRuntimeReconcileStore
+  const readConfiguredGatewayPortFn = options.readConfiguredGatewayPort ?? readConfiguredGatewayPort
+  const probeGatewayPortReachableFn = options.probeGatewayPortReachable ?? probeGatewayPortReachable
+  const probeGatewaySocketReadyFn = options.probeGatewaySocketReady ?? probeGatewaySocketReady
   const now = options.now ?? Date.now
 
   try {
     const currentTime = now()
-    const [healthResult, modelStatusResult] = await Promise.allSettled([
+    const [healthResult, modelStatusResult, runtimeResult] = await Promise.allSettled([
       getGatewayHealthFn(),
       readCachedAvailabilityModelStatus(readModelStatusFn, currentTime),
+      readRuntimeReconcileStateFn(),
     ])
     const health = healthResult.status === 'fulfilled' ? healthResult.value : null
     const modelStatus = modelStatusResult.status === 'fulfilled' ? modelStatusResult.value : null
+    const runtimeStore = runtimeResult.status === 'fulfilled' ? runtimeResult.value : null
     const selectableModelsCacheContext = await readAvailabilitySelectableModelsCacheContext({ modelStatus })
     const selectableModelResolution = await readCachedAvailabilitySelectableModels({
       currentTime,
@@ -2450,8 +2580,22 @@ export async function getDashboardChatAvailability(
       connectedModelsOverride: selectableModelResolution.connectedModels,
       defaultModelOverride: selectableModelResolution.defaultModel,
     }
+    const compatGatewayCandidate = resolveEffectiveGatewayRunning({
+      healthRunning: false,
+      runtimeStore,
+    })
+    const runtimeCompatProbe =
+      !health?.running && compatGatewayCandidate
+        ? await confirmGatewayCompatPortReachable({
+            runtimeStore,
+            readConfiguredGatewayPort: readConfiguredGatewayPortFn,
+            probeGatewayPortReachable: probeGatewayPortReachableFn,
+            probeGatewaySocketReady: probeGatewaySocketReadyFn,
+          })
+        : { running: false as const }
+    const gatewayRunning = Boolean(health?.running) || runtimeCompatProbe.running
 
-    if (health?.running) {
+    if (gatewayRunning) {
       chatAvailabilityTracker.consecutiveGatewayFailures = 0
       chatAvailabilityTracker.lastHealthyAt = currentTime
 
@@ -3359,7 +3503,7 @@ export async function clearChatTranscript(
   return { ok, sessionId: normalizedSessionId }
 }
 
-export async function sendChatMessage(
+async function sendChatMessageImpl(
   request: ChatSendRequest,
   options: OpenClawChatServiceOptions = {}
 ): Promise<ChatSendResult> {
@@ -3390,6 +3534,10 @@ export async function sendChatMessage(
   const ensureGatewayFn = options.ensureGateway ?? ensureGatewayRunning
   const getGatewayHealthFn = options.getGatewayHealth ?? gatewayHealth
   const readModelStatusFn = options.readModelStatus ?? defaultReadModelStatus
+  const readRuntimeReconcileStateFn = options.readRuntimeReconcileState ?? readOpenClawRuntimeReconcileStore
+  const readConfiguredGatewayPortFn = options.readConfiguredGatewayPort ?? readConfiguredGatewayPort
+  const probeGatewayPortReachableFn = options.probeGatewayPortReachable ?? probeGatewayPortReachable
+  const probeGatewaySocketReadyFn = options.probeGatewaySocketReady ?? probeGatewaySocketReady
   const repairAgentAuthProfiles = options.repairAgentAuthProfiles ?? defaultRepairAgentAuthProfiles
   const repairMainAuthProfiles = options.repairMainAuthProfiles ?? defaultRepairMainAuthProfiles
   const runStreamingCommand = options.runStreamingCommand ?? defaultRunStreamingCommand
@@ -3523,20 +3671,37 @@ export async function sendChatMessage(
   const cliTransport = createCliChatTransport({
     runStreamingCommand,
   })
+  const socketOnlyGatewayTransport = createGatewayStreamingChatTransport({
+    readConfig,
+    readEnvFile,
+  })
   const defaultGatewayTransport = createGatewayStreamingChatTransport({
     readConfig,
     readEnvFile,
     fallbackTransport: cliTransport,
   })
   const browserGatewayTransport = createControlUiBrowserChatTransport({
-    fallbackTransport: defaultGatewayTransport,
+    fallbackTransport: socketOnlyGatewayTransport,
   })
+  const forceBundledWindowsSocketOnlyTransport =
+    shouldForceBundledWindowsGatewaySocketTransport() && !options.chatTransport
+  const preferredGatewayTransport =
+    forceBundledWindowsSocketOnlyTransport ? socketOnlyGatewayTransport : defaultGatewayTransport
+  const trustedDefaultTransport = browserGatewayTransport
   let chatTransport =
-    options.chatTransport ?? (persistedSessionKey ? browserGatewayTransport : defaultGatewayTransport)
+    options.chatTransport ??
+    (persistedSessionKey ? trustedDefaultTransport : preferredGatewayTransport)
   const traceHistorySource = resolveOperationHistorySource({
     localSessionState,
     matchedSession,
   })
+  const describeSelectedTransport = (): string => {
+    if (chatTransport === cliTransport) return 'cli'
+    if (chatTransport === browserGatewayTransport) return 'control-ui-browser'
+    if (chatTransport === socketOnlyGatewayTransport) return 'gateway-socket-only'
+    if (chatTransport === defaultGatewayTransport) return 'gateway-socket-cli-fallback'
+    return options.chatTransport ? 'custom-injected' : 'unknown'
+  }
 
   appendChatTrace({
     operation: 'send',
@@ -3552,6 +3717,8 @@ export async function sendChatMessage(
 
   const ensuredGateway = await ensureGatewayAvailable()
   let gatewayRecoveredByHealthRecheck = false
+  let gatewayRecoveredByRuntimeCompat = false
+  let runtimeCompatRecoveredPort: number | undefined
   if (!ensuredGateway.ok || !ensuredGateway.running) {
     const gatewayHealthRecheck = await Promise.resolve(
       typeof getGatewayHealthFn === 'function' ? getGatewayHealthFn() : null
@@ -3571,9 +3738,37 @@ export async function sendChatMessage(
         message:
           'Gateway ensure returned unavailable, but a direct health recheck confirmed the runtime is already up. Proceeding with send.',
       })
+    } else {
+      const runtimeStore = await readRuntimeReconcileStateSafely(readRuntimeReconcileStateFn)
+      const runtimeCompatProbe = await confirmGatewayCompatPortReachable({
+        runtimeStore,
+        readConfiguredGatewayPort: readConfiguredGatewayPortFn,
+        probeGatewayPortReachable: probeGatewayPortReachableFn,
+        probeGatewaySocketReady: probeGatewaySocketReadyFn,
+      })
+      gatewayRecoveredByRuntimeCompat = runtimeCompatProbe.running
+      runtimeCompatRecoveredPort = runtimeCompatProbe.port
+      if (gatewayRecoveredByRuntimeCompat) {
+        appendChatTrace({
+          operation: 'send',
+          stage: 'gateway-runtime-reconcile-recovered',
+          sessionId,
+          sessionKey: persistedSessionKey || undefined,
+          historySource: traceHistorySource,
+          confirmedModel:
+            String(matchedSession?.model || localSessionState?.model || targetModel || '').trim() || undefined,
+          intentSelectedModel: String(localSessionState?.selectedModel || targetModel || '').trim() || undefined,
+          failureClass: 'connection',
+          message:
+            `Gateway ensure and health recheck both reported unavailable, but runtime reconcile + socket probe confirmed compatibility mode is usable${runtimeCompatRecoveredPort ? ` on ${runtimeCompatRecoveredPort}` : ''}. Proceeding with gateway transport.`,
+        })
+      }
     }
   }
-  const gatewayOperational = Boolean(ensuredGateway.ok && ensuredGateway.running) || gatewayRecoveredByHealthRecheck
+  const gatewayOperational =
+    Boolean(ensuredGateway.ok && ensuredGateway.running) ||
+    gatewayRecoveredByHealthRecheck ||
+    gatewayRecoveredByRuntimeCompat
   if (!gatewayOperational) {
     const messageText = getCliFailureMessage(ensuredGateway, '网关当前不可用，暂时无法发送消息')
     const canSafelyFallbackToCli =
@@ -3689,7 +3884,10 @@ export async function sendChatMessage(
   }
 
   if (!options.chatTransport && gatewayOperational) {
-    chatTransport = persistedSessionKey ? browserGatewayTransport : defaultGatewayTransport
+    chatTransport =
+      persistedSessionKey
+        ? trustedDefaultTransport
+        : preferredGatewayTransport
   }
 
   const legacyMiniMaxRepairTarget =
@@ -3776,6 +3974,18 @@ export async function sendChatMessage(
   try {
     for (let attemptIndex = 0; attemptIndex < 2; attemptIndex += 1) {
       const effectiveThinking = thinkingResolution.effectiveThinking
+      appendChatTrace({
+        operation: 'send',
+        stage: 'transport-run',
+        sessionId,
+        sessionKey: persistedSessionKey || undefined,
+        historySource: traceHistorySource,
+        confirmedModel: String(targetModel || matchedSession?.model || '').trim() || undefined,
+        intentSelectedModel: String(localSessionState?.selectedModel || targetModel || '').trim() || undefined,
+        failureClass: 'none',
+        message:
+          `Dispatching send via ${describeSelectedTransport()} (attempt ${attemptIndex + 1}, thinking=${effectiveThinking}, seeded=${shouldSeedTransport ? 'yes' : 'no'}, trusted=${persistedSessionKey ? 'yes' : 'no'}).`,
+      })
       result = await chatTransport.run({
         transportSessionId,
         sessionKey: persistedSessionKey,
@@ -3798,6 +4008,17 @@ export async function sendChatMessage(
       })
 
       if (result.ok) {
+        appendChatTrace({
+          operation: 'send',
+          stage: 'transport-run-ok',
+          sessionId,
+          sessionKey: persistedSessionKey || undefined,
+          historySource: traceHistorySource,
+          confirmedModel: String(streamedModel || targetModel || matchedSession?.model || '').trim() || undefined,
+          intentSelectedModel: String(localSessionState?.selectedModel || targetModel || '').trim() || undefined,
+          failureClass: 'none',
+          message: `Transport ${describeSelectedTransport()} accepted the send.`,
+        })
         break
       }
 
@@ -3830,6 +4051,7 @@ export async function sendChatMessage(
       }
 
       const errorCode = result.canceled ? 'canceled' : classifySendErrorCode(messageText)
+      const traceMessage = buildChatFailureTraceMessage(result, messageText)
       appendChatTrace({
         operation: 'send',
         stage: result.canceled ? 'canceled' : 'failed',
@@ -3839,7 +4061,7 @@ export async function sendChatMessage(
         confirmedModel: String(streamedModel || targetModel || matchedSession?.model || '').trim() || undefined,
         intentSelectedModel: String(localSessionState?.selectedModel || targetModel || '').trim() || undefined,
         failureClass: classifyChatFailureClass(messageText),
-        message: messageText,
+        message: traceMessage,
       })
       emit({
         type: 'assistant-error',
@@ -3859,6 +4081,9 @@ export async function sendChatMessage(
   }
 
   if (!result?.ok) {
+    const messageText = result ? getCliFailureMessage(result, '聊天消息发送失败') : '聊天消息发送失败'
+    const errorCode = classifySendErrorCode(messageText)
+    const traceMessage = buildChatFailureTraceMessage(result, messageText)
     appendChatTrace({
       operation: 'send',
       stage: 'failed',
@@ -3868,19 +4093,19 @@ export async function sendChatMessage(
       confirmedModel: String(streamedModel || targetModel || matchedSession?.model || '').trim() || undefined,
       intentSelectedModel: String(localSessionState?.selectedModel || targetModel || '').trim() || undefined,
       failureClass: 'unknown',
-      message: '聊天消息发送失败',
+      message: traceMessage,
     })
     emit({
       type: 'assistant-error',
       sessionId,
-      errorCode: 'command-failed',
-      messageText: '聊天消息发送失败',
+      errorCode,
+      messageText,
     })
     return {
       ok: false,
       sessionId,
-      errorCode: 'command-failed',
-      messageText: '聊天消息发送失败',
+      errorCode,
+      messageText,
     }
   }
 
@@ -3974,5 +4199,37 @@ export async function sendChatMessage(
     ok: true,
     sessionId,
     message: assistantMessage,
+  }
+}
+
+export async function sendChatMessage(
+  request: ChatSendRequest,
+  options: OpenClawChatServiceOptions = {}
+): Promise<ChatSendResult> {
+  const requestedSessionId = String(request.sessionId || '').trim()
+  if (inFlightChatSendPromise) {
+    appendChatTrace({
+      operation: 'send',
+      stage: 'rejected-concurrent-send',
+      sessionId: requestedSessionId || undefined,
+      failureClass: 'semantic',
+      message: CHAT_CONCURRENT_SEND_BLOCKED_MESSAGE,
+    })
+    return {
+      ok: false,
+      sessionId: requestedSessionId,
+      errorCode: 'command-failed',
+      messageText: CHAT_CONCURRENT_SEND_BLOCKED_MESSAGE,
+    }
+  }
+
+  const sendPromise = sendChatMessageImpl(request, options)
+  inFlightChatSendPromise = sendPromise
+  try {
+    return await sendPromise
+  } finally {
+    if (inFlightChatSendPromise === sendPromise) {
+      inFlightChatSendPromise = null
+    }
   }
 }

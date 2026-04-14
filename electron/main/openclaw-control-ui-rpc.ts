@@ -1,5 +1,10 @@
 import { loadOpenClawGatewayRuntime } from './openclaw-gateway-runtime'
 import { buildOpenClawLegacyEnvPatch, resolveOpenClawEnvValue } from './openclaw-legacy-env-migration'
+import {
+  OPENCLAW_WEBCHAT_CLIENT_ID,
+  OPENCLAW_WEBCHAT_CLIENT_MODE,
+  OPENCLAW_WEBCHAT_CLIENT_VERSION,
+} from './chat-transport/gateway-streaming-chat-transport'
 
 const { randomUUID } = process.getBuiltinModule('node:crypto') as typeof import('node:crypto')
 
@@ -75,6 +80,11 @@ export interface ControlUiAppInspectionResult {
   rpcStatus?: Record<string, unknown> | null
   rpcModels?: Record<string, unknown> | null
   rpcErrors?: string[]
+}
+
+interface ControlUiBrowserContext {
+  settings: GatewayConnectionSettings
+  controlUiUrl: string
 }
 
 function normalizeRecord(value: unknown): Record<string, unknown> | null {
@@ -544,7 +554,7 @@ async function withControlUiBrowser<T>(
   options: {
     loadTimeoutMs?: number
     timeoutMs?: number
-    execute: (browserWindow: BrowserWindowLike) => Promise<T>
+    execute: (browserWindow: BrowserWindowLike, context: ControlUiBrowserContext) => Promise<T>
   }
 ): Promise<T> {
   const loadGatewayRuntime = deps.loadGatewayRuntime || loadOpenClawGatewayRuntime
@@ -579,7 +589,10 @@ async function withControlUiBrowser<T>(
       options.loadTimeoutMs ?? CONTROL_UI_LOAD_TIMEOUT_MS,
       'control ui page load timeout'
     )
-    return await options.execute(browserWindow)
+    return await options.execute(browserWindow, {
+      settings,
+      controlUiUrl,
+    })
   } finally {
     try {
       if (!browserWindow.isDestroyed()) {
@@ -591,6 +604,319 @@ async function withControlUiBrowser<T>(
   }
 }
 
+function buildBrowserGatewayRpcScript(params: {
+  settings: GatewayConnectionSettings
+  method: string
+  requestParams: unknown
+  timeoutMs: number
+}): string {
+  return `
+    (async () => {
+      const gatewayUrl = ${JSON.stringify(params.settings.url)};
+      const authToken = ${JSON.stringify(params.settings.token)};
+      const authPassword = ${JSON.stringify(params.settings.password || '')};
+      const method = ${JSON.stringify(params.method)};
+      const requestParams = ${JSON.stringify(params.requestParams ?? null)};
+      const timeoutMs = ${JSON.stringify(params.timeoutMs)};
+      const platform = ${JSON.stringify(process.platform)};
+      const clientId = ${JSON.stringify(OPENCLAW_WEBCHAT_CLIENT_ID)};
+      const clientMode = ${JSON.stringify(OPENCLAW_WEBCHAT_CLIENT_MODE)};
+      const clientVersion = ${JSON.stringify(OPENCLAW_WEBCHAT_CLIENT_VERSION)};
+      const randomId = () =>
+        globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function'
+          ? globalThis.crypto.randomUUID()
+          : 'browser-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+      const closeSocket = (socket) => {
+        try {
+          socket && socket.close();
+        } catch {
+          // Ignore cleanup failures from the helper socket.
+        }
+      };
+
+      if (typeof WebSocket !== 'function') {
+        throw new Error('browser websocket unavailable');
+      }
+
+      return await new Promise((resolve, reject) => {
+        let settled = false;
+        let connectRequestId = '';
+        let methodRequestId = '';
+        const socket = new WebSocket(gatewayUrl);
+        const timeoutId = setTimeout(() => {
+          settle(new Error('browser gateway rpc timeout for ' + method));
+        }, timeoutMs);
+
+        const settle = (error, value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeoutId);
+          closeSocket(socket);
+          if (error) reject(error);
+          else resolve(value);
+        };
+
+        socket.addEventListener('message', (event) => {
+          let frame;
+          try {
+            frame = JSON.parse(String(event.data || ''));
+          } catch {
+            return;
+          }
+
+          if (frame && frame.type === 'event' && frame.event === 'connect.challenge') {
+            const nonce = String((frame.payload && frame.payload.nonce) || '').trim();
+            if (!nonce) {
+              settle(new Error('browser gateway connect challenge missing nonce'));
+              return;
+            }
+
+            connectRequestId = randomId();
+            socket.send(JSON.stringify({
+              type: 'req',
+              id: connectRequestId,
+              method: 'connect',
+              params: {
+                minProtocol: 3,
+                maxProtocol: 3,
+                client: {
+                  id: clientId,
+                  displayName: 'Qclaw',
+                  version: clientVersion,
+                  platform,
+                  mode: clientMode,
+                },
+                role: 'operator',
+                scopes: ['operator.admin', 'operator.read', 'operator.write'],
+                auth: {
+                  token: authToken,
+                  ...(authPassword ? { password: authPassword } : {}),
+                },
+              },
+            }));
+            return;
+          }
+
+          if (frame && frame.type === 'res' && connectRequestId && frame.id === connectRequestId) {
+            if (!frame.ok) {
+              settle(new Error(String((frame.error && frame.error.message) || 'browser gateway connect failed')));
+              return;
+            }
+
+            methodRequestId = randomId();
+            socket.send(JSON.stringify({
+              type: 'req',
+              id: methodRequestId,
+              method,
+              params: requestParams,
+            }));
+            return;
+          }
+
+          if (frame && frame.type === 'res' && methodRequestId && frame.id === methodRequestId) {
+            if (!frame.ok) {
+              settle(
+                new Error(
+                  String((frame.error && frame.error.message) || ('browser gateway request failed for ' + method))
+                )
+              );
+              return;
+            }
+            settle(null, Object.prototype.hasOwnProperty.call(frame, 'payload') ? frame.payload : null);
+          }
+        });
+
+        socket.addEventListener('error', () => {
+          settle(new Error('browser gateway websocket error'));
+        });
+        socket.addEventListener('close', () => {
+          if (!settled) {
+            settle(new Error('browser gateway websocket closed'));
+          }
+        });
+      });
+    })()
+  `
+}
+
+function buildBrowserGatewayChatSendScript(params: {
+  settings: GatewayConnectionSettings
+  options: ControlUiChatSendOptions
+}): string {
+  return `
+    (async () => {
+      const gatewayUrl = ${JSON.stringify(params.settings.url)};
+      const authToken = ${JSON.stringify(params.settings.token)};
+      const authPassword = ${JSON.stringify(params.settings.password || '')};
+      const sessionKey = ${JSON.stringify(params.options.sessionKey)};
+      const message = ${JSON.stringify(params.options.message)};
+      const thinking = ${JSON.stringify(params.options.thinking || 'off')};
+      const timeoutMs = ${JSON.stringify(params.options.timeoutMs ?? CONTROL_UI_REQUEST_TIMEOUT_MS)};
+      const requestedRunId = ${JSON.stringify(params.options.runId || randomUUID())};
+      const platform = ${JSON.stringify(process.platform)};
+      const clientId = ${JSON.stringify(OPENCLAW_WEBCHAT_CLIENT_ID)};
+      const clientMode = ${JSON.stringify(OPENCLAW_WEBCHAT_CLIENT_MODE)};
+      const clientVersion = ${JSON.stringify(OPENCLAW_WEBCHAT_CLIENT_VERSION)};
+      const randomId = () =>
+        globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function'
+          ? globalThis.crypto.randomUUID()
+          : 'browser-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+      const closeSocket = (socket) => {
+        try {
+          socket && socket.close();
+        } catch {
+          // Ignore cleanup failures from the helper socket.
+        }
+      };
+
+      if (typeof WebSocket !== 'function') {
+        throw new Error('browser websocket unavailable');
+      }
+
+      return await new Promise((resolve, reject) => {
+        let settled = false;
+        let connectRequestId = '';
+        let sendRequestId = '';
+        let runId = '';
+        const acceptedRunIds = new Set([requestedRunId].filter(Boolean));
+        const socket = new WebSocket(gatewayUrl);
+        const timeoutId = setTimeout(() => {
+          settle(new Error('browser gateway chat.send timeout for ' + sessionKey));
+        }, timeoutMs);
+
+        const settle = (error, value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeoutId);
+          closeSocket(socket);
+          if (error) reject(error);
+          else resolve(value);
+        };
+
+        socket.addEventListener('message', (event) => {
+          let frame;
+          try {
+            frame = JSON.parse(String(event.data || ''));
+          } catch {
+            return;
+          }
+
+          if (frame && frame.type === 'event' && frame.event === 'connect.challenge') {
+            const nonce = String((frame.payload && frame.payload.nonce) || '').trim();
+            if (!nonce) {
+              settle(new Error('browser gateway connect challenge missing nonce'));
+              return;
+            }
+
+            connectRequestId = randomId();
+            socket.send(JSON.stringify({
+              type: 'req',
+              id: connectRequestId,
+              method: 'connect',
+              params: {
+                minProtocol: 3,
+                maxProtocol: 3,
+                client: {
+                  id: clientId,
+                  displayName: 'Qclaw',
+                  version: clientVersion,
+                  platform,
+                  mode: clientMode,
+                },
+                role: 'operator',
+                scopes: ['operator.admin', 'operator.read', 'operator.write'],
+                auth: {
+                  token: authToken,
+                  ...(authPassword ? { password: authPassword } : {}),
+                },
+              },
+            }));
+            return;
+          }
+
+          if (frame && frame.type === 'res' && connectRequestId && frame.id === connectRequestId) {
+            if (!frame.ok) {
+              settle(new Error(String((frame.error && frame.error.message) || 'browser gateway connect failed')));
+              return;
+            }
+
+            sendRequestId = randomId();
+            socket.send(JSON.stringify({
+              type: 'req',
+              id: sendRequestId,
+              method: 'chat.send',
+              params: {
+                sessionKey,
+                message,
+                thinking,
+                deliver: false,
+                timeoutMs,
+                idempotencyKey: requestedRunId,
+              },
+            }));
+            return;
+          }
+
+          if (frame && frame.type === 'res' && sendRequestId && frame.id === sendRequestId) {
+            if (!frame.ok) {
+              settle(new Error(String((frame.error && frame.error.message) || 'browser gateway chat.send failed')));
+              return;
+            }
+
+            const responseRunId = String((frame.payload && frame.payload.runId) || '').trim();
+            if (responseRunId) {
+              runId = responseRunId;
+              acceptedRunIds.add(responseRunId);
+            }
+            return;
+          }
+
+          if (!(frame && frame.type === 'event' && frame.event === 'chat')) {
+            return;
+          }
+
+          const payload = frame.payload || {};
+          if (String(payload.sessionKey || '').trim() !== sessionKey) {
+            return;
+          }
+
+          const incomingRunId = String(payload.runId || '').trim();
+          if (runId && incomingRunId && incomingRunId !== runId && !acceptedRunIds.has(incomingRunId)) {
+            return;
+          }
+          if (incomingRunId) {
+            runId = incomingRunId;
+            acceptedRunIds.add(incomingRunId);
+          }
+
+          const state = String(payload.state || '').trim();
+          if (state === 'final') {
+            settle(null, {
+              runId: runId || requestedRunId,
+              sessionKey,
+              payload,
+            });
+            return;
+          }
+
+          if (state === 'error' || state === 'aborted') {
+            settle(new Error(String(payload.errorMessage || payload.stopReason || state)));
+          }
+        });
+
+        socket.addEventListener('error', () => {
+          settle(new Error('browser gateway websocket error'));
+        });
+        socket.addEventListener('close', () => {
+          if (!settled) {
+            settle(new Error('browser gateway websocket closed'));
+          }
+        });
+      });
+    })()
+  `
+}
+
 export async function callGatewayRpcViaControlUiBrowser(
   deps: ControlUiRpcDependencies,
   method: string,
@@ -600,10 +926,14 @@ export async function callGatewayRpcViaControlUiBrowser(
   return withControlUiBrowser(deps, {
     loadTimeoutMs: options.loadTimeoutMs,
     timeoutMs: options.timeoutMs,
-    execute: (browserWindow) =>
+    execute: (browserWindow, context) =>
       withTimeout(
         browserWindow.webContents.executeJavaScript(
-          buildControlUiRequestScript(method, params, options.timeoutMs ?? CONTROL_UI_REQUEST_TIMEOUT_MS),
+          buildControlUiRequestScript(
+            method,
+            params,
+            options.timeoutMs ?? CONTROL_UI_REQUEST_TIMEOUT_MS
+          ),
           true
         ),
         options.timeoutMs ?? CONTROL_UI_REQUEST_TIMEOUT_MS,
@@ -638,7 +968,7 @@ export async function runGatewayChatViaControlUiBrowser(
   return withControlUiBrowser(deps, {
     loadTimeoutMs: options.loadTimeoutMs,
     timeoutMs: options.timeoutMs,
-    execute: (browserWindow) =>
+    execute: (browserWindow, context) =>
       withTimeout(
         browserWindow.webContents.executeJavaScript(
           buildControlUiChatSendScript(options),
