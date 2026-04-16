@@ -344,6 +344,9 @@ export function createCliChatTransport(params: { runStreamingCommand: RunStreami
         '--thinking',
         input.thinking,
       ]
+      if (input.extraSystemPrompt) {
+        command.push('--append-system-prompt', input.extraSystemPrompt)
+      }
 
       const result = await runStreamingCommand(command, {
         controlDomain: 'chat',

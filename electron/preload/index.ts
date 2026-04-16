@@ -96,6 +96,7 @@ export const api = {
   runOpenClawManualBackup: () => ipcRenderer.invoke('openclaw:backup:run-manual'),
   openOpenClawBackupDirectory: (targetPath?: string) => ipcRenderer.invoke('openclaw:backup:open-dir', targetPath),
   openOpenClawWorkspace: () => ipcRenderer.invoke('openclaw:open-workspace'),
+  openLocalPath: (targetPath: string) => ipcRenderer.invoke('shell:open-path', targetPath),
   previewOpenClawRestore: (backupId: string) => ipcRenderer.invoke('openclaw:restore:preview', backupId),
   runOpenClawRestore: (backupId: string, scope: string) =>
     ipcRenderer.invoke('openclaw:restore:run', backupId, scope),

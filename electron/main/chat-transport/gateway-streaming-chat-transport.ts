@@ -1,4 +1,4 @@
-import type { ChatUsage } from '../../../src/shared/chat-panel'
+import type { ChatImageAttachment, ChatUsage } from '../../../src/shared/chat-panel'
 import {
   CHAT_REPLY_REJECTED_PATH_PATTERN,
   sanitizeAssistantRawFallbackText,
@@ -15,10 +15,39 @@ import { buildOpenClawLegacyEnvPatch, resolveOpenClawEnvValue } from '../opencla
 import { PINNED_OPENCLAW_VERSION } from '../../../src/shared/openclaw-version-policy'
 
 const { randomUUID } = process.getBuiltinModule('node:crypto') as typeof import('node:crypto')
+const fs = process.getBuiltinModule('node:fs') as typeof import('node:fs')
+const path = process.getBuiltinModule('node:path') as typeof import('node:path')
+const { fileURLToPath, pathToFileURL } = process.getBuiltinModule('node:url') as typeof import('node:url')
 
 const GATEWAY_CONNECT_TIMEOUT_MS = 5_000
 const GATEWAY_REQUEST_TIMEOUT_MS = 15_000
 const GATEWAY_STREAM_TIMEOUT_MS = 10 * 60 * 1000
+const EMBEDDED_GATEWAY_IMAGE_DATA_URL_PATTERN =
+  /data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\r\n]{128,})/gi
+const EMBEDDED_GATEWAY_IMAGE_SIGNATURES: Array<{ prefix: string; mimeType: string; minLength: number }> = [
+  { prefix: '/9j/', mimeType: 'image/jpeg', minLength: 512 },
+  { prefix: 'iVBORw0KGgo', mimeType: 'image/png', minLength: 256 },
+  { prefix: 'R0lGOD', mimeType: 'image/gif', minLength: 256 },
+  { prefix: 'UklG', mimeType: 'image/webp', minLength: 256 },
+  { prefix: 'Qk0', mimeType: 'image/bmp', minLength: 256 },
+  { prefix: 'PHN2Zy', mimeType: 'image/svg+xml', minLength: 256 },
+  { prefix: 'PD94bWwg', mimeType: 'image/svg+xml', minLength: 256 },
+]
+const EMBEDDED_GATEWAY_RAW_IMAGE_BASE64_PATTERN = new RegExp(
+  EMBEDDED_GATEWAY_IMAGE_SIGNATURES
+    .map((entry) => `${entry.prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[a-z0-9+/=\\r\\n]{${entry.minLength},}`)
+    .join('|'),
+  'gi'
+)
+const EMBEDDED_GATEWAY_IMAGE_PATH_PATTERN = /(?:file:\/\/[^\s"'`<>]+|[a-z]:[\\/][^\s"'`<>]+|\/[^\s"'`<>]+)/gi
+const GATEWAY_IMAGE_MIME_TYPES_BY_EXTENSION: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.bmp': 'image/bmp',
+}
 
 type GatewayClientMode = 'webchat' | 'ui' | 'backend'
 
@@ -93,6 +122,7 @@ interface ParsedGatewayChatMessage {
   mode: 'delta' | 'snapshot'
   model?: string
   usage?: ChatUsage
+  images?: ChatImageAttachment[]
 }
 
 interface StringLeaf {
@@ -115,6 +145,11 @@ const EXPLICIT_ASSISTANT_TEXT_PATHS = new Set([
   'reply.content',
   'reply.content[].text',
 ])
+
+function isUnsupportedExtraSystemPromptError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '')
+  return /invalid chat\.send params/i.test(message) && /extraSystemPrompt/i.test(message)
+}
 
 function normalizeRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
@@ -226,14 +261,168 @@ function selectPreferredLeaf(leaves: StringLeaf[], matcher: RegExp, rejectedPath
 function selectBestReplyLeaf(leaves: StringLeaf[]): string | undefined {
   const preferredPath =
     /\b(response\.text|reply\.text|result\.text|message\.content|message\.text|assistant\.text|content|text)\b/i
-  const preferred = selectPreferredLeaf(leaves, preferredPath, CHAT_REPLY_REJECTED_PATH_PATTERN)
+  const preferred = leaves.find((leaf) => {
+    if (!preferredPath.test(leaf.path)) return false
+    if (CHAT_REPLY_REJECTED_PATH_PATTERN.test(leaf.path)) return false
+    return Boolean(sanitizeAssistantVisibleText(leaf.value))
+  })?.value
   if (preferred) return preferred
 
   return leaves.find((leaf) => {
     if (CHAT_REPLY_REJECTED_PATH_PATTERN.test(leaf.path)) return false
-    if (isExplicitAssistantTextPath(leaf.path)) return true
+    if (isExplicitAssistantTextPath(leaf.path)) return Boolean(sanitizeAssistantVisibleText(leaf.value))
     return Boolean(sanitizeAssistantRawFallbackText(leaf.value))
   })?.value
+}
+
+function inferEmbeddedGatewayImageMimeType(base64Payload: string): string | null {
+  const normalized = String(base64Payload || '').replace(/\s+/g, '')
+  if (!normalized) return null
+
+  for (const entry of EMBEDDED_GATEWAY_IMAGE_SIGNATURES) {
+    if (normalized.startsWith(entry.prefix) && normalized.length >= entry.minLength) {
+      return entry.mimeType
+    }
+  }
+
+  return null
+}
+
+function normalizeGatewayImagePathCandidate(value: string): string | null {
+  const trimmed = String(value || '').trim()
+  if (!trimmed) return null
+
+  const unwrapped =
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))
+      ? trimmed.slice(1, -1).trim()
+      : trimmed
+  if (!unwrapped) return null
+
+  const looksLikeWindowsDrivePath = /^[a-z]:[\\/]/i.test(unwrapped)
+  if (!looksLikeWindowsDrivePath && /^[a-z][a-z0-9+.-]*:/i.test(unwrapped) && !/^file:/i.test(unwrapped)) {
+    return null
+  }
+
+  if (/^file:/i.test(unwrapped)) {
+    try {
+      return fileURLToPath(unwrapped)
+    } catch {
+      return null
+    }
+  }
+
+  return path.isAbsolute(unwrapped) ? unwrapped : null
+}
+
+function inferGatewayImageMimeType(filePath: string, explicitMimeType?: string): string | null {
+  const normalizedExplicitMimeType = String(explicitMimeType || '').trim().toLowerCase()
+  if (normalizedExplicitMimeType.startsWith('image/')) {
+    return normalizedExplicitMimeType
+  }
+
+  return GATEWAY_IMAGE_MIME_TYPES_BY_EXTENSION[path.extname(filePath).toLowerCase()] || null
+}
+
+function tryReadGatewayImageAttachmentFromFile(
+  candidatePath: string,
+  explicitMimeType?: string
+): ChatImageAttachment | null {
+  const normalizedPath = normalizeGatewayImagePathCandidate(candidatePath)
+  if (!normalizedPath) return null
+
+  const mimeType = inferGatewayImageMimeType(normalizedPath, explicitMimeType)
+  if (!mimeType) return null
+
+  try {
+    const stat = fs.statSync(normalizedPath)
+    if (!stat.isFile() || stat.size <= 0) return null
+
+    const encoded = fs.readFileSync(normalizedPath).toString('base64')
+    if (!encoded) return null
+
+    return {
+      url: `data:${mimeType};base64,${encoded}`,
+      mimeType,
+    }
+  } catch {
+    return null
+  }
+}
+
+function buildGatewayFilePathAttachment(candidatePath: string, explicitMimeType?: string): ChatImageAttachment | null {
+  const normalizedPath = normalizeGatewayImagePathCandidate(candidatePath)
+  if (!normalizedPath) return null
+  const mimeType = inferGatewayImageMimeType(normalizedPath, explicitMimeType) || undefined
+  return {
+    url: pathToFileURL(normalizedPath).toString(),
+    mimeType,
+  }
+}
+
+function resolveGatewayImageAttachmentFromUrlOrPath(
+  candidate: string,
+  explicitMimeType?: string
+): ChatImageAttachment | null {
+  const normalized = String(candidate || '').trim()
+  if (!normalized) return null
+
+  const normalizedExplicitMimeType = String(explicitMimeType || '').trim() || undefined
+  const inferredDataMimeType = /^data:([^;,]+)[;,]/i.exec(normalized)?.[1]?.trim()
+  if (/^data:/i.test(normalized)) {
+    return {
+      url: normalized,
+      mimeType: normalizedExplicitMimeType || inferredDataMimeType || undefined,
+    }
+  }
+
+  const hydratedFileAttachment = tryReadGatewayImageAttachmentFromFile(normalized, normalizedExplicitMimeType)
+  if (hydratedFileAttachment) return hydratedFileAttachment
+
+  if (isStructuredToolLocalPathCandidate(normalized) && /\.(png|jpe?g|webp|gif|bmp)(?:\?.*)?$/i.test(normalized)) {
+    return buildGatewayFilePathAttachment(normalized, normalizedExplicitMimeType)
+  }
+
+  if (/^https?:\/\//i.test(normalized) && /\.(png|jpe?g|webp|gif|bmp)(?:\?.*)?$/i.test(normalized)) {
+    return {
+      url: normalized,
+      mimeType: normalizedExplicitMimeType,
+    }
+  }
+
+  return null
+}
+
+function collectChatImageAttachmentsFromText(text: string): ChatImageAttachment[] {
+  const normalized = String(text || '')
+  if (!normalized) return []
+
+  const attachments: ChatImageAttachment[] = []
+  for (const match of normalized.matchAll(EMBEDDED_GATEWAY_IMAGE_DATA_URL_PATTERN)) {
+    const mimeType = String(match[1] || '').trim().toLowerCase()
+    const base64Payload = String(match[2] || '').replace(/\s+/g, '')
+    if (!mimeType || !base64Payload) continue
+    attachments.push({
+      url: `data:${mimeType};base64,${base64Payload}`,
+      mimeType,
+    })
+  }
+
+  for (const match of normalized.matchAll(EMBEDDED_GATEWAY_RAW_IMAGE_BASE64_PATTERN)) {
+    const base64Payload = String(match[0] || '').replace(/\s+/g, '')
+    const mimeType = inferEmbeddedGatewayImageMimeType(base64Payload)
+    if (!mimeType || !base64Payload) continue
+    attachments.push({
+      url: `data:${mimeType};base64,${base64Payload}`,
+      mimeType,
+    })
+  }
+
+  for (const match of normalized.matchAll(EMBEDDED_GATEWAY_IMAGE_PATH_PATTERN)) {
+    const attachment = resolveGatewayImageAttachmentFromUrlOrPath(String(match[0] || ''))
+    if (attachment) attachments.push(attachment)
+  }
+
+  return attachments
 }
 
 function findFirstStringField(value: unknown, keys: string[]): string | undefined {
@@ -244,6 +433,156 @@ function findFirstStringField(value: unknown, keys: string[]): string | undefine
     if (typeof nested === 'string' && nested.trim()) return nested.trim()
   }
   return undefined
+}
+
+function stripImageAttachmentUrlFromText(
+  text: string | null | undefined,
+  images: ChatImageAttachment[] | undefined
+): string | null {
+  const normalizedText = String(text || '').trim()
+  if (!normalizedText) return null
+  if (!images || images.length === 0) return normalizedText
+  return images.some((image) => image.url === normalizedText) ? null : normalizedText
+}
+
+function isStructuredToolLocalPathCandidate(candidatePath: string): boolean {
+  const normalized = String(candidatePath || '').trim()
+  if (!normalized || normalized === '.' || normalized === '..') return false
+  if (/^data:/i.test(normalized)) return false
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(normalized) && !/^file:\/\//i.test(normalized)) return false
+  if (/^[\\/]{2}/.test(normalized)) return true
+  if (/^[a-z]:[\\/]/i.test(normalized)) return true
+  return normalized.startsWith('/') || /^file:\/\//i.test(normalized)
+}
+
+function collectChatImageAttachments(value: unknown, depth = 0): ChatImageAttachment[] {
+  if (depth > 6 || value == null) return []
+  if (typeof value === 'string') {
+    return collectChatImageAttachmentsFromText(value)
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => collectChatImageAttachments(entry, depth + 1))
+  }
+  const record = normalizeRecord(value)
+  if (!record) return []
+
+  const props = normalizeRecord(record.props)
+  const blockType = String(record.type || record.kind || '').trim().toLowerCase()
+  const data = typeof record.data === 'string' ? record.data.trim() : ''
+  const mimeType =
+    findFirstStringField(record, ['mimeType', 'mime_type', 'contentType']) ||
+    findFirstStringField(props, ['mimeType', 'mime_type', 'contentType']) ||
+    ''
+
+  const attachments: ChatImageAttachment[] = []
+  if (blockType === 'image' && data) {
+    attachments.push({
+      url: `data:${mimeType || 'image/png'};base64,${data}`,
+      mimeType: mimeType || undefined,
+    })
+  } else if (blockType === 'image') {
+    const imageUrl =
+      findFirstStringField(record, ['url', 'src']) ||
+      findFirstStringField(props, ['url', 'src'])
+    if (imageUrl) {
+      const inferredMimeType = /^data:([^;,]+)[;,]/i.exec(imageUrl)?.[1]?.trim()
+      const attachment = resolveGatewayImageAttachmentFromUrlOrPath(imageUrl, mimeType || inferredMimeType || undefined)
+      if (attachment) {
+        attachments.push(attachment)
+      }
+    }
+  } else {
+    const candidatePaths = [
+      findFirstStringField(record, [
+        'path',
+        'file',
+        'file_path',
+        'filepath',
+        'filePath',
+        'url',
+        'src',
+        'screenshotPath',
+        'screenshot_path',
+        'imagePath',
+        'image_path',
+        'artifactPath',
+        'artifact_path',
+        'attachmentPath',
+        'attachment_path',
+        'outputPath',
+        'output_path',
+        'screenshot',
+        'image',
+        'artifact',
+        'attachment',
+      ]),
+      findFirstStringField(props, [
+        'path',
+        'file',
+        'file_path',
+        'filepath',
+        'filePath',
+        'url',
+        'src',
+        'screenshotPath',
+        'screenshot_path',
+        'imagePath',
+        'image_path',
+        'artifactPath',
+        'artifact_path',
+        'attachmentPath',
+        'attachment_path',
+        'outputPath',
+        'output_path',
+        'screenshot',
+        'image',
+        'artifact',
+        'attachment',
+      ])
+    ].filter(Boolean) as string[]
+
+    for (const candidatePath of candidatePaths) {
+      const attachment = resolveGatewayImageAttachmentFromUrlOrPath(candidatePath, mimeType || undefined)
+      if (attachment) {
+        attachments.push(attachment)
+      }
+    }
+  }
+
+  const childAttachments = Object.entries(record).flatMap(([key, entry]) => {
+    if (blockType === 'image' && (key === 'data' || key === 'url' || key === 'src')) return []
+    return collectChatImageAttachments(entry, depth + 1)
+  })
+
+  return [...attachments, ...childAttachments]
+}
+
+function summarizeToolOnlyPath(value: unknown): string | null {
+  const record = normalizeRecord(value)
+  if (!record) return null
+  const pathValue = typeof record.path === 'string' ? record.path.trim() : ''
+  if (!pathValue) return null
+  if (typeof record.command === 'string' || typeof record.cmd === 'string') return null
+  if (!isStructuredToolLocalPathCandidate(pathValue)) return null
+  return `Saved to ${pathValue}`
+}
+
+function mergeChatImageAttachments(
+  current: ChatImageAttachment[],
+  next: ChatImageAttachment[] | undefined
+): ChatImageAttachment[] {
+  if (!next || next.length === 0) return current
+  const merged = [...current]
+  const seen = new Set(
+    current.map((entry) => `${entry.url}\u0000${String(entry.mimeType || '')}`)
+  )
+  for (const entry of next) {
+    const key = `${entry.url}\u0000${String(entry.mimeType || '')}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    merged.push(entry)
+  }
+  return merged
 }
 
 function applyStreamTextUpdate(
@@ -459,19 +798,30 @@ function isGatewayChatEventPayload(value: unknown): value is GatewayChatEventPay
 function parseGatewayChatMessage(message: unknown, state: GatewayChatEventPayload['state']): ParsedGatewayChatMessage {
   if (typeof message === 'string') {
     const normalized = sanitizeAssistantRawFallbackText(message)
+    const inlineTextImages = collectChatImageAttachmentsFromText(message)
     return {
       text: normalized || null,
       mode: state === 'delta' ? 'delta' : 'snapshot',
+      images: inlineTextImages.length > 0 ? inlineTextImages : undefined,
     }
   }
 
   const leaves = collectStringLeaves(message, '')
   const explicitDelta =
     selectPreferredLeaf(leaves, /\b(delta|textDelta|contentDelta|replyDelta)\b/i, CHAT_REPLY_REJECTED_PATH_PATTERN) || undefined
-  const snapshotText = sanitizeAssistantVisibleText(selectBestReplyLeaf(leaves) || '') || undefined
+  const snapshotLeaf = selectBestReplyLeaf(leaves) || ''
+  const snapshotText = sanitizeAssistantVisibleText(snapshotLeaf) || undefined
+  const images = mergeChatImageAttachments(
+    collectChatImageAttachments(message),
+    collectChatImageAttachmentsFromText(explicitDelta || snapshotLeaf)
+  )
+  const resolvedText = stripImageAttachmentUrlFromText(
+    sanitizeAssistantVisibleText(explicitDelta || snapshotText || '') || null,
+    images
+  )
 
   return {
-    text: sanitizeAssistantVisibleText(explicitDelta || snapshotText || '') || null,
+    text: resolvedText || summarizeToolOnlyPath(message),
     mode: explicitDelta || state === 'delta' ? 'delta' : 'snapshot',
     model:
       findFirstStringField(message, ['model', 'modelName']) ||
@@ -479,6 +829,7 @@ function parseGatewayChatMessage(message: unknown, state: GatewayChatEventPayloa
         ? findFirstStringField((message as Record<string, unknown>).message, ['model', 'modelName'])
         : undefined),
     usage: parseUsageFromPayload(message),
+    images: images.length > 0 ? images : undefined,
   }
 }
 
@@ -739,6 +1090,7 @@ export function createGatewayStreamingChatTransport(
       let streamedText = ''
       let streamedModel: string | undefined
       let streamedUsage: ChatUsage | undefined
+      let streamedImages: ChatImageAttachment[] = []
       let finalPayload: GatewayChatEventPayload | null = null
       let terminalState: GatewayChatEventPayload['state'] | null = null
       let runId = ''
@@ -813,6 +1165,7 @@ export function createGatewayStreamingChatTransport(
           const parsedMessage = parseGatewayChatMessage(payload.message, payload.state)
           streamedModel = parsedMessage.model || streamedModel
           streamedUsage = parseUsageFromPayload(payload.usage) || parsedMessage.usage || streamedUsage
+          streamedImages = mergeChatImageAttachments(streamedImages, parsedMessage.images)
 
           if (parsedMessage.text) {
             const update = applyStreamTextUpdate(streamedText, parsedMessage.text, parsedMessage.mode)
@@ -846,14 +1199,33 @@ export function createGatewayStreamingChatTransport(
         activeClient
           .connect()
           .then(async () => {
-            const response = (await activeClient?.request('chat.send', {
-              sessionKey,
-              message: input.messageText,
-              thinking: input.thinking,
-              deliver: false,
-              timeoutMs: GATEWAY_STREAM_TIMEOUT_MS,
-              idempotencyKey,
-            })) as Record<string, unknown> | null
+            const sendChatRequest = async (includeExtraSystemPrompt: boolean) =>
+              (await activeClient?.request('chat.send', {
+                sessionKey,
+                message: input.messageText,
+                thinking: input.thinking,
+                deliver: false,
+                timeoutMs: GATEWAY_STREAM_TIMEOUT_MS,
+                idempotencyKey,
+                ...(includeExtraSystemPrompt && input.extraSystemPrompt
+                  ? { extraSystemPrompt: input.extraSystemPrompt }
+                  : {}),
+              })) as Record<string, unknown> | null
+
+            const shouldIncludeExtraSystemPrompt = Boolean(input.extraSystemPrompt)
+            let response: Record<string, unknown> | null = null
+            try {
+              response = await sendChatRequest(shouldIncludeExtraSystemPrompt)
+            } catch (error) {
+              if (
+                shouldIncludeExtraSystemPrompt &&
+                isUnsupportedExtraSystemPromptError(error)
+              ) {
+                response = await sendChatRequest(false)
+              } else {
+                throw error
+              }
+            }
 
             accepted = true
             runId = String(response?.runId || runId || idempotencyKey).trim()
@@ -868,6 +1240,7 @@ export function createGatewayStreamingChatTransport(
         const resolvedPayload = await completion
         const finalMessage = parseGatewayChatMessage(resolvedPayload.message, resolvedPayload.state)
         const finalText = String(finalMessage.text || streamedText || '').trim()
+        streamedImages = mergeChatImageAttachments(streamedImages, finalMessage.images)
         return {
           ok: true,
           stdout: JSON.stringify({
@@ -878,12 +1251,15 @@ export function createGatewayStreamingChatTransport(
             },
             model: streamedModel,
             usage: streamedUsage,
+            images: streamedImages,
+            payload: resolvedPayload,
           }),
           stderr: '',
           code: 0,
           streamedText: finalText,
           streamedModel,
           streamedUsage,
+          streamedImages,
         }
       } catch (error) {
         const canceledBySignal = terminalState === 'aborted' || abortSignal?.aborted === true
@@ -900,6 +1276,7 @@ export function createGatewayStreamingChatTransport(
           streamedText,
           streamedModel,
           streamedUsage,
+          streamedImages,
           canceled: canceledBySignal,
         }
       } finally {

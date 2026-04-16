@@ -18,6 +18,11 @@ import {
   detectOpenClawVersionBand,
   inferCompatibilityBlockingReason,
 } from './openclaw-upgrade-compatibility'
+import {
+  probeGatewayPortReachable,
+  probeGatewaySocketReady,
+  readConfiguredGatewayPort,
+} from './openclaw-gateway-probes'
 
 const fs = process.getBuiltinModule('node:fs') as typeof import('node:fs')
 const os = process.getBuiltinModule('node:os') as typeof import('node:os')
@@ -231,6 +236,68 @@ async function saveStore(store: OpenClawRuntimeReconcileStore): Promise<OpenClaw
   return store
 }
 
+function shouldSanitizeRuntimeRunningStateForUi(store: OpenClawRuntimeReconcileStore): boolean {
+  if (store.runtime.stateCode === 'ready') return true
+  return (
+    store.runtime.stateCode === 'degraded'
+    && store.runtime.safeToRetry
+    && (store.runtime.blockingReason === 'control_ui_handshake_failed' || store.runtime.blockingReason === 'service_generation_stale')
+    && store.lastSeenVersionBand === 'openclaw_2026_3_23_to_2026_3_24'
+  )
+}
+
+function buildUiSanitizedRuntimeStore(
+  store: OpenClawRuntimeReconcileStore,
+  summary: string
+): OpenClawRuntimeReconcileStore {
+  return {
+    ...store,
+    runtime: {
+      ...store.runtime,
+      stateCode: 'degraded',
+      blockingReason: 'service_generation_stale',
+      safeToRetry: true,
+      lastReconcileSummary: summary,
+    },
+  }
+}
+
+export async function sanitizeRuntimeReconcileStoreForUi(
+  store: OpenClawRuntimeReconcileStore,
+  deps: {
+    readConfiguredGatewayPort?: () => Promise<number>
+    probeGatewayPortReachable?: (port?: number) => Promise<boolean>
+    probeGatewaySocketReady?: (timeoutMs?: number) => Promise<boolean>
+  } = {}
+): Promise<OpenClawRuntimeReconcileStore> {
+  if (!shouldSanitizeRuntimeRunningStateForUi(store)) {
+    return store
+  }
+
+  const readConfiguredGatewayPortFn = deps.readConfiguredGatewayPort ?? readConfiguredGatewayPort
+  const probeGatewayPortReachableFn = deps.probeGatewayPortReachable ?? probeGatewayPortReachable
+  const probeGatewaySocketReadyFn = deps.probeGatewaySocketReady ?? probeGatewaySocketReady
+
+  const port = await readConfiguredGatewayPortFn().catch(() => undefined)
+  const reachable = await probeGatewayPortReachableFn(port).catch(() => false)
+  if (!reachable) {
+    return buildUiSanitizedRuntimeStore(
+      store,
+      '已忽略陈旧的 Gateway 运行态：当前配置端口未检测到本机监听。'
+    )
+  }
+
+  const socketReady = await probeGatewaySocketReadyFn().catch(() => false)
+  if (!socketReady) {
+    return buildUiSanitizedRuntimeStore(
+      store,
+      '已忽略陈旧的 Gateway 运行态：端口可达，但当前 Gateway RPC 尚未真正可用。'
+    )
+  }
+
+  return store
+}
+
 export async function readOpenClawRuntimeReconcileStore(): Promise<OpenClawRuntimeReconcileStore> {
   try {
     const raw = await readFile(resolveOpenClawRuntimeReconcileStorePath(), 'utf8')
@@ -238,6 +305,13 @@ export async function readOpenClawRuntimeReconcileStore(): Promise<OpenClawRunti
   } catch {
     return createDefaultOpenClawRuntimeReconcileStore()
   }
+}
+
+export async function readOpenClawRuntimeReconcileStoreForUi(
+  deps: Parameters<typeof sanitizeRuntimeReconcileStoreForUi>[1] = {}
+): Promise<OpenClawRuntimeReconcileStore> {
+  const store = await readOpenClawRuntimeReconcileStore()
+  return sanitizeRuntimeReconcileStoreForUi(store, deps)
 }
 
 export async function recordObservedOpenClawVersion(

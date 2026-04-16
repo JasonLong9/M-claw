@@ -37,6 +37,7 @@ describe('openclaw-bundled-runtime-windows', () => {
         'C:\\Users\\alice\\AppData\\Roaming\\npm\\openclaw.ps1',
         'C:\\Users\\alice\\AppData\\Roaming\\npm\\openclaw',
       ],
+      nodeTarget: 'C:\\Users\\alice\\AppData\\Roaming\\npm\\node.exe',
       packageRootTarget: 'C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw',
     })
   })
@@ -94,6 +95,7 @@ describe('openclaw-bundled-runtime-windows', () => {
       [
         'C:\\Program Files\\Mclaw\\resources\\openclaw-bundle\\runtime\\windows-x64\\openclaw.cmd',
         'C:\\Program Files\\Mclaw\\resources\\openclaw-bundle\\runtime\\windows-x64\\openclaw.ps1',
+        'C:\\Program Files\\Mclaw\\resources\\openclaw-bundle\\runtime\\windows-x64\\node.exe',
         'C:\\Program Files\\Mclaw\\resources\\openclaw-bundle\\runtime\\windows-x64\\node_modules\\openclaw\\package.json',
       ].includes(candidatePath)
     )
@@ -101,6 +103,9 @@ describe('openclaw-bundled-runtime-windows', () => {
 
     expect(sourceLayout?.packageRootSource).toBe(
       'C:\\Program Files\\Mclaw\\resources\\openclaw-bundle\\runtime\\windows-x64\\node_modules\\openclaw'
+    )
+    expect(sourceLayout?.nodeSource).toBe(
+      'C:\\Program Files\\Mclaw\\resources\\openclaw-bundle\\runtime\\windows-x64\\node.exe'
     )
     expect(copyPlan?.binaryCopies).toEqual([
       {
@@ -112,6 +117,10 @@ describe('openclaw-bundled-runtime-windows', () => {
         targetPath: 'C:\\Users\\alice\\AppData\\Roaming\\npm\\openclaw.ps1',
       },
     ])
+    expect(copyPlan?.nodeCopy).toEqual({
+      sourcePath: 'C:\\Program Files\\Mclaw\\resources\\openclaw-bundle\\runtime\\windows-x64\\node.exe',
+      targetPath: 'C:\\Users\\alice\\AppData\\Roaming\\npm\\node.exe',
+    })
   })
 
   it('validates copied runtime targets', () => {
@@ -125,6 +134,7 @@ describe('openclaw-bundled-runtime-windows', () => {
             'C:\\Users\\alice\\AppData\\Roaming\\npm\\openclaw.ps1',
             'C:\\Users\\alice\\AppData\\Roaming\\npm\\openclaw',
           ],
+          nodeTarget: 'C:\\Users\\alice\\AppData\\Roaming\\npm\\node.exe',
           packageRootTarget: 'C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw',
         },
         binaryCopies: [
@@ -133,18 +143,24 @@ describe('openclaw-bundled-runtime-windows', () => {
             targetPath: 'C:\\Users\\alice\\AppData\\Roaming\\npm\\openclaw.cmd',
           },
         ],
+        nodeCopy: {
+          sourcePath: 'C:\\Program Files\\Mclaw\\resources\\openclaw-bundle\\runtime\\windows-x64\\node.exe',
+          targetPath: 'C:\\Users\\alice\\AppData\\Roaming\\npm\\node.exe',
+        },
         packageRootSource: 'C:\\Program Files\\Mclaw\\resources\\openclaw-bundle\\runtime\\windows-x64\\node_modules\\openclaw',
         packageRootTarget: 'C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw',
       },
       (candidatePath) =>
         [
           'C:\\Users\\alice\\AppData\\Roaming\\npm\\openclaw.cmd',
+          'C:\\Users\\alice\\AppData\\Roaming\\npm\\node.exe',
           'C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\package.json',
         ].includes(candidatePath)
     )
 
     expect(validation.ok).toBe(true)
     expect(validation.binaryPath).toBe('C:\\Users\\alice\\AppData\\Roaming\\npm\\openclaw.cmd')
+    expect(validation.nodePath).toBe('C:\\Users\\alice\\AppData\\Roaming\\npm\\node.exe')
     expect(validation.errors).toEqual([])
   })
 

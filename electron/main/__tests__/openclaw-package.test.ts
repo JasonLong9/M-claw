@@ -182,6 +182,29 @@ beforeEach(() => {
 })
 
 describe('resolveOpenClawBinaryPath', () => {
+  it('prefers the bundled runtime binary before PATH lookup when Qclaw already ships one', async () => {
+    inspectBundledOpenClawDeliveryStatusMock.mockReturnValue({
+      manifestPath: 'D:\\bundle\\manifest.json',
+      manifest: {} as any,
+      platform: 'win32',
+      arch: 'x64',
+      defaultDeliveryMode: 'bundled-runtime',
+      targetDeliveryMode: 'bundled-runtime',
+      runtimeArtifact: {} as any,
+      runtimePath: 'D:\\bundle\\runtime\\windows-x64',
+      runtimeBinaryPath: 'D:\\bundle\\runtime\\windows-x64\\openclaw.cmd',
+    })
+
+    const resolved = await resolveOpenClawBinaryPath({
+      commandPathResolver: async () => 'C:\\Users\\alice\\AppData\\Roaming\\npm\\openclaw.cmd',
+      platform: 'win32',
+      env: buildTestEnv(),
+      fileExists: () => true,
+    })
+
+    expect(resolved).toBe('D:\\bundle\\runtime\\windows-x64\\openclaw.cmd')
+  })
+
   it('resolves the binary path via command lookup', async () => {
     const install = createFakeOpenClawInstall()
 

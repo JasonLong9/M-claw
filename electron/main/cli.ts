@@ -1,4 +1,4 @@
-/**
+﻿/**
  * OpenClaw CLI wrapper — all interactions via spawn
  */
 import type { ChildProcess } from 'node:child_process'
@@ -130,6 +130,7 @@ import {
   type OpenClawElevatedLifecycleTransactionResult,
 } from './openclaw-elevated-lifecycle-transaction'
 import { sanitizeManagedInstallerEnv } from './managed-installer-env'
+import { sanitizeManagedRuntimeProviderEnv } from './managed-runtime-env'
 import { cleanupIsolatedNpmCacheEnv, createIsolatedNpmCacheEnv } from './npm-cache-env'
 import { pollWithBackoff } from '../../src/shared/polling'
 import { PINNED_OPENCLAW_VERSION } from '../../src/shared/openclaw-version-policy'
@@ -138,7 +139,7 @@ import {
   resolveBundledOpenClawInstallPlan,
   type BundledOpenClawInstallPlan,
 } from './openclaw-bundled-plan'
-import { ensureRequiredOpenClawStateDirs } from './openclaw-state-bootstrap'
+import { ensureRequiredOpenClawStateDirs, repairManagedOpenClawStateLayout } from './openclaw-state-bootstrap'
 import { inspectBundledOpenClawDeliveryStatus } from './openclaw-bundled-manifest'
 import {
   buildBundledOpenClawWindowsCopyPlan,
@@ -173,6 +174,14 @@ function extractFirstNonEmptyLine(text: string): string {
   return ''
 }
 
+function hasCanonicalDeepSeekProviderConfig(config: Record<string, any> | null | undefined): boolean {
+  if (!config || typeof config !== 'object') return false
+  const deepSeekProvider = config.models?.providers?.deepseek
+  if (!deepSeekProvider || typeof deepSeekProvider !== 'object') return false
+  const customOpenAiProvider = config.models?.providers?.['custom-openai']
+  return !customOpenAiProvider || typeof customOpenAiProvider !== 'object'
+}
+
 async function ensureOpenClawConfigRepairPreflight(): Promise<void> {
   if (openClawConfigRepairPreflightPromise) {
     return openClawConfigRepairPreflightPromise
@@ -181,6 +190,10 @@ async function ensureOpenClawConfigRepairPreflight(): Promise<void> {
   openClawConfigRepairPreflightPromise = (async () => {
     const openClawPaths = await getOpenClawPaths().catch(() => null)
     const homeDir = String(openClawPaths?.homeDir || '').trim()
+    const managedHomeEnvRoot = openClawPaths ? resolveManagedOpenClawHomeEnvRoot(openClawPaths) : ''
+    if (managedHomeEnvRoot) {
+      await repairManagedOpenClawStateLayout(managedHomeEnvRoot).catch(() => undefined)
+    }
     if (homeDir) {
       await ensureRequiredOpenClawStateDirs(homeDir)
     }
@@ -200,11 +213,38 @@ async function ensureOpenClawConfigRepairPreflight(): Promise<void> {
       resolveHomeDir: async () => {
         return homeDir || null
       },
-      repair: async () =>
-        repairKnownProviderConfigGapsOnDisk({
+      repair: async () => {
+        const repairResult = await repairKnownProviderConfigGapsOnDisk({
           readConfig,
           writeConfig,
-        }),
+        })
+        const needsDeepSeekAuthMigration = (repairResult.providerMigrations || []).some(
+          (migration) => migration.fromProvider === 'custom-openai' && migration.toProvider === 'deepseek'
+        )
+        const effectiveConfig = repairResult.config || (await readConfig().catch(() => null))
+        const shouldCanonicalizeDeepSeek = needsDeepSeekAuthMigration || hasCanonicalDeepSeekProviderConfig(effectiveConfig)
+        if (shouldCanonicalizeDeepSeek && homeDir) {
+          const { migrateAuthProfile, resolvePreferredAuthStorePathFromHomeDir } = await import('./local-model-probe')
+          const authStorePath = await resolvePreferredAuthStorePathFromHomeDir(homeDir, {
+            agentId: 'main',
+          })
+          await migrateAuthProfile({
+            fromProvider: 'custom-openai',
+            toProvider: 'deepseek',
+            fromProfileId: 'custom-openai:local',
+            toProfileId: 'deepseek:default',
+            deleteSourceProfile: true,
+            // Avoid calling `models status` from inside the startup preflight itself,
+            // otherwise the auth-store lookup can recurse back into this same preflight.
+            authStorePath,
+          })
+          await writeEnvFile({
+            OPENAI_BASE_URL: null,
+            OPENAI_API_KEY: null,
+          })
+        }
+        return repairResult
+      },
     })
   })()
 
@@ -279,6 +319,8 @@ export interface NodeCheckResult {
   requiredVersion: string
   targetVersion: string
   installStrategy: 'nvm' | 'installer'
+  runtimeSource?: 'bundled' | 'shell' | 'nvm' | 'candidate'
+  executablePath?: string
 }
 
 export interface RunCliStreamOptions {
@@ -294,6 +336,36 @@ export interface RunCliStreamOptions {
 
 export async function getOpenClawPaths(): Promise<OpenClawPaths> {
   return resolveRuntimeOpenClawPaths()
+}
+
+function resolveManagedOpenClawHomeEnvRoot(openClawPaths: OpenClawPaths): string {
+  const configFile = String(openClawPaths?.configFile || '').trim()
+  if (configFile) {
+    const configDir = dirname(configFile).trim()
+    if (configDir) {
+      const normalizedLeaf = String(configDir.split(/[\\/]/g).pop() || '').trim().toLowerCase()
+      if (normalizedLeaf === '.openclaw') {
+        const parentDir = dirname(configDir).trim()
+        if (parentDir) return parentDir
+      }
+      return configDir
+    }
+  }
+
+  return String(openClawPaths?.homeDir || '').trim()
+}
+
+async function buildManagedOpenClawRuntimeEnv(
+  baseEnv: NodeJS.ProcessEnv
+): Promise<NodeJS.ProcessEnv> {
+  const openClawPaths = await getOpenClawPaths().catch(() => null)
+  if (!openClawPaths) return baseEnv
+  const managedHomeEnvRoot = resolveManagedOpenClawHomeEnvRoot(openClawPaths)
+  return {
+    ...baseEnv,
+    OPENCLAW_HOME: String(baseEnv.OPENCLAW_HOME || managedHomeEnvRoot || '').trim(),
+    OPENCLAW_CONFIG_PATH: String(baseEnv.OPENCLAW_CONFIG_PATH || openClawPaths.configFile || '').trim(),
+  }
 }
 
 const isWin = process.platform === 'win32'
@@ -719,6 +791,17 @@ async function runCliStreamingOnce(args: string[], options: RunCliStreamOptions 
   const commandProbeEnv = buildCommandCapabilityEnv()
   const explicitBinaryPath = String(options.binaryPath || '').trim()
   if (!explicitBinaryPath) {
+    if (isWin) {
+      const bundledRuntimeBinaryPath = inspectBundledOpenClawDeliveryStatus({
+        cwd: process.cwd(),
+        resourcesPath: process.resourcesPath,
+        env: process.env,
+        platform: process.platform,
+      }).runtimeBinaryPath
+      if (bundledRuntimeBinaryPath) {
+        return runCliStreamingOnce(args, { ...options, binaryPath: bundledRuntimeBinaryPath })
+      }
+    }
     const openClawCapability = await probePlatformCommandCapability('openclaw', {
       platform: process.platform,
       env: commandProbeEnv,
@@ -767,44 +850,48 @@ async function runCliStreamingOnce(args: string[], options: RunCliStreamOptions 
     : null
 
   const controlDomain = resolveCommandControlDomain(args, options.controlDomain)
-  return new Promise((resolve) => {
-    // 把常见的 node bin 目录加到 PATH，确保能找到 openclaw
-    const envPath = buildCliPathWithCandidates({
-      platform: process.platform,
-      currentPath: process.env.PATH || '',
-      detectedNodeBinDir,
-      env: process.env,
-    })
-    const managedCwd = resolveManagedSpawnCwd()
+  const inheritedProcessEnv = sanitizeManagedRuntimeProviderEnv(process.env)
+  // 把常见的 node bin 目录加到 PATH，确保能找到 openclaw
+  const envPath = buildCliPathWithCandidates({
+    platform: process.platform,
+    currentPath: inheritedProcessEnv.PATH || process.env.PATH || '',
+    detectedNodeBinDir,
+    env: inheritedProcessEnv,
+  })
+  const managedCwd = resolveManagedSpawnCwd()
 
-    const resolvedCommand = resolveOpenClawCommand(args, {
-      platform: process.platform,
-      expectAvailable: expectCapability?.available,
-      expectWarning: expectCapability?.message,
-      scriptAvailable: scriptCapability?.available,
-      scriptWarning: scriptCapability?.message,
-      commandPath: explicitBinaryPath || undefined,
-    })
-    const mergedEnv: NodeJS.ProcessEnv = {
-      ...process.env,
-      ...envFromFile,
-      ...(options.env || {}),
-      PATH: envPath,
-      NO_COLOR: '1',
-    }
-    if (options.env) {
-      for (const [key, value] of Object.entries(options.env)) {
-        if (value === undefined || value === null) {
-          delete mergedEnv[key]
-        }
+  const resolvedCommand = resolveOpenClawCommand(args, {
+    platform: process.platform,
+    expectAvailable: expectCapability?.available,
+    expectWarning: expectCapability?.message,
+    scriptAvailable: scriptCapability?.available,
+    scriptWarning: scriptCapability?.message,
+    commandPath: explicitBinaryPath || undefined,
+  })
+  let mergedEnv: NodeJS.ProcessEnv = {
+    ...inheritedProcessEnv,
+    ...envFromFile,
+    ...(options.env || {}),
+    PATH: envPath,
+    NO_COLOR: '1',
+  }
+  if (options.env) {
+    for (const [key, value] of Object.entries(options.env)) {
+      if (value === undefined || value === null) {
+        delete mergedEnv[key]
       }
     }
+  }
+  mergedEnv = await buildManagedOpenClawRuntimeEnv(mergedEnv)
+
+  return new Promise((resolve) => {
 
     const proc = spawn(resolvedCommand.command, resolvedCommand.args, {
       env: mergedEnv,
       cwd: managedCwd,
       timeout,
       shell: resolvedCommand.shell,
+      windowsHide: true,
       stdio: resolveStdioForCommand(resolvedCommand.command),
     })
     trackActiveProcess(proc, controlDomain)
@@ -990,6 +1077,7 @@ async function runShellOnce(
         cwd: normalizedOptions.cwd || resolveManagedSpawnCwd(),
         shell: forceOpenShell ? true : useShell,
         timeout,
+        windowsHide: true,
       })
       trackActiveProcess(proc, controlDomain)
       let stdout = ''
@@ -1086,6 +1174,7 @@ async function runDirectOnce(
       env: managedEnv,
       cwd: resolveManagedSpawnCwd(),
       timeout,
+      windowsHide: true,
     })
     trackActiveProcess(proc, controlDomain)
     let stdout = ''
@@ -1342,7 +1431,11 @@ function buildNodeCheckResult(
   installed: boolean,
   requiredVersion: string,
   targetVersion: string,
-  installStrategy: 'nvm' | 'installer'
+  installStrategy: 'nvm' | 'installer',
+  extras: {
+    runtimeSource?: 'bundled' | 'shell' | 'nvm' | 'candidate'
+    executablePath?: string
+  } = {}
 ): NodeCheckResult {
   const normalizedVersion = String(version || '').trim()
   const meetsRequirement = installed && isNodeVersionAtLeast(normalizedVersion, requiredVersion)
@@ -1354,6 +1447,26 @@ function buildNodeCheckResult(
     requiredVersion,
     targetVersion,
     installStrategy,
+    runtimeSource: extras.runtimeSource,
+    executablePath: extras.executablePath,
+  }
+}
+
+async function resolveBundledNodeExecutablePath(): Promise<string | null> {
+  const deliveryStatus = inspectBundledOpenClawDeliveryStatus({
+    cwd: process.cwd(),
+    resourcesPath: process.resourcesPath,
+    env: process.env,
+  })
+  const runtimePath = String(deliveryStatus.runtimePath || '').trim()
+  if (!runtimePath) return null
+
+  const bundledNodePath = join(runtimePath, process.platform === 'win32' ? 'node.exe' : 'node')
+  try {
+    await access(bundledNodePath)
+    return bundledNodePath
+  } catch {
+    return null
   }
 }
 
@@ -1366,6 +1479,30 @@ export async function checkNode(): Promise<NodeCheckResult> {
   const requiredVersion = installPlan?.requiredVersion || requirement.minVersion
   const targetVersion = installPlan?.version || ''
   const nvmDir = !isWin ? await detectNvmDir() : null
+
+  const bundledNodePath = await resolveBundledNodeExecutablePath().catch(() => null)
+  if (bundledNodePath) {
+    const bundledNodeResult = await runDirect(
+      bundledNodePath,
+      ['--version'],
+      MAIN_RUNTIME_POLICY.cli.lightweightProbeTimeoutMs,
+      'env-setup'
+    )
+    if (bundledNodeResult.ok) {
+      detectedNodeBinDir = dirname(bundledNodePath)
+      return buildNodeCheckResult(
+        bundledNodeResult.stdout.trim(),
+        true,
+        requiredVersion,
+        targetVersion,
+        'installer',
+        {
+          runtimeSource: 'bundled',
+          executablePath: bundledNodePath,
+        }
+      )
+    }
+  }
 
   // 先尝试当前 shell / 已知候选目录中的 node
   const shellNode = await resolveNodeFromShell()
@@ -1384,7 +1521,13 @@ export async function checkNode(): Promise<NodeCheckResult> {
       true,
       requiredVersion,
       targetVersion,
-      preferredNode.installStrategy
+      preferredNode.installStrategy,
+      {
+        runtimeSource: preferredNode.installStrategy === 'nvm' ? 'nvm' : 'shell',
+        executablePath: preferredNode.candidate.binDir
+          ? join(preferredNode.candidate.binDir, process.platform === 'win32' ? 'node.exe' : 'node')
+          : undefined,
+      }
     )
   }
 
@@ -1400,7 +1543,11 @@ export async function checkNode(): Promise<NodeCheckResult> {
         true,
         requiredVersion,
         targetVersion,
-        resolveNodeInstallStrategy(nodeBinDir, nvmDir)
+        resolveNodeInstallStrategy(nodeBinDir, nvmDir),
+        {
+          runtimeSource: 'candidate',
+          executablePath: nodePath,
+        }
       )
     }
   }
@@ -1934,6 +2081,12 @@ async function ensureDetectedNodeBinDirForWindowsInstall(): Promise<void> {
     } catch {
       // Continue to rediscover below.
     }
+  }
+
+  const bundledNodePath = await resolveBundledNodeExecutablePath().catch(() => null)
+  if (bundledNodePath) {
+    detectedNodeBinDir = dirname(bundledNodePath)
+    return
   }
 
   const shellNode = await resolveNodeFromShell().catch(() => null)
@@ -2727,18 +2880,20 @@ export async function gatewayRunInBackground(options: {
 
   const envFromFile = await readEnvFile().catch(() => ({}))
   const spawn = await getSpawnFn()
+  const inheritedProcessEnv = sanitizeManagedRuntimeProviderEnv(process.env)
   const envPath = buildCliPathWithCandidates({
     platform: process.platform,
-    currentPath: process.env.PATH || '',
+    currentPath: inheritedProcessEnv.PATH || process.env.PATH || '',
     detectedNodeBinDir,
-    env: process.env,
+    env: inheritedProcessEnv,
   })
-  const mergedEnv: NodeJS.ProcessEnv = {
-    ...process.env,
+  let mergedEnv: NodeJS.ProcessEnv = {
+    ...inheritedProcessEnv,
     ...envFromFile,
     PATH: envPath,
     NO_COLOR: '1',
   }
+  mergedEnv = await buildManagedOpenClawRuntimeEnv(mergedEnv)
   const binaryPath = await resolveOpenClawBinaryPath({
     platform: process.platform,
     env: mergedEnv,

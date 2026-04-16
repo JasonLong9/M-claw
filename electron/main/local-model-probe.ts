@@ -6,7 +6,7 @@
 import { atomicWriteJson } from './atomic-write'
 import { parseJsonFromOutput } from './openclaw-command-output'
 
-const { readdir, readFile } = process.getBuiltinModule('node:fs/promises') as typeof import('node:fs/promises')
+const { access, readdir, readFile } = process.getBuiltinModule('node:fs/promises') as typeof import('node:fs/promises')
 const { join } = process.getBuiltinModule('node:path') as typeof import('node:path')
 
 export type LocalProviderType = 'ollama' | 'vllm' | 'custom-openai'
@@ -177,7 +177,7 @@ export async function testLocalConnection(
 }
 
 export interface EnsureLocalAuthProfileInput {
-  provider: LocalProviderType
+  provider: LocalProviderType | 'deepseek'
   apiKey?: string
 }
 
@@ -201,6 +201,24 @@ export interface UpsertApiKeyAuthProfileResult {
   updated: boolean
   profileId: string
   authStorePath?: string
+  error?: string
+}
+
+export interface MigrateAuthProfileInput {
+  fromProvider: string
+  toProvider: string
+  fromProfileId?: string
+  toProfileId?: string
+  deleteSourceProfile?: boolean
+  authStorePath?: string
+}
+
+export interface MigrateAuthProfileResult {
+  ok: boolean
+  migrated: boolean
+  authStorePath?: string
+  fromProfileId: string
+  toProfileId: string
   error?: string
 }
 
@@ -281,6 +299,7 @@ interface ModelStatusCommandInput {
 interface LocalAuthStorePathOptions {
   getModelStatusCommand?: (input?: ModelStatusCommandInput) => Promise<ModelStatusCommandResult>
   resolveRuntimePaths?: () => Promise<LocalAuthStorePathRuntimePaths>
+  pathExists?: (targetPath: string) => Promise<boolean>
 }
 
 interface LocalAuthProfileStoreOptions extends LocalAuthStorePathOptions {
@@ -385,8 +404,38 @@ function lastGoodEntryMatchesExactProvider(providerSet: Set<string>, key: string
   return Boolean(profileProvider && providerSet.has(profileProvider))
 }
 
+function buildAgentAuthStorePathAtRoot(rootDir: string, agentId: unknown): string {
+  const normalizedAgentId = normalizeSafeAgentId(agentId)
+  if (!normalizedAgentId) return ''
+  return join(rootDir, 'agents', normalizedAgentId, 'agent', 'auth-profiles.json')
+}
+
+function isOpenClawStateRootPath(homeDir: string): boolean {
+  const normalizedHomeDir = String(homeDir || '').trim().replace(/[\\/]+$/, '')
+  return /(^|[\\/])\.openclaw$/i.test(normalizedHomeDir)
+}
+
+function buildAgentRootCandidates(homeDir: string): string[] {
+  const normalizedHomeDir = String(homeDir || '').trim()
+  if (!normalizedHomeDir) return []
+  if (isOpenClawStateRootPath(normalizedHomeDir)) {
+    return [normalizedHomeDir]
+  }
+  return [join(normalizedHomeDir, '.openclaw'), normalizedHomeDir]
+}
+
+function buildAgentAuthStorePathCandidates(homeDir: string, agentId: unknown): string[] {
+  return Array.from(
+    new Set(
+      buildAgentRootCandidates(homeDir)
+        .map((rootDir) => buildAgentAuthStorePathAtRoot(rootDir, agentId))
+        .filter(Boolean)
+    )
+  )
+}
+
 function buildFallbackAuthStorePath(homeDir: string): string {
-  return join(homeDir, 'agents', DEFAULT_LOCAL_AGENT_ID, 'agent', 'auth-profiles.json')
+  return buildAgentAuthStorePathCandidates(homeDir, DEFAULT_LOCAL_AGENT_ID)[0] || ''
 }
 
 function normalizeSafeAgentId(agentId: unknown): string {
@@ -398,9 +447,54 @@ function normalizeSafeAgentId(agentId: unknown): string {
 }
 
 function buildAgentAuthStorePath(homeDir: string, agentId: unknown): string {
-  const normalizedAgentId = normalizeSafeAgentId(agentId)
-  if (!normalizedAgentId) return ''
-  return join(homeDir, 'agents', normalizedAgentId, 'agent', 'auth-profiles.json')
+  const normalizedHomeDir = String(homeDir || '').trim()
+  if (!normalizedHomeDir) return ''
+  return buildAgentAuthStorePathAtRoot(normalizedHomeDir, agentId)
+}
+
+async function defaultPathExists(targetPath: string): Promise<boolean> {
+  try {
+    await access(targetPath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export async function resolvePreferredAuthStorePathFromHomeDir(
+  homeDir: string,
+  options: {
+    agentId?: string
+    pathExists?: (targetPath: string) => Promise<boolean>
+  } = {}
+): Promise<string> {
+  const normalizedHomeDir = String(homeDir || '').trim()
+  const agentId = options.agentId || DEFAULT_LOCAL_AGENT_ID
+  const candidates = buildAgentAuthStorePathCandidates(normalizedHomeDir, agentId)
+  const pathExists = options.pathExists ?? defaultPathExists
+  if (candidates.length === 0) return ''
+
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) return candidate
+  }
+
+  const candidateDirectories = candidates.map((candidate) => join(candidate, '..'))
+  for (let index = 0; index < candidates.length; index += 1) {
+    if (await pathExists(candidateDirectories[index])) {
+      return candidates[index]
+    }
+  }
+
+  if (isOpenClawStateRootPath(normalizedHomeDir)) {
+    return candidates[0]
+  }
+
+  const nestedRoot = join(normalizedHomeDir, '.openclaw')
+  if (await pathExists(nestedRoot)) {
+    return candidates[0]
+  }
+
+  return candidates[candidates.length - 1]
 }
 
 function createEmptyAuthProfilesData(): AuthProfilesData {
@@ -445,16 +539,22 @@ async function listDiscoveredAgentAuthStorePaths(
   resolveRuntimePaths: () => Promise<LocalAuthStorePathRuntimePaths>
 ): Promise<string[]> {
   const runtimePaths = await resolveRuntimePaths()
-  const agentsRoot = join(runtimePaths.homeDir, 'agents')
+  const agentRoots = buildAgentRootCandidates(runtimePaths.homeDir).map((rootDir) => join(rootDir, 'agents'))
+  const discoveredPaths = new Set<string>()
 
-  try {
-    const entries = await readdir(agentsRoot, { withFileTypes: true })
-    return entries
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => join(agentsRoot, entry.name, 'agent', 'auth-profiles.json'))
-  } catch {
-    return []
+  for (const agentsRoot of agentRoots) {
+    try {
+      const entries = await readdir(agentsRoot, { withFileTypes: true })
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue
+        discoveredPaths.add(join(agentsRoot, entry.name, 'agent', 'auth-profiles.json'))
+      }
+    } catch {
+      // Ignore missing roots and keep scanning the rest.
+    }
   }
+
+  return Array.from(discoveredPaths)
 }
 
 async function defaultGetModelStatusCommand(
@@ -507,7 +607,9 @@ export async function resolveLocalAuthStorePath(
   }
 
   const runtimePaths = await resolveRuntimePaths()
-  return buildFallbackAuthStorePath(runtimePaths.homeDir)
+  return resolvePreferredAuthStorePathFromHomeDir(runtimePaths.homeDir, {
+    pathExists: options.pathExists,
+  })
 }
 
 export async function resolveMainAuthStorePath(
@@ -527,7 +629,10 @@ export async function resolveMainAuthStorePath(
   }
 
   const runtimePaths = await resolveRuntimePaths()
-  return buildFallbackAuthStorePath(runtimePaths.homeDir)
+  return resolvePreferredAuthStorePathFromHomeDir(runtimePaths.homeDir, {
+    agentId: DEFAULT_LOCAL_AGENT_ID,
+    pathExists: options.pathExists,
+  })
 }
 
 export async function upsertApiKeyAuthProfile(
@@ -916,6 +1021,23 @@ export async function ensureLocalAuthProfile(
   options: LocalAuthProfileStoreOptions = {}
 ): Promise<EnsureLocalAuthProfileResult> {
   const { provider, apiKey } = input
+  if (provider === 'deepseek') {
+    const syncResult = await upsertApiKeyAuthProfile(
+      {
+        provider,
+        apiKey: String(apiKey || '').trim(),
+        profileId: 'deepseek:default',
+      },
+      options
+    )
+    return {
+      ok: syncResult.ok,
+      created: syncResult.created || syncResult.updated,
+      profileId: syncResult.profileId,
+      ...(syncResult.error ? { error: syncResult.error } : {}),
+    }
+  }
+
   const profileId = `${provider}:local`
   const readFileFn = options.readFileFn ?? readFile
   const writeJsonFn = options.writeJsonFn ?? atomicWriteJson
@@ -952,6 +1074,125 @@ export async function ensureLocalAuthProfile(
     return { ok: true, created: true, profileId }
   } catch (err: any) {
     return { ok: false, created: false, profileId, error: err?.message || 'Failed to write auth profile' }
+  }
+}
+
+export async function migrateAuthProfile(
+  input: MigrateAuthProfileInput,
+  options: LocalAuthProfileStoreOptions = {}
+): Promise<MigrateAuthProfileResult> {
+  const fromProvider = normalizeProviderId(input.fromProvider)
+  const toProvider = normalizeProviderId(input.toProvider)
+  const fromProfileId = String(input.fromProfileId || '').trim() || `${fromProvider}:local`
+  const toProfileId = String(input.toProfileId || '').trim() || `${toProvider}:default`
+  const readFileFn = options.readFileFn ?? readFile
+  const writeJsonFn = options.writeJsonFn ?? atomicWriteJson
+
+  if (!fromProvider || !toProvider) {
+    return {
+      ok: false,
+      migrated: false,
+      authStorePath: input.authStorePath || options.authStorePath,
+      fromProfileId,
+      toProfileId,
+      error: 'Both source and target providers are required',
+    }
+  }
+
+  try {
+    const authStorePath =
+      input.authStorePath ||
+      options.authStorePath ||
+      (await resolveMainAuthStorePath({
+        getModelStatusCommand: options.getModelStatusCommand,
+        resolveRuntimePaths: options.resolveRuntimePaths,
+      }))
+
+    const data = await readAuthProfilesData(authStorePath, readFileFn)
+    const sourceProfile = data.profiles[fromProfileId]
+    if (!sourceProfile || normalizeProviderId(sourceProfile?.provider) !== fromProvider) {
+      return {
+        ok: true,
+        migrated: false,
+        authStorePath,
+        fromProfileId,
+        toProfileId,
+      }
+    }
+
+    const sourceKey = String(sourceProfile?.key || '').trim()
+    if (!sourceKey || sourceKey === LOCAL_PROVIDER_AUTH_MARKERS[fromProvider as LocalProviderType]) {
+      return {
+        ok: true,
+        migrated: false,
+        authStorePath,
+        fromProfileId,
+        toProfileId,
+      }
+    }
+
+    const existingTarget = data.profiles[toProfileId]
+    const nextTarget = {
+      type: 'api_key',
+      provider: toProvider,
+      key: sourceKey,
+    }
+
+    if (!data.lastGood || typeof data.lastGood !== 'object' || Array.isArray(data.lastGood)) {
+      data.lastGood = {}
+    }
+
+    let changed = JSON.stringify(existingTarget) !== JSON.stringify(nextTarget)
+    data.profiles[toProfileId] = nextTarget
+    if (data.lastGood[toProvider] !== toProfileId) {
+      data.lastGood[toProvider] = toProfileId
+      changed = true
+    }
+
+    if (input.deleteSourceProfile) {
+      if (data.profiles[fromProfileId]) {
+        delete data.profiles[fromProfileId]
+        changed = true
+      }
+      if (data.lastGood[fromProvider]) {
+        delete data.lastGood[fromProvider]
+        changed = true
+      }
+      if (data.usageStats && typeof data.usageStats === 'object' && data.usageStats[fromProfileId]) {
+        delete data.usageStats[fromProfileId]
+        changed = true
+      }
+    }
+
+    if (!changed) {
+      return {
+        ok: true,
+        migrated: false,
+        authStorePath,
+        fromProfileId,
+        toProfileId,
+      }
+    }
+
+    await writeJsonFn(authStorePath, data, {
+      description: 'Provider auth profile migration',
+    })
+    return {
+      ok: true,
+      migrated: true,
+      authStorePath,
+      fromProfileId,
+      toProfileId,
+    }
+  } catch (err: any) {
+    return {
+      ok: false,
+      migrated: false,
+      authStorePath: input.authStorePath || options.authStorePath,
+      fromProfileId,
+      toProfileId,
+      error: err?.message || 'Failed to migrate auth profile',
+    }
   }
 }
 

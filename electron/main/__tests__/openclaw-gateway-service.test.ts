@@ -12,6 +12,7 @@ const {
   confirmRuntimeReconcileMock,
   findAvailableLoopbackPortMock,
   probeGatewayPortReachableMock,
+  probeGatewaySocketReadyMock,
   gatewayRestartMock,
   gatewayHealthMock,
   gatewayRunInBackgroundMock,
@@ -46,6 +47,7 @@ const {
   confirmRuntimeReconcileMock: vi.fn(),
   findAvailableLoopbackPortMock: vi.fn(),
   probeGatewayPortReachableMock: vi.fn(),
+  probeGatewaySocketReadyMock: vi.fn(),
   gatewayRestartMock: vi.fn(),
   gatewayHealthMock: vi.fn(),
   gatewayRunInBackgroundMock: vi.fn(),
@@ -143,6 +145,7 @@ vi.mock('../openclaw-gateway-probes', () => ({
   findAvailableLoopbackPort: findAvailableLoopbackPortMock,
   probeGatewayPortOwner: probeGatewayPortOwnerMock,
   probeGatewayPortReachable: probeGatewayPortReachableMock,
+  probeGatewaySocketReady: probeGatewaySocketReadyMock,
 }))
 
 vi.mock('../../../src/shared/polling', () => ({
@@ -174,6 +177,7 @@ describe('openclaw gateway service', () => {
     confirmRuntimeReconcileMock.mockReset()
     findAvailableLoopbackPortMock.mockReset()
     probeGatewayPortReachableMock.mockReset()
+    probeGatewaySocketReadyMock.mockReset()
     gatewayRestartMock.mockReset()
     gatewayHealthMock.mockReset()
     gatewayRunInBackgroundMock.mockReset()
@@ -265,6 +269,7 @@ describe('openclaw gateway service', () => {
         lastActions: [],
       },
     })
+    probeGatewayPortReachableMock.mockResolvedValue(false)
     markRuntimeRevisionInProgressMock.mockResolvedValue({
       runtime: {
         desiredRevision: 1,
@@ -276,6 +281,13 @@ describe('openclaw gateway service', () => {
       source: 'lsof',
     })
     findAvailableLoopbackPortMock.mockResolvedValue(19876)
+    probeGatewaySocketReadyMock.mockResolvedValue(true)
+    gatewayRunInBackgroundMock.mockResolvedValue({
+      ok: false,
+      stdout: '',
+      stderr: 'foreground gateway was not started',
+      code: 1,
+    })
     gatewayStartMock.mockResolvedValue({
       ok: true,
       stdout: 'started',
@@ -1547,6 +1559,7 @@ describe('openclaw gateway service', () => {
     expect(result.attemptedCommands).toEqual([
       ['gateway', 'start'],
       ['gateway', 'install'],
+      ['gateway', 'run', '--allow-unconfigured', '--port', '18789'],
     ])
     expect(result.stderr).toContain('permission denied')
   })
@@ -1584,7 +1597,7 @@ describe('openclaw gateway service', () => {
 
     expect(result.ok).toBe(true)
     expect(result.running).toBe(true)
-    expect(result.summary).toContain('兼容')
+    expect(result.summary).toBe('Gateway 已确认可用')
     expect(result.attemptedCommands).toEqual([
       ['gateway', 'start'],
       ['gateway', 'install'],
@@ -1604,6 +1617,114 @@ describe('openclaw gateway service', () => {
     expect(result.ok).toBe(true)
     expect(result.running).toBe(true)
     expect(result.repairActionsTried).toContain('restart-gateway')
+  })
+
+  it('accepts OpenClaw 2026.3.24 websocket handshake closures as degraded-ready after fallback probes', async () => {
+    checkOpenClawMock.mockResolvedValue({
+      installed: true,
+      version: 'OpenClaw 2026.3.24',
+    })
+    gatewayStartMock.mockResolvedValueOnce({
+      ok: true,
+      stdout: 'gateway started',
+      stderr: '',
+      code: 0,
+    })
+    gatewayHealthMock
+      .mockResolvedValueOnce({ running: false, raw: '' })
+      .mockResolvedValueOnce({
+        running: false,
+        raw: '',
+        stderr: 'Gateway 与上游的握手连接被异常关闭',
+        code: 1,
+        stateCode: 'websocket_1006',
+        summary: 'Gateway 与上游的握手连接被异常关闭',
+      })
+      .mockResolvedValueOnce({
+        running: false,
+        raw: '',
+        stderr: 'Gateway 与上游的握手连接被异常关闭',
+        code: 1,
+        stateCode: 'websocket_1006',
+        summary: 'Gateway 与上游的握手连接被异常关闭',
+      })
+      .mockResolvedValueOnce({
+        running: false,
+        raw: '',
+        stderr: 'Gateway 与上游的握手连接被异常关闭',
+        code: 1,
+        stateCode: 'websocket_1006',
+        summary: 'Gateway 与上游的握手连接被异常关闭',
+      })
+    runDoctorMock.mockResolvedValueOnce({
+      ok: false,
+      stdout: 'doctor: no migration required',
+      stderr: '',
+      code: 1,
+    })
+
+    const result = await ensureGatewayRunning()
+
+    expect(gatewayRestartMock).toHaveBeenCalledTimes(1)
+    expect(runDoctorMock).toHaveBeenCalledTimes(1)
+    expect(result.ok).toBe(true)
+    expect(result.running).toBe(true)
+    expect(result.summary).toBe('Gateway 已确认可用')
+    expect(result.attemptedCommands).toContainEqual(['gateway', 'start'])
+    expect(result.attemptedCommands).toContainEqual(['gateway', 'restart'])
+    expect(result.attemptedCommands).toContainEqual(['doctor', '--non-interactive'])
+  })
+
+  it('does not accept legacy degraded-ready when the gateway socket probe still fails', async () => {
+    checkOpenClawMock.mockResolvedValue({
+      installed: true,
+      version: 'OpenClaw 2026.3.24',
+    })
+    gatewayStartMock.mockResolvedValueOnce({
+      ok: true,
+      stdout: 'gateway started',
+      stderr: '',
+      code: 0,
+    })
+    gatewayHealthMock
+      .mockResolvedValueOnce({ running: false, raw: '' })
+      .mockResolvedValueOnce({
+        running: false,
+        raw: '',
+        stderr: 'Gateway 与上游的握手连接被异常关闭',
+        code: 1,
+        stateCode: 'websocket_1006',
+        summary: 'Gateway 与上游的握手连接被异常关闭',
+      })
+      .mockResolvedValueOnce({
+        running: false,
+        raw: '',
+        stderr: 'Gateway 与上游的握手连接被异常关闭',
+        code: 1,
+        stateCode: 'websocket_1006',
+        summary: 'Gateway 与上游的握手连接被异常关闭',
+      })
+      .mockResolvedValueOnce({
+        running: false,
+        raw: '',
+        stderr: 'Gateway 与上游的握手连接被异常关闭',
+        code: 1,
+        stateCode: 'websocket_1006',
+        summary: 'Gateway 与上游的握手连接被异常关闭',
+      })
+    runDoctorMock.mockResolvedValueOnce({
+      ok: false,
+      stdout: 'doctor: no migration required',
+      stderr: '',
+      code: 1,
+    })
+    probeGatewaySocketReadyMock.mockResolvedValueOnce(false)
+
+    const result = await ensureGatewayRunning()
+
+    expect(result.ok).toBe(false)
+    expect(result.running).toBe(false)
+    expect(result.stateCode).toBe('websocket_1006')
   })
 
   it('auto-migrates the managed gateway port when a foreign process owns the default port', async () => {

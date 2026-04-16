@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { resetRuntimeOpenClawPathsCache, resolveRuntimeOpenClawPaths } from '../openclaw-runtime-paths'
 import { buildTestEnv } from './test-env'
+const path = process.getBuiltinModule('node:path') as typeof import('node:path')
 
 describe('resolveRuntimeOpenClawPaths', () => {
   afterEach(() => {
@@ -123,6 +124,7 @@ describe('resolveRuntimeOpenClawPaths', () => {
       platform: 'darwin',
       env: buildTestEnv({
         HOME: '/Users/alice',
+        QCLAW_USER_DATA_DIR: '/Users/alice/Library/Application Support/Mclaw',
       }),
       cacheTtlMs: 0,
       runCommand: async () => ({
@@ -133,9 +135,102 @@ describe('resolveRuntimeOpenClawPaths', () => {
       }),
     })
 
-    expect(paths.homeDir).toBe('/Users/alice/.openclaw')
-    expect(paths.configFile).toBe('/Users/alice/.openclaw/openclaw.json')
+    expect(paths.homeDir).toBe('/Users/alice/Library/Application Support/Mclaw/openclaw-state')
+    expect(paths.configFile).toBe('/Users/alice/Library/Application Support/Mclaw/openclaw-state/openclaw.json')
   })
+
+  it('ignores runtime-reported paths outside the managed userData root when managed mode is active', async () => {
+    const managedUserDataDir = '/Users/alice/Library/Application Support/Mclaw'
+    const paths = await resolveRuntimeOpenClawPaths({
+      binaryPath: '/usr/local/bin/openclaw',
+      platform: 'darwin',
+      env: buildTestEnv({
+        HOME: '/Users/alice',
+        QCLAW_USER_DATA_DIR: managedUserDataDir,
+      }),
+      cacheTtlMs: 0,
+      runCommand: async (_binaryPath: string, args: string[]) => {
+        if (args.join(' ') === 'config file') {
+          return {
+            ok: true,
+            stdout: '/Users/alice/.openclaw/openclaw.json\n',
+            stderr: '',
+            code: 0,
+          }
+        }
+        if (args.join(' ') === 'backup create --dry-run --json') {
+          return {
+            ok: true,
+            stdout: JSON.stringify({
+              assets: [
+                {
+                  kind: 'state',
+                  sourcePath: '/Users/alice/.openclaw',
+                },
+              ],
+            }),
+            stderr: '',
+            code: 0,
+          }
+        }
+        throw new Error(`Unexpected args: ${args.join(' ')}`)
+      },
+    })
+
+    expect(paths.homeDir).toBe('/Users/alice/Library/Application Support/Mclaw/openclaw-state')
+    expect(paths.configFile).toBe('/Users/alice/Library/Application Support/Mclaw/openclaw-state/openclaw.json')
+  })
+
+  it('normalizes duplicated .openclaw state roots and prefers the state-root config when available', async () => {
+    const managedUserDataDir = '/Users/alice/Library/Application Support/Mclaw'
+    const managedStateRoot = '/Users/alice/Library/Application Support/Mclaw/openclaw-state'
+    const normalizedStateRoot = path.posix.join(managedStateRoot, '.openclaw')
+    const duplicatedStateRoot = path.posix.join(normalizedStateRoot, '.openclaw')
+    const stateRootConfigPath = path.posix.join(normalizedStateRoot, 'openclaw.json')
+
+    const paths = await resolveRuntimeOpenClawPaths({
+      binaryPath: '/usr/local/bin/openclaw',
+      platform: 'darwin',
+      env: buildTestEnv({
+        HOME: '/Users/alice',
+        QCLAW_USER_DATA_DIR: managedUserDataDir,
+      }),
+      cacheTtlMs: 0,
+      pathExists: async (targetPath: string) => {
+        return targetPath === stateRootConfigPath
+      },
+      runCommand: async (_binaryPath: string, args: string[]) => {
+        if (args.join(' ') === 'config file') {
+          return {
+            ok: true,
+            stdout: `${managedStateRoot}/openclaw.json\n`,
+            stderr: '',
+            code: 0,
+          }
+        }
+        if (args.join(' ') === 'backup create --dry-run --json') {
+          return {
+            ok: true,
+            stdout: JSON.stringify({
+              assets: [
+                {
+                  kind: 'state',
+                  sourcePath: duplicatedStateRoot,
+                },
+              ],
+            }),
+            stderr: '',
+            code: 0,
+          }
+        }
+        throw new Error(`Unexpected args: ${args.join(' ')}`)
+      },
+    })
+
+    expect(paths.homeDir).toBe(normalizedStateRoot)
+    expect(paths.configFile).toBe(stateRootConfigPath)
+  })
+
 
   it('reuses one in-flight probe for concurrent callers', async () => {
     let releaseProbe: (() => void) | undefined

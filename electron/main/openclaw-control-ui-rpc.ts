@@ -59,6 +59,7 @@ interface ControlUiChatSendOptions {
   sessionKey: string
   message: string
   thinking?: string
+  extraSystemPrompt?: string
   timeoutMs?: number
   loadTimeoutMs?: number
   runId?: string
@@ -85,6 +86,11 @@ export interface ControlUiAppInspectionResult {
 interface ControlUiBrowserContext {
   settings: GatewayConnectionSettings
   controlUiUrl: string
+}
+
+function isUnsupportedExtraSystemPromptError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '')
+  return /invalid chat\.send params/i.test(message) && /extraSystemPrompt/i.test(message)
 }
 
 function normalizeRecord(value: unknown): Record<string, unknown> | null {
@@ -392,6 +398,7 @@ function buildControlUiChatSendScript(options: ControlUiChatSendOptions): string
       const sessionKey = ${JSON.stringify(options.sessionKey)};
       const message = ${JSON.stringify(options.message)};
       const thinking = ${JSON.stringify(options.thinking || 'off')};
+      const extraSystemPrompt = ${JSON.stringify(options.extraSystemPrompt || '')};
       const timeoutMs = ${JSON.stringify(options.timeoutMs ?? CONTROL_UI_REQUEST_TIMEOUT_MS)};
       const requestedRunId = ${JSON.stringify(options.runId || randomUUID())};
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -434,6 +441,52 @@ function buildControlUiChatSendScript(options: ControlUiChatSendOptions): string
       const client = app.client;
       const normalizeEventEntries = () => Array.isArray(app.eventLogBuffer) ? app.eventLogBuffer : [];
       const normalizeChatMessages = () => Array.isArray(app.chatMessages) ? app.chatMessages : [];
+      const normalizeChatToolMessages = () =>
+        Array.isArray(app.chatToolMessages)
+          ? app.chatToolMessages
+          : Array.isArray(app.toolMessages)
+            ? app.toolMessages
+            : [];
+      const toMessageTimestamp = (candidate) => {
+        const rawTimestamp =
+          candidate?.timestamp ??
+          candidate?.createdAt ??
+          candidate?.created_at ??
+          candidate?.ts ??
+          candidate?.time;
+        const parsed = Number(rawTimestamp);
+        if (!Number.isFinite(parsed) || parsed <= 0) return null;
+        return parsed < 1_000_000_000_000 ? Math.floor(parsed * 1000) : Math.floor(parsed);
+      };
+      const mergeNewMessages = (baselineMessageCount, baselineToolMessageCount) => {
+        const chatMessages = normalizeChatMessages()
+          .slice(baselineMessageCount)
+          .map((candidate, index) => ({
+            candidate,
+            sourceOrder: 0,
+            index,
+            timestamp: toMessageTimestamp(candidate),
+          }));
+        const toolMessages = normalizeChatToolMessages()
+          .slice(baselineToolMessageCount)
+          .map((candidate, index) => ({
+            candidate,
+            sourceOrder: 1,
+            index,
+            timestamp: toMessageTimestamp(candidate),
+          }));
+        return [...chatMessages, ...toolMessages]
+          .sort((left, right) => {
+            if (left.timestamp != null && right.timestamp != null && left.timestamp !== right.timestamp) {
+              return left.timestamp - right.timestamp;
+            }
+            if (left.timestamp != null && right.timestamp == null) return -1;
+            if (left.timestamp == null && right.timestamp != null) return 1;
+            if (left.sourceOrder !== right.sourceOrder) return left.sourceOrder - right.sourceOrder;
+            return left.index - right.index;
+          })
+          .map((entry) => entry.candidate);
+      };
       const findTerminalChatPayload = (acceptedRunIds, currentRunId) => {
         const entries = normalizeEventEntries();
         for (const entry of entries) {
@@ -463,6 +516,20 @@ function buildControlUiChatSendScript(options: ControlUiChatSendOptions): string
         }
         return null;
       };
+      const cloneNewMessages = (baselineMessageCount, baselineToolMessageCount) => {
+        const newMessages = mergeNewMessages(baselineMessageCount, baselineToolMessageCount);
+        try {
+          return JSON.parse(JSON.stringify(newMessages));
+        } catch {
+          return newMessages.map((candidate) => ({
+            role: typeof candidate?.role === 'string' ? candidate.role : '',
+            text: typeof candidate?.text === 'string' ? candidate.text : '',
+            content: candidate?.content ?? null,
+            message: candidate?.message ?? null,
+            path: typeof candidate?.path === 'string' ? candidate.path : '',
+          }));
+        }
+      };
 
       if (typeof app.sessionKey === 'string') {
         app.sessionKey = sessionKey;
@@ -481,6 +548,7 @@ function buildControlUiChatSendScript(options: ControlUiChatSendOptions): string
       }
 
       const baselineMessageCount = normalizeChatMessages().length;
+      const baselineToolMessageCount = normalizeChatToolMessages().length;
 
       try {
         await client.request('sessions.subscribe', {});
@@ -495,6 +563,7 @@ function buildControlUiChatSendScript(options: ControlUiChatSendOptions): string
         deliver: false,
         timeoutMs,
         idempotencyKey: requestedRunId,
+        ...(extraSystemPrompt ? { extraSystemPrompt } : {}),
       });
 
       let runId = String(response?.runId || requestedRunId || '').trim() || requestedRunId;
@@ -518,6 +587,7 @@ function buildControlUiChatSendScript(options: ControlUiChatSendOptions): string
               runId: runId || requestedRunId,
               sessionKey,
               payload: terminalMatch.payload,
+              messages: cloneNewMessages(baselineMessageCount, baselineToolMessageCount),
             };
           }
 
@@ -534,6 +604,7 @@ function buildControlUiChatSendScript(options: ControlUiChatSendOptions): string
                 state: 'final',
                 message: lastAssistantMessage,
               },
+              messages: cloneNewMessages(baselineMessageCount, baselineToolMessageCount),
             };
           }
           if (app.lastError) {
@@ -751,6 +822,7 @@ function buildBrowserGatewayChatSendScript(params: {
       const sessionKey = ${JSON.stringify(params.options.sessionKey)};
       const message = ${JSON.stringify(params.options.message)};
       const thinking = ${JSON.stringify(params.options.thinking || 'off')};
+      const extraSystemPrompt = ${JSON.stringify(params.options.extraSystemPrompt || '')};
       const timeoutMs = ${JSON.stringify(params.options.timeoutMs ?? CONTROL_UI_REQUEST_TIMEOUT_MS)};
       const requestedRunId = ${JSON.stringify(params.options.runId || randomUUID())};
       const platform = ${JSON.stringify(process.platform)};
@@ -852,6 +924,7 @@ function buildBrowserGatewayChatSendScript(params: {
                 deliver: false,
                 timeoutMs,
                 idempotencyKey: requestedRunId,
+                ...(extraSystemPrompt ? { extraSystemPrompt } : {}),
               },
             }));
             return;
@@ -965,17 +1038,30 @@ export async function runGatewayChatViaControlUiBrowser(
   deps: ControlUiRpcDependencies,
   options: ControlUiChatSendOptions
 ): Promise<Record<string, unknown>> {
-  return withControlUiBrowser(deps, {
-    loadTimeoutMs: options.loadTimeoutMs,
-    timeoutMs: options.timeoutMs,
-    execute: (browserWindow, context) =>
-      withTimeout(
-        browserWindow.webContents.executeJavaScript(
-          buildControlUiChatSendScript(options),
-          true
-        ),
-        options.timeoutMs ?? CONTROL_UI_REQUEST_TIMEOUT_MS,
-        `control ui chat.send timeout for ${options.sessionKey}`
-      ) as Promise<Record<string, unknown>>,
-  })
+  const runAttempt = (attemptOptions: ControlUiChatSendOptions) =>
+    withControlUiBrowser(deps, {
+      loadTimeoutMs: attemptOptions.loadTimeoutMs,
+      timeoutMs: attemptOptions.timeoutMs,
+      execute: (browserWindow) =>
+        withTimeout(
+          browserWindow.webContents.executeJavaScript(
+            buildControlUiChatSendScript(attemptOptions),
+            true
+          ),
+          attemptOptions.timeoutMs ?? CONTROL_UI_REQUEST_TIMEOUT_MS,
+          `control ui chat.send timeout for ${attemptOptions.sessionKey}`
+        ) as Promise<Record<string, unknown>>,
+    })
+
+  try {
+    return await runAttempt(options)
+  } catch (error) {
+    if (options.extraSystemPrompt && isUnsupportedExtraSystemPromptError(error)) {
+      return runAttempt({
+        ...options,
+        extraSystemPrompt: undefined,
+      })
+    }
+    throw error
+  }
 }

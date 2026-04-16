@@ -16,6 +16,8 @@ export interface OpenClawPaths {
 
 interface ResolveOpenClawPathsOptions {
   homeDir?: string
+  userHomeDir?: string
+  userDataDir?: string
   platform?: NodeJS.Platform
 }
 
@@ -34,6 +36,30 @@ function trimTrailingSeparators(value: string, platform: NodeJS.Platform): strin
 
 function joinForPlatform(platform: NodeJS.Platform, ...parts: string[]): string {
   return (platform === 'win32' ? path.win32 : path.posix).join(...parts)
+}
+
+function resolveManagedOpenClawStateRoot(
+  platform: NodeJS.Platform,
+  options: {
+    homeDir?: string
+    userDataDir?: string
+  } = {}
+): string {
+  const explicitHomeDir = trimTrailingSeparators(String(options.homeDir || '').trim(), platform)
+  if (explicitHomeDir) {
+    return joinForPlatform(platform, explicitHomeDir, '.openclaw')
+  }
+
+  const userDataDir = trimTrailingSeparators(
+    String(options.userDataDir || process.env.QCLAW_USER_DATA_DIR || '').trim(),
+    platform
+  )
+  if (userDataDir) {
+    return joinForPlatform(platform, userDataDir, 'openclaw-state')
+  }
+
+  const userHomeDir = trimTrailingSeparators(resolveUserHomeDir(platform), platform)
+  return joinForPlatform(platform, userHomeDir, '.openclaw')
 }
 
 export function resolveUserHomeDir(platform: NodeJS.Platform = process.platform): string {
@@ -91,10 +117,13 @@ export function resolveOpenClawPaths(
 ): OpenClawPaths {
   const platform = options.platform || process.platform
   const userHomeDir = trimTrailingSeparators(
-    String(options.homeDir || resolveUserHomeDir(platform)).trim(),
+    String(options.userHomeDir || options.homeDir || resolveUserHomeDir(platform)).trim(),
     platform
   )
-  const openClawHomeDir = joinForPlatform(platform, userHomeDir, '.openclaw')
+  const openClawHomeDir = resolveManagedOpenClawStateRoot(platform, {
+    homeDir: options.homeDir,
+    userDataDir: options.userDataDir,
+  })
   const configFile = joinForPlatform(platform, openClawHomeDir, 'openclaw.json')
   const envFile = joinForPlatform(platform, openClawHomeDir, '.env')
   const credentialsDir = joinForPlatform(platform, openClawHomeDir, 'credentials')

@@ -115,7 +115,7 @@ import { prepareQClawUninstall, runOpenClawCleanup } from './openclaw-cleanup-se
 import { runOpenClawDataCleanup } from './openclaw-data-cleanup-service'
 import { previewOpenClawRestore, runOpenClawRestore } from './openclaw-restore-service'
 import { checkOpenClawUpgrade, runOpenClawUpgrade } from './openclaw-upgrade-service'
-import { readOpenClawRuntimeReconcileStore } from './openclaw-runtime-reconcile'
+import { readOpenClawRuntimeReconcileStoreForUi } from './openclaw-runtime-reconcile'
 import { withManagedOperationLock } from './managed-operation-lock'
 import { buildAppleScriptDoShellScript } from './node-runtime'
 import type { FeishuBotDiagnosticSendRequest } from '../../src/shared/feishu-diagnostics'
@@ -598,15 +598,36 @@ export function registerIpcHandlers() {
     }
   })
   ipcMain.handle('openclaw:open-workspace', async () => {
-    const os = await import('os')
     const path = await import('path')
     const fs = await import('fs')
-    const workspacePath = path.join(os.homedir(), '.openclaw')
+    const discovery = await discoverOpenClawInstallations().catch(() => null)
+    const activeCandidate =
+      discovery?.candidates.find((candidate) => candidate.candidateId === discovery.activeCandidateId) ||
+      discovery?.candidates[0] ||
+      null
+    const workspacePath = String(activeCandidate?.stateRoot || '').trim() || path.join(app.getPath('home'), '.openclaw')
     if (!fs.existsSync(workspacePath)) {
       fs.mkdirSync(workspacePath, { recursive: true })
     }
     const error = await shell.openPath(workspacePath)
     return { ok: !error, path: workspacePath, error: error || '' }
+  })
+  ipcMain.handle('shell:open-path', async (_e, targetPath?: string) => {
+    const normalizedPath = String(targetPath || '').trim()
+    if (!normalizedPath) {
+      return {
+        ok: false,
+        path: '',
+        error: 'Target path is empty.',
+      }
+    }
+
+    const error = await shell.openPath(normalizedPath)
+    return {
+      ok: !error,
+      path: normalizedPath,
+      error: error || '',
+    }
   })
   ipcMain.handle('openclaw:restore:preview', (_e, backupId: string) => previewOpenClawRestore(backupId))
   ipcMain.handle('openclaw:restore:run', (_e, backupId: string, scope) => runOpenClawRestore(backupId, scope))
@@ -629,7 +650,7 @@ export function registerIpcHandlers() {
 
   // Gateway
   ipcMain.handle('gateway:health', () => gatewayHealth())
-  ipcMain.handle('gateway:runtime-reconcile:state:get', () => readOpenClawRuntimeReconcileStore())
+  ipcMain.handle('gateway:runtime-reconcile:state:get', () => readOpenClawRuntimeReconcileStoreForUi())
   ipcMain.handle('gateway:force-restart', () => gatewayForceRestart())
   ipcMain.handle('gateway:reload-after-model-change', () =>
     reloadGatewayForConfigChange('model-change', { preferEnsureWhenNotRunning: true })

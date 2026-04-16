@@ -159,6 +159,46 @@ describe('cli chat transport', () => {
     ])
   })
 
+  it('passes extra system prompt guidance through the CLI agent command when requested', async () => {
+    const capturedArgs: string[][] = []
+    const transport = createCliChatTransport({
+      runStreamingCommand: async (args) => {
+        capturedArgs.push(args)
+        return {
+          ok: true,
+          stdout: JSON.stringify({
+            response: {
+              text: '截图已返回',
+            },
+            model: 'openai/gpt-5.1-codex',
+          }),
+          stderr: '',
+          code: 0,
+        }
+      },
+    })
+
+    await transport.run({
+      transportSessionId: 'session-3b',
+      messageText: '请截图',
+      extraSystemPrompt: 'Use viewport screenshots only.',
+      thinking: 'off',
+    })
+
+    expect(capturedArgs[0]).toEqual([
+      'agent',
+      '--json',
+      '--session-id',
+      'session-3b',
+      '--message',
+      '请截图',
+      '--thinking',
+      'off',
+      '--append-system-prompt',
+      'Use viewport screenshots only.',
+    ])
+  })
+
   it('rejects runtime send-time model overrides before spawning openclaw agent', async () => {
     const runStreamingCommand = vi.fn()
     const transport = createCliChatTransport({

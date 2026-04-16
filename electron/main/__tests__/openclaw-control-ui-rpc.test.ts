@@ -219,6 +219,7 @@ describe('openclaw control ui rpc', () => {
         sessionKey: 'agent:main:trusted-session',
         message: '缁х画浼氳瘽',
         thinking: 'off',
+        extraSystemPrompt: 'Use viewport screenshots only.',
         timeoutMs: 10_000,
       }
     )
@@ -228,7 +229,10 @@ describe('openclaw control ui rpc', () => {
     expect(executedScript).toContain(`customElements.whenDefined('openclaw-app')`)
     expect(executedScript).toContain(`'chat.send'`)
     expect(executedScript).toContain(`client.request('chat.send'`)
+    expect(executedScript).toContain(`app.chatToolMessages`)
+    expect(executedScript).toContain(`baselineToolMessageCount`)
     expect(executedScript).toContain(`"缁х画浼氳瘽"`)
+    expect(executedScript).toContain(`"Use viewport screenshots only."`)
     expect(result).toEqual({
       runId: 'run-123',
       sessionKey: 'agent:main:trusted-session',
@@ -236,6 +240,85 @@ describe('openclaw control ui rpc', () => {
         state: 'final',
         message: {
           text: 'from control ui final reply',
+        },
+      },
+    })
+  })
+
+  it('retries hidden control ui chat.send without extraSystemPrompt for legacy OpenClaw', async () => {
+    const loadedUrls: string[] = []
+    const executedScripts: string[] = []
+    const executeJavaScript = vi
+      .fn<(code: string) => Promise<Record<string, unknown>>>()
+      .mockImplementationOnce(async (code: string) => {
+        executedScripts.push(code)
+        throw new Error(
+          "invalid chat.send params: at root: unexpected property 'extraSystemPrompt'"
+        )
+      })
+      .mockImplementationOnce(async (code: string) => {
+        executedScripts.push(code)
+        return {
+          runId: 'run-legacy-retry',
+          sessionKey: 'agent:main:trusted-session',
+          payload: {
+            state: 'final',
+            message: {
+              text: 'from control ui legacy retry',
+            },
+          },
+        }
+      })
+
+    const createBrowserWindow = vi.fn(async () => ({
+      loadURL: async (url: string) => {
+        loadedUrls.push(url)
+      },
+      isDestroyed: () => false,
+      destroy: () => undefined,
+      webContents: {
+        executeJavaScript,
+      },
+    }))
+
+    const result = await runGatewayChatViaControlUiBrowser(
+      {
+        readConfig: async () => ({
+          gateway: {
+            port: 18789,
+            auth: {
+              token: 'gateway-token',
+            },
+          },
+        }),
+        readEnvFile: async () => ({}),
+        loadGatewayRuntime: async () => null,
+        createBrowserWindow,
+      },
+      {
+        sessionKey: 'agent:main:trusted-session',
+        message: 'continue the conversation',
+        thinking: 'off',
+        extraSystemPrompt: 'Use viewport screenshots only.',
+        timeoutMs: 10_000,
+      }
+    )
+
+    expect(createBrowserWindow).toHaveBeenCalledTimes(2)
+    expect(loadedUrls).toEqual([
+      'http://127.0.0.1:18789/#token=gateway-token',
+      'http://127.0.0.1:18789/#token=gateway-token',
+    ])
+    expect(executeJavaScript).toHaveBeenCalledTimes(2)
+    expect(executedScripts[0]).toContain('"Use viewport screenshots only."')
+    expect(executedScripts[1]).not.toContain('"Use viewport screenshots only."')
+    expect(result).toEqual({
+      runId: 'run-legacy-retry',
+      sessionKey: 'agent:main:trusted-session',
+      payload: {
+        state: 'final',
+        message: {
+          text: 'from control ui legacy retry',
         },
       },
     })

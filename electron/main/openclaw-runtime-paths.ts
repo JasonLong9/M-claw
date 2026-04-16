@@ -8,9 +8,12 @@ import {
   type OpenClawPaths,
 } from './openclaw-paths'
 import { resolveSafeWorkingDirectory } from './runtime-working-directory'
-
+import { inspectBundledOpenClawDeliveryStatus } from './openclaw-bundled-manifest'
+import { buildCliPathWithCandidates } from './runtime-path-discovery'
+const fs = process.getBuiltinModule('node:fs/promises') as typeof import('node:fs/promises')
 const childProcess = process.getBuiltinModule('node:child_process') as typeof import('node:child_process')
 const path = process.getBuiltinModule('node:path') as typeof import('node:path')
+const { access } = fs
 const { spawn } = childProcess
 
 export interface RuntimePathCommandResult {
@@ -35,6 +38,7 @@ interface ResolveRuntimeOpenClawPathsOptions {
   env?: NodeJS.ProcessEnv
   platform?: NodeJS.Platform
   cacheTtlMs?: number
+  pathExists?: (targetPath: string) => Promise<boolean>
   runCommand?: (binaryPath: string, args: string[]) => Promise<RuntimePathCommandResult>
 }
 
@@ -93,9 +97,68 @@ function resolveFallbackPaths(
   const envHomeDir = resolveRuntimeHomeDir(platform, env)
 
   return resolveOpenClawPaths({
-    homeDir: envHomeDir,
+    userHomeDir: envHomeDir,
+    userDataDir: env?.QCLAW_USER_DATA_DIR,
     platform,
   })
+}
+
+function getPathModuleForPlatform(platform: NodeJS.Platform): typeof path.win32 | typeof path.posix {
+  return platform === 'win32' ? path.win32 : path.posix
+}
+
+function normalizeComparablePath(inputPath: string, platform: NodeJS.Platform): string {
+  const normalized = getPathModuleForPlatform(platform).normalize(String(inputPath || '').trim())
+  if (!normalized) return ''
+  return platform === 'win32' ? normalized.toLowerCase() : normalized
+}
+
+function isPathEqualOrWithinDirectory(
+  candidatePath: string,
+  rootPath: string,
+  platform: NodeJS.Platform
+): boolean {
+  const normalizedCandidate = normalizeComparablePath(candidatePath, platform)
+  const normalizedRoot = normalizeComparablePath(rootPath, platform)
+  if (!normalizedCandidate || !normalizedRoot) return false
+  if (normalizedCandidate === normalizedRoot) return true
+  const sep = platform === 'win32' ? '\\' : '/'
+  return normalizedCandidate.startsWith(`${normalizedRoot}${sep}`)
+}
+
+function normalizeManagedStateRoot(
+  stateRoot: string,
+  managedRoot: string,
+  platform: NodeJS.Platform
+): string {
+  if (!isPathEqualOrWithinDirectory(stateRoot, managedRoot, platform)) {
+    return stateRoot
+  }
+
+  const pathModule = getPathModuleForPlatform(platform)
+  const relative = pathModule.relative(
+    pathModule.normalize(managedRoot),
+    pathModule.normalize(stateRoot)
+  )
+  const segments = String(relative || '')
+    .split(/[\\/]+/g)
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+
+  if (segments.length >= 2 && segments[0] === '.openclaw' && segments[1] === '.openclaw') {
+    return pathModule.join(pathModule.normalize(managedRoot), '.openclaw')
+  }
+
+  return stateRoot
+}
+
+async function defaultPathExists(targetPath: string): Promise<boolean> {
+  try {
+    await access(targetPath)
+    return true
+  } catch {
+    return false
+  }
 }
 
 async function defaultRunCommand(
@@ -190,7 +253,7 @@ export async function resolveRuntimeOpenClawPaths(
     options.binaryPath || (await resolveOpenClawBinaryPath({ env, platform }).catch(() => ''))
   ).trim()
   if (!resolvedBinaryPath) return fallback
-  const cacheKey = `${resolvedBinaryPath}\n${userHomeDir}\n${platform}`
+  const cacheKey = `${resolvedBinaryPath}\n${userHomeDir}\n${platform}\n${fallback.homeDir}`
 
   const cacheTtlMs = options.cacheTtlMs ?? DEFAULT_RUNTIME_PATH_CACHE_TTL_MS
   if (
@@ -205,24 +268,75 @@ export async function resolveRuntimeOpenClawPaths(
     return cachedRuntimePathsPromise
   }
 
-  const runCommand = async (args: string[]) =>
-    (options.runCommand || ((binaryPath: string, commandArgs: string[]) => defaultRunCommand(binaryPath, commandArgs, options)))(
-      resolvedBinaryPath,
-      args
-    )
+  const managedProbeEnv: NodeJS.ProcessEnv = {
+    ...env,
+    OPENCLAW_HOME: String(env.OPENCLAW_HOME || fallback.homeDir || '').trim(),
+    OPENCLAW_CONFIG_PATH: String(env.OPENCLAW_CONFIG_PATH || fallback.configFile || '').trim(),
+  }
+
+  const bundledDelivery = inspectBundledOpenClawDeliveryStatus({
+    cwd: process.cwd(),
+    resourcesPath: (process as any).resourcesPath,
+    env,
+    platform,
+  })
+  const runtimePath = bundledDelivery.runtimePath
+  const detectedNodeBinDir = runtimePath
+    ? platform === 'win32'
+      ? runtimePath
+      : path.join(runtimePath, 'bin')
+    : null
+
+  managedProbeEnv.PATH = buildCliPathWithCandidates({
+    platform,
+    currentPath: managedProbeEnv.PATH || '',
+    detectedNodeBinDir,
+    env: managedProbeEnv,
+  })
+  const effectiveRunCommand =
+    options.runCommand ||
+    ((binaryPath: string, commandArgs: string[]) =>
+      defaultRunCommand(binaryPath, commandArgs, {
+        ...options,
+        env: managedProbeEnv,
+      }))
+  const pathExists = options.pathExists || defaultPathExists
 
   const probePromise = (async () => {
     const [configResult, backupResult] = await Promise.all([
-      runCommand(['config', 'file']),
-      runCommand(['backup', 'create', '--dry-run', '--json']),
+      effectiveRunCommand(resolvedBinaryPath, ['config', 'file']),
+      effectiveRunCommand(resolvedBinaryPath, ['backup', 'create', '--dry-run', '--json']),
     ])
 
-    const configFile = configResult.ok
+    let configFile = configResult.ok
       ? parseRuntimeConfigPath(configResult.stdout, platform, userHomeDir)
       : null
-    const stateRoot = backupResult.ok
+    let stateRoot = backupResult.ok
       ? parseRuntimeStateRoot(backupResult.stdout, platform, userHomeDir)
       : null
+
+    const enforceManagedRoot = Boolean(String(env.QCLAW_USER_DATA_DIR || '').trim())
+    if (enforceManagedRoot) {
+      if (configFile && !isPathEqualOrWithinDirectory(configFile, fallback.homeDir, platform)) {
+        configFile = null
+      }
+      if (stateRoot && !isPathEqualOrWithinDirectory(stateRoot, fallback.homeDir, platform)) {
+        stateRoot = null
+      }
+    }
+
+    if (stateRoot && enforceManagedRoot) {
+      stateRoot = normalizeManagedStateRoot(stateRoot, fallback.homeDir, platform)
+    }
+
+    if (stateRoot) {
+      const stateConfigFile = getPathModuleForPlatform(platform).join(stateRoot, 'openclaw.json')
+      const currentConfigExists = configFile ? await pathExists(configFile) : false
+      const stateConfigExists = await pathExists(stateConfigFile)
+      if ((!configFile || !currentConfigExists) && stateConfigExists) {
+        configFile = stateConfigFile
+      }
+    }
 
     if (!configFile && !stateRoot) {
       cachedKey = cacheKey

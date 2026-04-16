@@ -1,6 +1,7 @@
-import { MantineProvider } from '@mantine/core'
+﻿import { MantineProvider } from '@mantine/core'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
+import { createDefaultOpenClawRuntimeReconcileStore } from '../../shared/gateway-runtime-reconcile-state'
 import Dashboard from '../Dashboard'
 import {
   runDashboardEntryBootstrapFlow,
@@ -11,14 +12,28 @@ function createBootstrapApi(
   overrides: Partial<DashboardEntryBootstrapApi> = {}
 ): DashboardEntryBootstrapApi {
   return {
+    getChatAvailability: vi.fn().mockResolvedValue({
+      state: 'offline',
+      ready: false,
+      canSend: false,
+      reason: 'gateway-offline',
+      gatewayRunning: false,
+      connectedModels: ['openai/gpt-5.4-pro'],
+      defaultModel: 'openai/gpt-5.4-pro',
+      agentId: 'main',
+      message: 'Gateway not running',
+    }),
     gatewayHealth: vi.fn().mockResolvedValue({
       running: false,
-      summary: 'Gateway 未运行',
+      summary: 'Gateway not running',
     }),
+    getOpenClawRuntimeReconcileState: vi
+      .fn()
+      .mockResolvedValue(createDefaultOpenClawRuntimeReconcileStore()),
     readConfig: vi.fn().mockResolvedValue({
       channels: {
         feishu: {
-          name: 'Feishu 客服',
+          name: 'Feishu Bot',
           appId: 'cli_test_feishu',
           domain: 'feishu',
         },
@@ -81,7 +96,7 @@ function createBootstrapApi(
     getFeishuRuntimeStatus: vi.fn().mockResolvedValue({
       default: {
         runtimeState: 'online',
-        summary: '运行中',
+        summary: 'running',
         issues: [],
       },
     }),
@@ -92,19 +107,30 @@ function createBootstrapApi(
 describe('dashboard entry bootstrap flow', () => {
   it('builds a dashboard entry snapshot and lets Dashboard render from it immediately', async () => {
     const api = createBootstrapApi({
+      getChatAvailability: vi.fn().mockResolvedValue({
+        state: 'ready',
+        ready: true,
+        canSend: true,
+        reason: 'ready',
+        gatewayRunning: true,
+        connectedModels: ['openai/gpt-5.4-pro'],
+        defaultModel: 'openai/gpt-5.4-pro',
+        agentId: 'main',
+        message: '',
+      }),
       gatewayHealth: vi.fn().mockResolvedValue({
         running: true,
-        summary: 'Gateway 已运行',
+        summary: 'Gateway ready',
       }),
       readConfig: vi.fn().mockResolvedValue({
         channels: {
           feishu: {
-            name: 'Feishu 客服',
+            name: 'Feishu Bot',
             appId: 'cli_test_feishu',
             domain: 'feishu',
           },
           telegram: {
-            name: 'Telegram 机器人',
+            name: 'Telegram Bot',
             domain: 'telegram',
           },
         },
@@ -140,9 +166,31 @@ describe('dashboard entry bootstrap flow', () => {
     )
 
     expect(html).toContain('飞书')
-    expect(html).toContain('Telegram 机器人')
+    expect(html).toContain('Telegram Bot')
     expect(html).toContain('openai/gpt-5.4-pro')
     expect(api.getModelStatus).not.toHaveBeenCalled()
+  })
+
+  it('prefers chat availability over stale runtime-compatible gateway snapshots on dashboard entry', async () => {
+    const runtimeStore = createDefaultOpenClawRuntimeReconcileStore()
+    runtimeStore.lastSeenVersionBand = 'openclaw_2026_3_23_to_2026_3_24'
+    runtimeStore.runtime.stateCode = 'degraded'
+    runtimeStore.runtime.safeToRetry = true
+    runtimeStore.runtime.blockingReason = 'control_ui_handshake_failed'
+    runtimeStore.runtime.lastReconcileSummary = 'compat runtime confirmed'
+
+    const api = createBootstrapApi({
+      gatewayHealth: vi.fn().mockResolvedValue({
+        running: false,
+        summary: 'Gateway health stale',
+      }),
+      getOpenClawRuntimeReconcileState: vi.fn().mockResolvedValue(runtimeStore),
+    })
+
+    const result = await runDashboardEntryBootstrapFlow(api)
+
+    expect(result.snapshot.gatewayRunning).toBe(false)
+    expect(result.softWarnings).toContain('Gateway 当前未就绪：Gateway not running')
   })
 
   it('allows dashboard entry when gateway probes fail and keeps gatewayRunning false', async () => {
@@ -153,7 +201,9 @@ describe('dashboard entry bootstrap flow', () => {
     const result = await runDashboardEntryBootstrapFlow(api)
 
     expect(result.snapshot.gatewayRunning).toBe(false)
-    expect(result.softWarnings).toContain('Gateway 状态读取失败，控制面板将先按离线快照进入：health down')
+    expect(result.softWarnings).toContain(
+      'Gateway 状态读取失败，控制面板将先按离线快照进入：health down'
+    )
 
     const html = renderToStaticMarkup(
       <MantineProvider>
@@ -169,7 +219,7 @@ describe('dashboard entry bootstrap flow', () => {
       readConfig: vi.fn().mockResolvedValue({
         channels: {
           feishu: {
-            name: 'Feishu 客服',
+            name: 'Feishu Bot',
             appId: 'cli_test_feishu',
             domain: 'feishu',
           },
@@ -227,7 +277,9 @@ describe('dashboard entry bootstrap flow', () => {
     expect(result.softWarnings).toContain(
       '模型上游状态暂不可用，已回退到 CLI 状态快照：control-ui-app-unavailable'
     )
-    expect(result.softWarnings).toContain('模型状态读取失败：控制面板将先按配置快照显示模型信息。')
+    expect(result.softWarnings).toContain(
+      '模型状态读取失败：控制面板将先按配置快照显示模型信息。'
+    )
     expect(result.snapshot.modelStatus).toBeNull()
   })
 
@@ -270,16 +322,27 @@ describe('dashboard entry bootstrap flow', () => {
 
   it('keeps gatewayRunning false when gateway health reports not ready', async () => {
     const api = createBootstrapApi({
+      getChatAvailability: vi.fn().mockResolvedValue({
+        state: 'offline',
+        ready: false,
+        canSend: false,
+        reason: 'gateway-offline',
+        gatewayRunning: false,
+        connectedModels: ['openai/gpt-5.4-pro'],
+        defaultModel: 'openai/gpt-5.4-pro',
+        agentId: 'main',
+        message: 'Gateway not ready',
+      }),
       gatewayHealth: vi.fn().mockResolvedValue({
         running: false,
-        summary: 'Gateway 未 ready',
+        summary: 'Gateway not ready',
       }),
     })
 
     const result = await runDashboardEntryBootstrapFlow(api)
 
     expect(result.snapshot.gatewayRunning).toBe(false)
-    expect(result.softWarnings).toContain('Gateway 当前未就绪：Gateway 未 ready')
+    expect(result.softWarnings).toContain('Gateway 当前未就绪：Gateway not ready')
   })
 
   it('treats config reads as a hard block', async () => {
@@ -292,3 +355,4 @@ describe('dashboard entry bootstrap flow', () => {
     })
   })
 })
+

@@ -1,4 +1,4 @@
-import type { ChatThinkingLevel, ChatUsage } from '../../../src/shared/chat-panel'
+import type { ChatImageAttachment, ChatThinkingLevel, ChatUsage } from '../../../src/shared/chat-panel'
 import type { RunCliStreamOptions } from '../cli'
 
 export interface CliLikeResult {
@@ -20,6 +20,7 @@ export interface ChatTransportRunParams {
   transportSessionId: string
   sessionKey?: string
   messageText: string
+  extraSystemPrompt?: string
   // Deliberately no send-time model override. The active session model must
   // already be resolved before transport.send runs.
   thinking: ChatThinkingLevel
@@ -31,6 +32,7 @@ export interface ChatTransportRunResult extends CliLikeResult {
   streamedText: string
   streamedModel?: string
   streamedUsage?: ChatUsage
+  streamedImages?: ChatImageAttachment[]
 }
 
 export interface ChatTransport {

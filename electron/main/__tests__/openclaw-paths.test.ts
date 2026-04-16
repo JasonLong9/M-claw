@@ -31,11 +31,21 @@ describe('resolveOpenClawPaths', () => {
     expect(paths.configFile).toBe('C:\\Users\\alice\\.openclaw\\openclaw.json')
     expect(paths.displayConfigFile).toBe('~\\.openclaw\\openclaw.json')
   })
+
+  it('prefers the Mclaw userData-owned state root when QCLAW_USER_DATA_DIR is available', () => {
+    const paths = resolveOpenClawPaths({
+      userDataDir: 'C:\\Users\\alice\\AppData\\Roaming\\Mclaw',
+      platform: 'win32',
+    })
+
+    expect(paths.homeDir).toBe('C:\\Users\\alice\\AppData\\Roaming\\Mclaw\\openclaw-state')
+    expect(paths.configFile).toBe('C:\\Users\\alice\\AppData\\Roaming\\Mclaw\\openclaw-state\\openclaw.json')
+  })
 })
 
 describe('formatDisplayPath', () => {
   it('converts absolute paths under the user home into display-safe ~/ paths', () => {
-    expect(formatDisplayPath('/Users/alice/.openclaw/openclaw.json', '/Users/alice')).toBe(
+    expect(formatDisplayPath('/Users/alice/.openclaw/openclaw.json', '/Users/alice', 'darwin')).toBe(
       '~/.openclaw/openclaw.json'
     )
   })

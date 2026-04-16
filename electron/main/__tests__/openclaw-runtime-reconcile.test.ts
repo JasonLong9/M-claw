@@ -1,13 +1,31 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const {
+  readConfiguredGatewayPortMock,
+  probeGatewayPortReachableMock,
+  probeGatewaySocketReadyMock,
+} = vi.hoisted(() => ({
+  readConfiguredGatewayPortMock: vi.fn(),
+  probeGatewayPortReachableMock: vi.fn(),
+  probeGatewaySocketReadyMock: vi.fn(),
+}))
+
+vi.mock('../openclaw-gateway-probes', () => ({
+  readConfiguredGatewayPort: readConfiguredGatewayPortMock,
+  probeGatewayPortReachable: probeGatewayPortReachableMock,
+  probeGatewaySocketReady: probeGatewaySocketReadyMock,
+}))
 import {
   confirmRuntimeReconcile,
   issueDesiredRuntimeRevision,
   markRuntimeRevisionInProgress,
   markRuntimeRevisionApplied,
   readOpenClawRuntimeReconcileStore,
+  readOpenClawRuntimeReconcileStoreForUi,
   recordObservedOpenClawVersion,
   resolveGatewayBlockingReasonFromState,
   resolveOpenClawRuntimeReconcileStorePath,
+  sanitizeRuntimeReconcileStoreForUi,
 } from '../openclaw-runtime-reconcile'
 
 const fs = (process.getBuiltinModule('node:fs') as typeof import('node:fs')).promises
@@ -24,6 +42,12 @@ describe('openclaw runtime reconcile store', () => {
     )
     process.env.QCLAW_USER_DATA_DIR = userDataDir
     await fs.rm(userDataDir, { recursive: true, force: true })
+    readConfiguredGatewayPortMock.mockReset()
+    probeGatewayPortReachableMock.mockReset()
+    probeGatewaySocketReadyMock.mockReset()
+    readConfiguredGatewayPortMock.mockResolvedValue(18789)
+    probeGatewayPortReachableMock.mockResolvedValue(true)
+    probeGatewaySocketReadyMock.mockResolvedValue(true)
   })
 
   afterEach(async () => {
@@ -175,5 +199,97 @@ describe('openclaw runtime reconcile store', () => {
     const store = await readOpenClawRuntimeReconcileStore()
     expect(store.version).toBe(1)
     expect(store.runtime.desiredRevision).toBe(0)
+  })
+
+  it('downgrades stale ready runtime state for UI readers when no local gateway listener remains', async () => {
+    const staleStore = {
+      version: 1,
+      lastSeenOpenClawVersion: '2026.3.24',
+      lastSeenVersionBand: 'openclaw_2026_3_23_to_2026_3_24',
+      lastSeenAt: '2026-04-10T00:00:00.000Z',
+      lastCompatibility: {
+        status: 'steady_state',
+        currentVersion: '2026.3.24',
+        currentBand: 'openclaw_2026_3_23_to_2026_3_24',
+        previousVersion: '2026.3.24',
+        previousBand: 'openclaw_2026_3_23_to_2026_3_24',
+        conservativeMode: false,
+        warningCodes: [],
+        summary: 'steady',
+        assessedAt: '2026-04-10T00:00:00.000Z',
+      },
+      runtime: {
+        stateCode: 'ready',
+        desiredRevision: 3,
+        appliedRevision: 3,
+        pendingReasons: [],
+        lastMutationSource: 'gateway-bootstrap',
+        blockingReason: 'none',
+        blockingDetail: null,
+        safeToRetry: true,
+        lastReconcileAt: '2026-04-10T00:00:00.000Z',
+        lastReconcileSummary: 'legacy ready',
+        lastActions: [],
+      },
+    } as any
+
+    const sanitized = await sanitizeRuntimeReconcileStoreForUi(staleStore, {
+      readConfiguredGatewayPort: async () => 18789,
+      probeGatewayPortReachable: async () => false,
+      probeGatewaySocketReady: async () => false,
+    })
+
+    expect(sanitized.runtime.stateCode).toBe('degraded')
+    expect(sanitized.runtime.blockingReason).toBe('service_generation_stale')
+    expect(sanitized.runtime.lastReconcileSummary).toContain('已忽略陈旧的 Gateway 运行态')
+  })
+
+  it('keeps UI runtime state intact when the gateway socket probe still succeeds', async () => {
+    const storePath = resolveOpenClawRuntimeReconcileStorePath()
+    await fs.mkdir(path.dirname(storePath), { recursive: true })
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        version: 1,
+        lastSeenOpenClawVersion: '2026.3.24',
+        lastSeenVersionBand: 'openclaw_2026_3_23_to_2026_3_24',
+        lastSeenAt: '2026-04-10T00:00:00.000Z',
+        lastCompatibility: {
+          status: 'steady_state',
+          currentVersion: '2026.3.24',
+          currentBand: 'openclaw_2026_3_23_to_2026_3_24',
+          previousVersion: '2026.3.24',
+          previousBand: 'openclaw_2026_3_23_to_2026_3_24',
+          conservativeMode: false,
+          warningCodes: [],
+          summary: 'steady',
+          assessedAt: '2026-04-10T00:00:00.000Z',
+        },
+        runtime: {
+          stateCode: 'degraded',
+          desiredRevision: 5,
+          appliedRevision: 5,
+          pendingReasons: [],
+          lastMutationSource: 'gateway-bootstrap',
+          blockingReason: 'control_ui_handshake_failed',
+          blockingDetail: null,
+          safeToRetry: true,
+          lastReconcileAt: '2026-04-10T00:00:00.000Z',
+          lastReconcileSummary: 'compat running',
+          lastActions: [],
+        },
+      }),
+      'utf8'
+    )
+
+    const store = await readOpenClawRuntimeReconcileStoreForUi({
+      readConfiguredGatewayPort: async () => 18789,
+      probeGatewayPortReachable: async () => true,
+      probeGatewaySocketReady: async () => true,
+    })
+
+    expect(store.runtime.stateCode).toBe('degraded')
+    expect(store.runtime.blockingReason).toBe('control_ui_handshake_failed')
+    expect(store.runtime.lastReconcileSummary).toBe('compat running')
   })
 })

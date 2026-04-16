@@ -22,6 +22,31 @@
 
 ## 3. P0 阻塞项
 
+### P0-00 Windows runtime 仍未形成真正自带闭环
+
+现状：
+
+1. 当前安装包虽然已经内置 `OpenClaw` runtime 包体，但仍可能回退依赖系统 Node。
+2. Gateway 启动链仍会受到共享 `~/.openclaw` 状态、旧 generation 或旧守护进程的影响。
+3. 这意味着当前 Windows 运行态更接近“半内置”而不是“真内置”。
+
+风险：
+
+1. 同一版本在不同机器上的表现会被系统环境放大。
+2. 网关启动、对话发送、状态显示容易继续出现“看起来启动了、实际没接管干净”的问题。
+3. 后续飞书、Claude Code、memos、更新机制都会建立在一个不稳定底座上。
+
+处理建议：
+
+1. 让 Windows bundled runtime 支持并优先使用内置 `node.exe`。
+2. 将 Gateway/watchdog/runtime 的状态目录迁移到 Mclaw 私有目录。
+3. 把 `~/.openclaw` 降级为导入/兼容路径，而不是默认 live runtime 根目录。
+
+当前状态：
+
+1. 已确认为当前 P0 主阻塞。
+2. 已进入新的主线策略文档：`docs/mclaw-runtime-isolation-strategy.md`。
+
 ### P0-01 缺少 Windows 对等发布脚本
 
 现状：

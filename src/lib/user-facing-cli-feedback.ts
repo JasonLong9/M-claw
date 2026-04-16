@@ -11,8 +11,9 @@ const GATEWAY_UNREADY_REGEX =
 const CLAWHUB_RATE_LIMIT_REGEX =
   /\bclawhub\b[\s\S]*\b(?:429|rate limit exceeded|too many requests)\b/i
 const CLAWHUB_RESOLUTION_FAILED_REGEX = /resolving clawhub:[\s\S]*fetch failed/i
+const TIMEOUT_FAILURE_REGEX = /\b(timeout|timed out|request timeout|请求超时|响应超时|超时)\b/i
 const NETWORK_BLOCKED_REGEX =
-  /\b(timeout|timed out|network|dns|proxy|certificate|tls|ssl|socket hang up|econnreset|enotfound|fetch failed)\b/i
+  /\b(network|dns|proxy|certificate|tls|ssl|socket hang up|econnreset|enotfound|fetch failed)\b/i
 const PLUGIN_INSTALL_PERMISSION_MARKER = 'QCLAW_PLUGIN_INSTALL_PERMISSION_DENIED'
 const PERMISSION_REPAIR_MARKER = 'QCLAW_PERMISSION_REPAIR'
 const SKILL_MUTATION_BUSY_MARKER = 'QCLAW_SKILL_MUTATION_BUSY'
@@ -102,6 +103,9 @@ export function toUserFacingCliFailureMessage(params: {
   }
   if (CLAWHUB_RESOLUTION_FAILED_REGEX.test(corpus)) {
     return '插件源解析失败，请稍后重试。若该插件此前已安装，可直接继续绑定渠道。'
+  }
+  if (TIMEOUT_FAILURE_REGEX.test(corpus)) {
+    return '请求超时，请稍后重试。若持续失败，请检查 Gateway 与当前模型服务状态。'
   }
   if (NETWORK_BLOCKED_REGEX.test(corpus)) {
     return '网络连接异常，请检查网络或代理配置后重试。'

@@ -985,18 +985,25 @@ describe('openclaw chat service', () => {
     )
 
     expect(result.ok).toBe(true)
-    expect(listChatTraceEntries(2)).toEqual([
-      expect.objectContaining({
-        operation: 'send',
-        stage: 'succeeded',
-        sessionId: 'trace-send-session',
-      }),
-      expect.objectContaining({
-        operation: 'send',
-        stage: 'start',
-        sessionId: 'trace-send-session',
-      }),
-    ])
+    expect(listChatTraceEntries(4)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          operation: 'send',
+          stage: 'start',
+          sessionId: 'trace-send-session',
+        }),
+        expect.objectContaining({
+          operation: 'send',
+          stage: 'transport-run-ok',
+          sessionId: 'trace-send-session',
+        }),
+        expect.objectContaining({
+          operation: 'send',
+          stage: 'succeeded',
+          sessionId: 'trace-send-session',
+        }),
+      ])
+    )
   })
 
   it('rejects concurrent chat sends before spawning a second transport run', async () => {
@@ -1068,18 +1075,25 @@ describe('openclaw chat service', () => {
     const firstResult = await firstPromise
     expect(firstResult.ok).toBe(true)
     expect(transportRun).toHaveBeenCalledTimes(1)
-    expect(listChatTraceEntries(2)).toEqual([
-      expect.objectContaining({
-        operation: 'send',
-        stage: 'succeeded',
-        sessionId: 'singleflight-first',
-      }),
-      expect.objectContaining({
-        operation: 'send',
-        stage: 'rejected-concurrent-send',
-        sessionId: 'singleflight-second',
-      }),
-    ])
+    expect(listChatTraceEntries(4)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          operation: 'send',
+          stage: 'transport-run-ok',
+          sessionId: 'singleflight-first',
+        }),
+        expect.objectContaining({
+          operation: 'send',
+          stage: 'succeeded',
+          sessionId: 'singleflight-first',
+        }),
+        expect.objectContaining({
+          operation: 'send',
+          stage: 'rejected-concurrent-send',
+          sessionId: 'singleflight-second',
+        }),
+      ])
+    )
   })
 
   it('repairs missing main auth profiles from other agent stores before sending', async () => {
@@ -2018,6 +2032,151 @@ describe('openclaw chat service', () => {
     )
 
     expect(parsed.text).toBeNull()
+  })
+
+  it('does not append placeholder tool paths like dot or relative markdown files to assistant text', () => {
+    const parsed = parseAgentReplyOutput(
+      JSON.stringify({
+        response: {
+          text: 'Screenshot captured.',
+        },
+        path: '.',
+        toolMessages: [
+          {
+            role: 'toolresult',
+            path: 'BOOTSTRAP.md',
+          },
+        ],
+      })
+    )
+
+    expect(parsed.text).toBe('Screenshot captured.')
+    expect(parsed.images).toBeUndefined()
+  })
+
+  it('keeps image-only assistant payloads from structured tool messages', () => {
+    const parsed = parseAgentReplyOutput(
+      JSON.stringify({
+        messages: [
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'image',
+                mimeType: 'image/png',
+                data: 'ZmFrZS1pbWFnZQ==',
+              },
+            ],
+          },
+        ],
+      })
+    )
+
+    expect(parsed.text).toBeNull()
+    expect(parsed.images).toEqual([
+      {
+        url: 'data:image/png;base64,ZmFrZS1pbWFnZQ==',
+        mimeType: 'image/png',
+      },
+    ])
+  })
+
+  it('keeps image-only assistant payloads from control-ui image blocks', () => {
+    const parsed = parseAgentReplyOutput(
+      JSON.stringify({
+        messages: [
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'image',
+                props: {
+                  url: 'data:image/png;base64,Y29udHJvbC11aS1pbWFnZQ==',
+                  alt: 'browser screenshot',
+                },
+              },
+            ],
+          },
+        ],
+      })
+    )
+
+    expect(parsed.text).toBeNull()
+    expect(parsed.images).toEqual([
+      {
+        url: 'data:image/png;base64,Y29udHJvbC11aS1pbWFnZQ==',
+        mimeType: 'image/png',
+      },
+    ])
+  })
+
+  it('extracts embedded raw image payloads from assistant text without leaking base64', () => {
+    const jpegPayload = `/9j/${'A'.repeat(640)}`
+    const parsed = parseAgentReplyOutput(
+      JSON.stringify({
+        response: {
+          text: `已完成截图：${jpegPayload}`,
+        },
+      })
+    )
+
+    expect(parsed.text).toBe('已完成截图')
+    expect(parsed.images).toEqual([
+      {
+        url: `data:image/jpeg;base64,${jpegPayload}`,
+        mimeType: 'image/jpeg',
+      },
+    ])
+  })
+
+  it('turns saved image file paths into assistant image attachments', async () => {
+    const imagePath = path.join(os.tmpdir(), `mclaw-inline-${Date.now()}.png`)
+    const imageBuffer = Buffer.from('fake-inline-image')
+    await writeFile(imagePath, imageBuffer)
+
+    try {
+      const parsed = parseAgentReplyOutput(
+        JSON.stringify({
+          messages: [
+            {
+              role: 'toolresult',
+              path: imagePath,
+            },
+          ],
+        })
+      )
+
+      expect(parsed.images).toEqual([
+        {
+          url: `data:image/png;base64,${imageBuffer.toString('base64')}`,
+          mimeType: 'image/png',
+        },
+      ])
+      expect(parsed.text).toContain(imagePath)
+    } finally {
+      await rm(imagePath, { force: true })
+    }
+  })
+
+  it('appends verified tool path status when a reported saved file is missing', () => {
+    const missingPath = path.join(os.tmpdir(), `mclaw-missing-${Date.now()}.txt`)
+    const parsed = parseAgentReplyOutput(
+      JSON.stringify({
+        response: {
+          text: 'saved the file',
+        },
+        messages: [
+          {
+            role: 'tool',
+            path: missingPath,
+          },
+        ],
+      })
+    )
+
+    expect(parsed.text).toContain('saved the file')
+    expect(parsed.text).toContain(missingPath)
+    expect(parsed.text).not.toBe('saved the file')
   })
 
   it('persists chat transcript after a successful send', async () => {
@@ -5239,6 +5398,375 @@ describe('openclaw chat service', () => {
     expect(transcript.messages[1].text).toBe('深圳明天有阵雨，23-24C。')
   })
 
+  it('merges external toolMessages so browser screenshots survive transcript loading', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-external-tool-images')
+
+    const transcript = await getChatTranscript('remote-session', {
+      discoverOpenClaw,
+      runCommand: async (args) => {
+        if (args[0] === 'sessions') {
+          return {
+            ok: true,
+            stdout: JSON.stringify({
+              sessions: [
+                {
+                  sessionId: 'remote-session',
+                  key: 'agent:main:history-direct-session',
+                  agentId: 'main',
+                  model: 'openai/gpt-5.4',
+                  updatedAt: 9_000,
+                  kind: 'direct',
+                },
+              ],
+            }),
+            stderr: '',
+            code: 0,
+          }
+        }
+
+        if (args[0] === 'gateway' && args[1] === 'call' && args[2] === 'sessions.get') {
+          return {
+            ok: true,
+            stdout: JSON.stringify({
+              messages: [
+                {
+                  id: 'user-1',
+                  role: 'user',
+                  content: [{ type: 'text', text: '把浏览器页面截下来' }],
+                  createdAt: 9_001,
+                },
+              ],
+              toolMessages: [
+                {
+                  id: 'tool-image-1',
+                  role: 'toolresult',
+                  content: [
+                    {
+                      type: 'image',
+                      props: {
+                        url: 'data:image/png;base64,ZXh0ZXJuYWwtdG9vbC1pbWFnZQ==',
+                      },
+                    },
+                  ],
+                  createdAt: 9_002,
+                },
+              ],
+            }),
+            stderr: '',
+            code: 0,
+          }
+        }
+
+        return {
+          ok: false,
+          stdout: '',
+          stderr: 'unexpected command',
+          code: 1,
+        }
+      },
+    })
+
+    expect(transcript.messages).toHaveLength(2)
+    expect(transcript.messages[0].role).toBe('user')
+    expect(transcript.messages[1].role).toBe('assistant')
+    expect(transcript.messages[1].images).toEqual([
+      {
+        url: 'data:image/png;base64,ZXh0ZXJuYWwtdG9vbC1pbWFnZQ==',
+        mimeType: 'image/png',
+      },
+    ])
+  })
+
+  it('loads browser screenshots from saved image paths in external toolMessages', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-external-tool-image-path')
+    const imagePath = path.join(os.tmpdir(), `mclaw-transcript-${Date.now()}.png`)
+    const imageBuffer = Buffer.from('external-tool-image-path')
+    await writeFile(imagePath, imageBuffer)
+
+    try {
+      const transcript = await getChatTranscript('remote-session', {
+        discoverOpenClaw,
+        runCommand: async (args) => {
+          if (args[0] === 'sessions') {
+            return {
+              ok: true,
+              stdout: JSON.stringify({
+                sessions: [
+                  {
+                    sessionId: 'remote-session',
+                    key: 'agent:main:history-direct-session',
+                    agentId: 'main',
+                    model: 'openai/gpt-5.4',
+                    updatedAt: 9_100,
+                    kind: 'direct',
+                  },
+                ],
+              }),
+              stderr: '',
+              code: 0,
+            }
+          }
+
+          if (args[0] === 'gateway' && args[1] === 'call' && args[2] === 'sessions.get') {
+            return {
+              ok: true,
+              stdout: JSON.stringify({
+                messages: [
+                  {
+                    id: 'user-1',
+                    role: 'user',
+                    content: [{ type: 'text', text: '把浏览器页面截下来' }],
+                    createdAt: 9_101,
+                  },
+                ],
+                toolMessages: [
+                  {
+                    id: 'tool-image-2',
+                    role: 'toolresult',
+                    path: imagePath,
+                    createdAt: 9_102,
+                  },
+                ],
+              }),
+              stderr: '',
+              code: 0,
+            }
+          }
+
+          return {
+            ok: false,
+            stdout: '',
+            stderr: 'unexpected command',
+            code: 1,
+          }
+        },
+      })
+
+      expect(transcript.messages).toHaveLength(2)
+      expect(transcript.messages[1].role).toBe('assistant')
+      expect(transcript.messages[1].images).toEqual([
+        {
+          url: `data:image/png;base64,${imageBuffer.toString('base64')}`,
+          mimeType: 'image/png',
+        },
+      ])
+    } finally {
+      await rm(imagePath, { force: true })
+    }
+  })
+
+  it('maps raw session-log message envelopes from sessions.get and preserves toolResult screenshots', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-external-raw-session-log')
+    const imageBuffer = Buffer.from('external-raw-session-log-image')
+
+    const transcript = await getChatTranscript('remote-session', {
+      discoverOpenClaw,
+      runCommand: async (args) => {
+        if (args[0] === 'sessions') {
+          return {
+            ok: true,
+            stdout: JSON.stringify({
+              sessions: [
+                {
+                  sessionId: 'remote-session',
+                  key: 'agent:main:history-direct-session',
+                  agentId: 'main',
+                  model: 'deepseek-chat',
+                  updatedAt: 9_200,
+                  kind: 'direct',
+                },
+              ],
+            }),
+            stderr: '',
+            code: 0,
+          }
+        }
+
+        if (args[0] === 'gateway' && args[1] === 'call' && args[2] === 'sessions.get') {
+          return {
+            ok: true,
+            stdout: JSON.stringify({
+              records: [
+                {
+                  type: 'session',
+                  id: 'session-meta',
+                  timestamp: '2026-04-15T16:46:11.449Z',
+                },
+                {
+                  type: 'message',
+                  id: 'user-1',
+                  timestamp: '2026-04-15T16:46:29.001Z',
+                  message: {
+                    role: 'user',
+                    content: [{ type: 'text', text: '把浏览器页面截下来' }],
+                  },
+                },
+                {
+                  type: 'message',
+                  id: 'assistant-1',
+                  timestamp: '2026-04-15T16:47:01.162Z',
+                  message: {
+                    role: 'assistant',
+                    content: [{ type: 'text', text: '正在截图。' }],
+                    model: 'deepseek-chat',
+                  },
+                },
+                {
+                  type: 'message',
+                  id: 'tool-1',
+                  timestamp: '2026-04-15T16:47:06.802Z',
+                  message: {
+                    role: 'toolResult',
+                    toolName: 'browser',
+                    content: [
+                      {
+                        type: 'image',
+                        data: imageBuffer.toString('base64'),
+                        mimeType: 'image/jpeg',
+                      },
+                    ],
+                  },
+                  details: {
+                    path: 'C:\\Users\\James\\AppData\\Roaming\\Mclaw\\openclaw-state\\.openclaw\\media\\browser\\tool-1.jpg',
+                  },
+                  isError: false,
+                },
+                {
+                  type: 'message',
+                  id: 'assistant-2',
+                  timestamp: '2026-04-15T16:47:14.024Z',
+                  message: {
+                    role: 'assistant',
+                    content: [{ type: 'text', text: '截图已经返回。' }],
+                    model: 'deepseek-chat',
+                  },
+                },
+              ],
+            }),
+            stderr: '',
+            code: 0,
+          }
+        }
+
+        return {
+          ok: false,
+          stdout: '',
+          stderr: 'unexpected command',
+          code: 1,
+        }
+      },
+    })
+
+    expect(transcript.messages).toHaveLength(4)
+    expect(transcript.messages[0].role).toBe('user')
+    expect(transcript.messages[1].text).toContain('正在截图')
+    expect(transcript.messages[2].images).toEqual([
+      {
+        url: `data:image/jpeg;base64,${imageBuffer.toString('base64')}`,
+        mimeType: 'image/jpeg',
+      },
+    ])
+    expect(transcript.messages[3].text).toContain('截图已经返回')
+  })
+
+  it('merges newer locally persisted turns when the upstream transcript lags behind', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-external-transcript-local-tail')
+
+    await appendLocalChatMessages({
+      scopeKey: 'fingerprint-external-transcript-local-tail',
+      sessionId: 'remote-session',
+      sessionKey: 'agent:main:history-direct-session',
+      upstreamConfirmed: true,
+      agentId: 'main',
+      model: 'openai/gpt-5.4',
+      transportSessionId: 'transport-remote-session',
+      messages: [
+        {
+          id: 'local-user-2',
+          role: 'user',
+          text: '再来一张当前可见区域截图',
+          createdAt: 9_101_000,
+          status: 'sent',
+        },
+        {
+          id: 'local-assistant-2',
+          role: 'assistant',
+          text: '好的，已重新截图。',
+          createdAt: 9_102_000,
+          status: 'sent',
+          model: 'openai/gpt-5.4',
+        },
+      ],
+      updatedAt: 9_102_000,
+    })
+
+    const transcript = await getChatTranscript('remote-session', {
+      discoverOpenClaw,
+      runCommand: async (args) => {
+        if (args[0] === 'sessions') {
+          return {
+            ok: true,
+            stdout: JSON.stringify({
+              sessions: [
+                {
+                  sessionId: 'remote-session',
+                  key: 'agent:main:history-direct-session',
+                  agentId: 'main',
+                  model: 'openai/gpt-5.4',
+                  updatedAt: 9_100,
+                  kind: 'direct',
+                },
+              ],
+            }),
+            stderr: '',
+            code: 0,
+          }
+        }
+
+        if (args[0] === 'gateway' && args[1] === 'call' && args[2] === 'sessions.get') {
+          return {
+            ok: true,
+            stdout: JSON.stringify({
+              messages: [
+                {
+                  id: 'user-1',
+                  role: 'user',
+                  content: [{ type: 'text', text: '先看一下这个页面' }],
+                  createdAt: 9_001,
+                },
+                {
+                  id: 'assistant-1',
+                  role: 'assistant',
+                  content: [{ type: 'text', text: '这是当前页面。' }],
+                  createdAt: 9_002,
+                  model: 'openai/gpt-5.4',
+                },
+              ],
+            }),
+            stderr: '',
+            code: 0,
+          }
+        }
+
+        return {
+          ok: false,
+          stdout: '',
+          stderr: 'unexpected command',
+          code: 1,
+        }
+      },
+    })
+
+    expect(transcript.hasLocalTranscript).toBe(true)
+    expect(transcript.messages).toHaveLength(4)
+    expect(transcript.messages.map((message) => message.text)).toEqual([
+      '先看一下这个页面',
+      '这是当前页面。',
+      '再来一张当前可见区域截图',
+      '好的，已重新截图。',
+    ])
+  })
+
   it('prefers chat.history for direct sessions when the history flag and capability gate are enabled', async () => {
     const discoverOpenClaw = createDiscovery('fingerprint-chat-history-primary')
     const capturedCommands: string[][] = []
@@ -6211,14 +6739,41 @@ Sender (untrusted metadata):
     expect(runCliStreamingMock).not.toHaveBeenCalled()
   })
 
-  it('falls back to socket transport when the control ui trusted send path times out', async () => {
-    const discoverOpenClaw = createDiscovery('fingerprint-control-ui-chat-send-timeout-fallback')
-    runGatewayChatViaControlUiBrowserMock.mockRejectedValue(new Error('control ui chat.send timeout for agent:main:history-direct-session'))
+  it('keeps browser screenshots when control ui returns toolMessages separately', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-control-ui-chat-image')
+    runGatewayChatViaControlUiBrowserMock.mockResolvedValue({
+      runId: 'run-control-ui-image',
+      sessionKey: 'agent:main:history-direct-session',
+      payload: {
+        state: 'final',
+        runId: 'run-control-ui-image',
+        sessionKey: 'agent:main:history-direct-session',
+        message: {
+          text: '',
+          model: 'openai/gpt-5.4-pro',
+        },
+      },
+      toolMessages: [
+        {
+          id: 'tool-image-1',
+          role: 'toolresult',
+          content: [
+            {
+              type: 'image',
+              props: {
+                url: 'data:image/png;base64,Y29udHJvbC11aS10b29sLWltYWdl',
+              },
+            },
+          ],
+          createdAt: 6_001,
+        },
+      ],
+    })
 
     const sendResult = await sendChatMessage(
       {
-        sessionId: 'trusted-control-ui-timeout',
-        text: '鎺у埗鐣岄潰瓒呮椂鍚庣户缁彂閫?',
+        sessionId: 'trusted-default-control-ui-image',
+        text: '截图',
       },
       {
         discoverOpenClaw,
@@ -6235,7 +6790,7 @@ Sender (untrusted metadata):
           stdout: JSON.stringify({
             sessions: [
               {
-                sessionId: 'trusted-control-ui-timeout',
+                sessionId: 'trusted-default-control-ui-image',
                 key: 'agent:main:history-direct-session',
                 agentId: 'main',
                 model: 'openai/gpt-5.4-pro',
@@ -6249,24 +6804,269 @@ Sender (untrusted metadata):
         }),
         runStreamingCommand: async () => ({
           ok: true,
-          stdout: JSON.stringify({
-            response: {
-              text: 'socket fallback 缁х画鎴愬姛',
-            },
-            model: 'openai/gpt-5.4-pro',
-          }),
+          stdout: '',
           stderr: '',
           code: 0,
-          streamedText: 'socket fallback 缁х画鎴愬姛',
+          streamedText: '',
           streamedModel: 'openai/gpt-5.4-pro',
         }),
       }
     )
 
     expect(sendResult.ok).toBe(true)
-    expect(sendResult.message?.text).toBe('socket fallback 缁х画鎴愬姛')
-    expect(runGatewayChatViaControlUiBrowserMock).toHaveBeenCalledTimes(1)
+    expect(sendResult.message?.images).toEqual([
+      {
+        url: 'data:image/png;base64,Y29udHJvbC11aS10b29sLWltYWdl',
+        mimeType: 'image/png',
+      },
+    ])
     expect(runCliStreamingMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps browser screenshots when control ui only reports a saved image path', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-control-ui-chat-image-path')
+    const imagePath = path.join(os.tmpdir(), `mclaw-control-ui-${Date.now()}.png`)
+    const imageBuffer = Buffer.from('control-ui-tool-image-path')
+    await writeFile(imagePath, imageBuffer)
+
+    try {
+      runGatewayChatViaControlUiBrowserMock.mockResolvedValue({
+        runId: 'run-control-ui-image-path',
+        sessionKey: 'agent:main:history-direct-session',
+        payload: {
+          state: 'final',
+          runId: 'run-control-ui-image-path',
+          sessionKey: 'agent:main:history-direct-session',
+          message: {
+            text: '',
+            model: 'openai/gpt-5.4-pro',
+          },
+        },
+        toolMessages: [
+          {
+            id: 'tool-image-path-1',
+            role: 'toolresult',
+            path: imagePath,
+            createdAt: 6_101,
+          },
+        ],
+      })
+
+      const sendResult = await sendChatMessage(
+        {
+          sessionId: 'trusted-default-control-ui-image-path',
+          text: '截图',
+        },
+        {
+          discoverOpenClaw,
+          readModelStatus: async () => createModelStatus('openai/gpt-5.4-pro'),
+          ensureGateway: async () => ({
+            ok: true,
+            stdout: '',
+            stderr: '',
+            code: 0,
+            running: true,
+          }),
+          runCommand: async () => ({
+            ok: true,
+            stdout: JSON.stringify({
+              sessions: [
+                {
+                  sessionId: 'trusted-default-control-ui-image-path',
+                  key: 'agent:main:history-direct-session',
+                  agentId: 'main',
+                  model: 'openai/gpt-5.4-pro',
+                  updatedAt: 6_100,
+                  kind: 'direct',
+                },
+              ],
+            }),
+            stderr: '',
+            code: 0,
+          }),
+          runStreamingCommand: async () => ({
+            ok: true,
+            stdout: '',
+            stderr: '',
+            code: 0,
+            streamedText: '',
+            streamedModel: 'openai/gpt-5.4-pro',
+          }),
+        }
+      )
+
+      expect(sendResult.ok).toBe(true)
+      expect(sendResult.message?.images).toEqual([
+        {
+          url: `data:image/png;base64,${imageBuffer.toString('base64')}`,
+          mimeType: 'image/png',
+        },
+      ])
+      expect(runCliStreamingMock).not.toHaveBeenCalled()
+    } finally {
+      await rm(imagePath, { force: true })
+    }
+  })
+
+  it('falls back to socket transport when the control ui trusted send path times out', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-control-ui-chat-send-timeout-fallback')
+    class FakeWebSocket {
+      static readonly CONNECTING = 0
+      static readonly OPEN = 1
+      static readonly CLOSING = 2
+      static readonly CLOSED = 3
+
+      readyState = FakeWebSocket.OPEN
+      private readonly listeners = new Map<string, Set<(event: any) => void>>()
+
+      constructor() {
+        queueMicrotask(() => {
+          this.emit('message', {
+            data: JSON.stringify({
+              type: 'event',
+              event: 'connect.challenge',
+              payload: {
+                nonce: 'nonce-1',
+              },
+            }),
+          })
+        })
+      }
+
+      addEventListener(type: string, listener: (event: any) => void): void {
+        if (!this.listeners.has(type)) {
+          this.listeners.set(type, new Set())
+        }
+        this.listeners.get(type)?.add(listener)
+      }
+
+      send(raw: string): void {
+        const frame = JSON.parse(raw)
+        if (frame.method === 'connect') {
+          this.emit('message', {
+            data: JSON.stringify({
+              type: 'res',
+              id: frame.id,
+              ok: true,
+              payload: {
+                auth: { role: 'operator' },
+              },
+            }),
+          })
+          return
+        }
+
+        if (frame.method === 'chat.send') {
+          this.emit('message', {
+            data: JSON.stringify({
+              type: 'res',
+              id: frame.id,
+              ok: true,
+              payload: {
+                runId: 'socket-run-1',
+              },
+            }),
+          })
+          this.emit('message', {
+            data: JSON.stringify({
+              type: 'event',
+              event: 'chat.stream',
+              payload: {
+                runId: 'socket-run-1',
+                sessionKey: 'agent:main:history-direct-session',
+                seq: 1,
+                state: 'final',
+                message: {
+                  text: 'socket fallback 缁х画鎴愬姛',
+                  model: 'openai/gpt-5.4-pro',
+                },
+              },
+            }),
+          })
+        }
+      }
+
+      close(): void {
+        this.readyState = FakeWebSocket.CLOSED
+        this.emit('close', {})
+      }
+
+      private emit(type: string, event: any): void {
+        for (const listener of this.listeners.get(type) || []) {
+          listener(event)
+        }
+      }
+    }
+
+    const originalWebSocket = globalThis.WebSocket
+    ;(globalThis as typeof globalThis & { WebSocket?: typeof WebSocket }).WebSocket =
+      FakeWebSocket as unknown as typeof WebSocket
+    readConfigMock.mockResolvedValue({
+      gateway: {
+        port: 18789,
+        auth: {
+          token: 'gateway-token',
+        },
+      },
+    })
+    runGatewayChatViaControlUiBrowserMock.mockRejectedValue(new Error('control ui chat.send timeout for agent:main:history-direct-session'))
+
+    try {
+      const sendResult = await sendChatMessage(
+        {
+          sessionId: 'trusted-control-ui-timeout',
+          text: '鎺у埗鐣岄潰瓒呮椂鍚庣户缁彂閫?',
+        },
+        {
+          discoverOpenClaw,
+          readModelStatus: async () => createModelStatus('openai/gpt-5.4-pro'),
+          ensureGateway: async () => ({
+            ok: true,
+            stdout: '',
+            stderr: '',
+            code: 0,
+            running: true,
+          }),
+          runCommand: async () => ({
+            ok: true,
+            stdout: JSON.stringify({
+              sessions: [
+                {
+                  sessionId: 'trusted-control-ui-timeout',
+                  key: 'agent:main:history-direct-session',
+                  agentId: 'main',
+                  model: 'openai/gpt-5.4-pro',
+                  updatedAt: 6_000,
+                  kind: 'direct',
+                },
+              ],
+            }),
+            stderr: '',
+            code: 0,
+          }),
+          runStreamingCommand: async () => ({
+            ok: true,
+            stdout: JSON.stringify({
+              response: {
+                text: 'socket fallback 缁х画鎴愬姛',
+              },
+              model: 'openai/gpt-5.4-pro',
+            }),
+            stderr: '',
+            code: 0,
+            streamedText: 'socket fallback 缁х画鎴愬姛',
+            streamedModel: 'openai/gpt-5.4-pro',
+          }),
+        }
+      )
+
+      expect(sendResult.ok).toBe(true)
+      expect(sendResult.message?.text).toBe('socket fallback 缁х画鎴愬姛')
+      expect(runGatewayChatViaControlUiBrowserMock).toHaveBeenCalledTimes(1)
+      expect(runCliStreamingMock).not.toHaveBeenCalled()
+    } finally {
+      ;(globalThis as typeof globalThis & { WebSocket?: typeof WebSocket }).WebSocket = originalWebSocket
+    }
   })
 
   it('does not promote a legacy patch bridge into a trusted session key on the next send', async () => {

@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
-import { Alert, ActionIcon, Badge, Button, Card, Group, Paper, ScrollArea, Select, Stack, Text, Textarea, Tooltip, Transition, useComputedColorScheme, useMantineColorScheme } from '@mantine/core'
-import { IconChevronDown, IconChevronUp, IconPlayerStop, IconRefresh, IconSend, IconTrash } from '@tabler/icons-react'
+﻿import { useEffect, useRef, useState, type SyntheticEvent, type WheelEvent } from 'react'
+import { Alert, ActionIcon, Badge, Button, Card, Group, Modal, Paper, ScrollArea, Select, Stack, Text, Textarea, Tooltip, Transition, useComputedColorScheme, useMantineColorScheme } from '@mantine/core'
+import { notifications } from '@mantine/notifications'
+import { IconChevronDown, IconChevronUp, IconExternalLink, IconPlayerStop, IconRefresh, IconSend, IconTrash } from '@tabler/icons-react'
 import type {
   ChatCapabilitySnapshot,
+  ChatImageAttachment,
   ChatMessage,
   ChatSessionDebugSnapshot,
   ChatSessionSummary,
@@ -50,8 +52,73 @@ const QUICK_PROMPTS = [
 const COMPOSER_DEFAULT_HEIGHT = 160
 const COMPOSER_MIN_HEIGHT = 120
 const COMPOSER_MAX_HEIGHT_FALLBACK = 520
+const CHAT_IMAGE_THUMBNAIL_MAX_WIDTH = 220
+const CHAT_IMAGE_THUMBNAIL_HEIGHT = 160
+const CHAT_IMAGE_PREVIEW_MAX_HEIGHT = '78vh'
+const CHAT_IMAGE_PREVIEW_MIN_SCALE = 0.05
+const CHAT_IMAGE_PREVIEW_MAX_SCALE = 12
+const CHAT_IMAGE_PREVIEW_ZOOM_STEP = 1.16
 
 const TOKEN_FORMATTER = new Intl.NumberFormat('zh-CN')
+
+type ImagePreviewFitMode = 'auto' | 'screen' | 'width'
+
+interface ImagePreviewState {
+  messageId: string
+  index: number
+  image: ChatImageAttachment
+}
+
+interface ImagePreviewNaturalSize {
+  width: number
+  height: number
+}
+
+function clampImagePreviewScale(scale: number): number {
+  if (!Number.isFinite(scale)) return 1
+  return Math.min(CHAT_IMAGE_PREVIEW_MAX_SCALE, Math.max(CHAT_IMAGE_PREVIEW_MIN_SCALE, scale))
+}
+
+function getImagePreviewAvailableWidth(): number {
+  if (typeof window === 'undefined' || !Number.isFinite(window.innerWidth) || window.innerWidth <= 0) {
+    return 1100
+  }
+
+  return Math.max(420, Math.min(1320, window.innerWidth - 220))
+}
+
+function getImagePreviewAvailableHeight(): number {
+  if (typeof window === 'undefined' || !Number.isFinite(window.innerHeight) || window.innerHeight <= 0) {
+    return 820
+  }
+
+  return Math.max(320, Math.round(window.innerHeight * 0.78) - 48)
+}
+
+function resolveImagePreviewAutoFitMode(size: ImagePreviewNaturalSize | null): Exclude<ImagePreviewFitMode, 'auto'> {
+  if (!size || !Number.isFinite(size.width) || !Number.isFinite(size.height) || size.width <= 0 || size.height <= 0) {
+    return 'screen'
+  }
+
+  return size.height > size.width * 1.35 ? 'width' : 'screen'
+}
+
+function resolveImagePreviewScale(
+  size: ImagePreviewNaturalSize | null,
+  fitMode: Exclude<ImagePreviewFitMode, 'auto'>
+): number {
+  if (!size || !Number.isFinite(size.width) || !Number.isFinite(size.height) || size.width <= 0 || size.height <= 0) {
+    return 1
+  }
+
+  const widthScale = getImagePreviewAvailableWidth() / size.width
+  if (fitMode === 'width') {
+    return clampImagePreviewScale(Math.min(1, widthScale))
+  }
+
+  const heightScale = getImagePreviewAvailableHeight() / size.height
+  return clampImagePreviewScale(Math.min(1, widthScale, heightScale))
+}
 
 function getComposerMaxHeight(): number {
   if (typeof window === 'undefined' || !Number.isFinite(window.innerHeight) || window.innerHeight <= 0) {
@@ -71,6 +138,39 @@ function formatSessionTime(updatedAt: number): string {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+function trimDetectedLocalPath(candidate: string): string {
+  return String(candidate || '')
+    .trim()
+    .replace(/^['"`(<{\[]+/, '')
+    .replace(/['"`)>}\]]+$/, '')
+    .replace(/[，。,；;：:!！?？]+$/, '')
+}
+
+function collectAssistantLocalPaths(text: string): string[] {
+  const normalizedText = String(text || '')
+  if (!normalizedText) return []
+
+  const paths: string[] = []
+  for (const line of normalizedText.split(/\r?\n/)) {
+    const normalizedLine = String(line || '').trim()
+    if (!normalizedLine) continue
+    const match = normalizedLine.match(/(?:^|[^a-z0-9+.-])([a-z]:[\\/].+)$/i)
+    if (!match) continue
+    const normalizedPath = trimDetectedLocalPath(match[1] || '')
+    if (!normalizedPath) continue
+    paths.push(normalizedPath)
+  }
+
+  return Array.from(new Set(paths))
+}
+
+function describeLocalPathLabel(targetPath: string): string {
+  const normalized = String(targetPath || '').trim().replace(/[\\/]+$/, '')
+  if (!normalized) return '文件'
+  const segments = normalized.split(/[\\/]/).filter(Boolean)
+  return segments[segments.length - 1] || normalized
 }
 
 function formatMessageTime(createdAt: number, fallback = ''): string {
@@ -260,6 +360,10 @@ export default function DashboardChatPanel({
   const [clearingTranscript, setClearingTranscript] = useState(false)
   const [lastRetryText, setLastRetryText] = useState('')
   const [copiedMessageId, setCopiedMessageId] = useState('')
+  const [imagePreview, setImagePreview] = useState<ImagePreviewState | null>(null)
+  const [imagePreviewScale, setImagePreviewScale] = useState(1)
+  const [imagePreviewFitMode, setImagePreviewFitMode] = useState<ImagePreviewFitMode>('auto')
+  const [imagePreviewNaturalSize, setImagePreviewNaturalSize] = useState<ImagePreviewNaturalSize | null>(null)
   const [selectedModel, setSelectedModel] = useState('')
   const [composerHeight, setComposerHeight] = useState(COMPOSER_DEFAULT_HEIGHT)
   const [showComposerModelPicker, setShowComposerModelPicker] = useState(false)
@@ -409,6 +513,13 @@ export default function DashboardChatPanel({
     loadingTranscript,
     renderedMessageCount: renderedMessages.length,
   })
+  const resolvedImagePreviewFitMode =
+    imagePreviewFitMode === 'auto'
+      ? resolveImagePreviewAutoFitMode(imagePreviewNaturalSize)
+      : imagePreviewFitMode
+  const imagePreviewWidth = imagePreviewNaturalSize
+    ? Math.max(1, Math.round(imagePreviewNaturalSize.width * imagePreviewScale))
+    : undefined
   const composerHint = buildComposerHint({
     hasSession: Boolean(activeSession),
     canPatchModel: sessionModelSelectionEnabled,
@@ -626,33 +737,32 @@ export default function DashboardChatPanel({
     if (!text || sending || chatModelSwitching) return
 
     setPanelError('')
-    let sessionId = String(activeSessionId || '').trim()
-    if (resolveDirectChatSessionAction({ activeSessionId: sessionId }) === 'create') {
-      sessionId = await handleCreateSession()
-      if (!sessionId) return
-    }
-
-    if (!gatewayRunning) {
-      const ready = await onEnsureGatewayRunning()
-      if (!ready) {
-        setPanelError('网关启动失败，暂时无法发送消息')
-        return
-      }
-    }
-
-    const nextDraft = text
-    activeSendSessionIdRef.current = sessionId
-    setPendingUserText(text)
-    setStreamingAssistantText('')
-    setVisibleStreamingAssistantText('')
-    setStreamingAssistantModel('')
-    setStreamingAssistantUsage(undefined)
-    setAssistantStreamStarted(false)
-    setStopping(false)
-    setLastRetryText(text)
-    setDraft('')
     setSending(true)
+    setStopping(false)
+    let sessionId = String(activeSessionId || '').trim()
+    const nextDraft = text
     try {
+      if (resolveDirectChatSessionAction({ activeSessionId: sessionId }) === 'create') {
+        sessionId = await handleCreateSession()
+        if (!sessionId) return
+      }
+
+      if (!gatewayRunning) {
+        const ready = await onEnsureGatewayRunning()
+        if (!ready) {
+          setPanelError('网关启动失败，暂时无法发送消息')
+          return
+        }
+      }
+      activeSendSessionIdRef.current = sessionId
+      setPendingUserText(text)
+      setStreamingAssistantText('')
+      setVisibleStreamingAssistantText('')
+      setStreamingAssistantModel('')
+      setStreamingAssistantUsage(undefined)
+      setAssistantStreamStarted(false)
+      setLastRetryText(text)
+      setDraft('')
       const result = await window.api.sendChatMessage({
         sessionId,
         text,
@@ -963,6 +1073,81 @@ export default function DashboardChatPanel({
     }
   }
 
+  const handleOpenLocalPath = async (targetPath: string) => {
+    const normalizedPath = String(targetPath || '').trim()
+    if (!normalizedPath) return
+
+    try {
+      const result = await window.api.openLocalPath(normalizedPath)
+      if (!result?.ok) {
+        throw new Error(result?.error || `无法打开文件：${normalizedPath}`)
+      }
+    } catch (error) {
+      notifications.show({
+        color: 'red',
+        title: '打开失败',
+        message: error instanceof Error ? error.message : String(error),
+        autoClose: 3200,
+      })
+    }
+  }
+
+  const openImagePreview = (image: ChatImageAttachment, messageId: string, index: number) => {
+    setImagePreview({
+      image,
+      messageId,
+      index,
+    })
+    setImagePreviewNaturalSize(null)
+    setImagePreviewFitMode('auto')
+    setImagePreviewScale(1)
+  }
+
+  const closeImagePreview = () => {
+    setImagePreview(null)
+    setImagePreviewNaturalSize(null)
+    setImagePreviewFitMode('auto')
+    setImagePreviewScale(1)
+  }
+
+  const handleImagePreviewReset = () => {
+    setImagePreviewScale(resolveImagePreviewScale(imagePreviewNaturalSize, resolvedImagePreviewFitMode))
+  }
+
+  const handleImagePreviewActualSize = () => {
+    setImagePreviewScale(clampImagePreviewScale(1))
+  }
+
+  const handleImagePreviewFitModeChange = (fitMode: Exclude<ImagePreviewFitMode, 'auto'>) => {
+    setImagePreviewFitMode(fitMode)
+    setImagePreviewScale(resolveImagePreviewScale(imagePreviewNaturalSize, fitMode))
+  }
+
+  const handleImagePreviewZoom = (direction: 'in' | 'out') => {
+    const multiplier = direction === 'in' ? CHAT_IMAGE_PREVIEW_ZOOM_STEP : 1 / CHAT_IMAGE_PREVIEW_ZOOM_STEP
+    setImagePreviewScale((current) => clampImagePreviewScale(current * multiplier))
+  }
+
+  const handleImagePreviewWheel = (event: WheelEvent<HTMLDivElement>) => {
+    if (!(event.ctrlKey || event.metaKey)) return
+    event.preventDefault()
+    const multiplier = event.deltaY < 0 ? CHAT_IMAGE_PREVIEW_ZOOM_STEP : 1 / CHAT_IMAGE_PREVIEW_ZOOM_STEP
+    setImagePreviewScale((current) => clampImagePreviewScale(current * multiplier))
+  }
+
+  const handleImagePreviewLoad = (event: SyntheticEvent<HTMLImageElement>) => {
+    const nextSize = {
+      width: event.currentTarget.naturalWidth,
+      height: event.currentTarget.naturalHeight,
+    }
+    const nextFitMode =
+      imagePreviewFitMode === 'auto'
+        ? resolveImagePreviewAutoFitMode(nextSize)
+        : imagePreviewFitMode
+    setImagePreviewNaturalSize(nextSize)
+    setImagePreviewScale(resolveImagePreviewScale(nextSize, nextFitMode))
+  }
+
   const hasTranscriptMessages = (activeTranscript?.messages.length || 0) > 0
   const shouldPreserveConversation = Boolean(
     sending || pendingUserText || streamingAssistantText || activeSession || hasTranscriptMessages
@@ -986,7 +1171,8 @@ export default function DashboardChatPanel({
   })
 
   return (
-    <Card h="100%" p="sm" withBorder shadow="xl" style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    <>
+      <Card h="100%" p="sm" withBorder shadow="xl" style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <Group justify="space-between" align="flex-start" wrap="wrap" gap="sm">
         <div>
           <Group gap="xs">
@@ -1440,7 +1626,14 @@ export default function DashboardChatPanel({
                 {renderedMessages.map((message) => {
                   const displayText = resolveChatMessageDisplayText(message.text)
                   const messageText = displayText.body
-                  if (!messageText) return null
+                  const localPathLinks =
+                    message.role === 'assistant'
+                      ? collectAssistantLocalPaths(messageText)
+                      : []
+                  const imageAttachments = Array.isArray(message.images)
+                    ? message.images.filter((image) => String(image?.url || '').trim())
+                    : []
+                  if (!messageText && imageAttachments.length === 0 && localPathLinks.length === 0) return null
                   const canCopyMessage = message.status !== 'pending' && Boolean(messageText.trim())
                   const usageLabel = formatUsageLabel(message.usage)
                   const statusLabel =
@@ -1472,40 +1665,111 @@ export default function DashboardChatPanel({
                           maxWidth: '82%',
                         }}
                       >
-                        <Paper
-                          radius="lg"
-                          px="md"
-                          py="sm"
-                          maw="100%"
-                          style={
-                            message.role === 'user'
-                              ? {
-                                  backgroundColor: 'var(--app-bg-bubble-user)',
-                                  color: 'var(--app-text-bubble-user)',
-                                  border: message.status === 'pending' ? '1px solid var(--mantine-color-default-border)' : undefined,
-                                }
-                              : message.status === 'error'
-                                ? {
-                                    backgroundColor: 'rgba(239,68,68,0.1)',
-                                    color: 'var(--app-text-danger)',
-                                    border: '1px solid rgba(239,68,68,0.2)',
-                                  }
-                                : {
-                                    backgroundColor: 'var(--app-bg-bubble-assistant)',
-                                    color: 'var(--app-text-bubble-assistant)',
-                                    border: message.status === 'pending' ? '1px solid var(--mantine-color-default-border)' : undefined,
-                                    opacity: message.status === 'pending' ? 0.7 : undefined,
-                                  }
-                          }
-                        >
-                          <Text
-                            size="sm"
-                            lh={1.7}
-                            style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                        {imageAttachments.length > 0 && (
+                          <Group
+                            gap="xs"
+                            wrap="wrap"
+                            justify={message.role === 'user' ? 'flex-end' : 'flex-start'}
                           >
-                            {messageText}
-                          </Text>
-                        </Paper>
+                            {imageAttachments.map((image, index) => (
+                              <button
+                                key={`${message.id}:image:${index}`}
+                                type="button"
+                                onClick={() => openImagePreview(image, message.id, index)}
+                                style={{
+                                  cursor: 'zoom-in',
+                                  padding: 0,
+                                  border: '1px solid var(--app-border)',
+                                  borderRadius: 18,
+                                  overflow: 'hidden',
+                                  background: 'var(--app-bg-panel)',
+                                  lineHeight: 0,
+                                  boxShadow: '0 10px 28px rgba(15,23,42,0.10)',
+                                }}
+                              >
+                                <img
+                                  src={image.url}
+                                  alt={`聊天图片 ${index + 1}`}
+                                  style={{
+                                    display: 'block',
+                                    width: 'auto',
+                                    maxWidth: `min(${CHAT_IMAGE_THUMBNAIL_MAX_WIDTH}px, 72vw)`,
+                                    height: 'auto',
+                                    maxHeight: CHAT_IMAGE_THUMBNAIL_HEIGHT,
+                                    objectFit: 'contain',
+                                    objectPosition: 'top left',
+                                    backgroundColor: 'rgba(15,23,42,0.04)',
+                                  }}
+                                />
+                              </button>
+                            ))}
+                          </Group>
+                        )}
+
+                        {messageText && (
+                          <Paper
+                            radius="lg"
+                            px="md"
+                            py="sm"
+                            maw="100%"
+                            style={
+                              message.role === 'user'
+                                ? {
+                                    backgroundColor: 'var(--app-bg-bubble-user)',
+                                    color: 'var(--app-text-bubble-user)',
+                                    border: message.status === 'pending' ? '1px solid var(--mantine-color-default-border)' : undefined,
+                                  }
+                                : message.status === 'error'
+                                  ? {
+                                      backgroundColor: 'rgba(239,68,68,0.1)',
+                                      color: 'var(--app-text-danger)',
+                                      border: '1px solid rgba(239,68,68,0.2)',
+                                    }
+                                  : {
+                                      backgroundColor: 'var(--app-bg-bubble-assistant)',
+                                      color: 'var(--app-text-bubble-assistant)',
+                                      border: message.status === 'pending' ? '1px solid var(--mantine-color-default-border)' : undefined,
+                                      opacity: message.status === 'pending' ? 0.7 : undefined,
+                                    }
+                            }
+                          >
+                            <Text
+                              size="sm"
+                              lh={1.7}
+                              style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                            >
+                              {messageText}
+                            </Text>
+                          </Paper>
+                        )}
+
+                        {localPathLinks.length > 0 && (
+                          <Group
+                            gap="xs"
+                            wrap="wrap"
+                            justify={message.role === 'user' ? 'flex-end' : 'flex-start'}
+                          >
+                            {localPathLinks.map((targetPath) => (
+                              <Tooltip
+                                key={`${message.id}:path:${targetPath}`}
+                                label={targetPath}
+                                withArrow
+                                multiline
+                                maw={560}
+                              >
+                                <Button
+                                  variant="light"
+                                  color="gray"
+                                  size="compact-xs"
+                                  leftSection={<IconExternalLink size={14} />}
+                                  onClick={() => void handleOpenLocalPath(targetPath)}
+                                >
+                                  打开 {describeLocalPathLabel(targetPath)}
+                                </Button>
+                              </Tooltip>
+                            ))}
+                          </Group>
+                        )}
 
                         {(metaItems.length > 0 || canCopyMessage) && (
                           <Group
@@ -1755,6 +2019,134 @@ export default function DashboardChatPanel({
             </div>
           </div>
       </div>
-    </Card>
+      </Card>
+
+      <Modal
+        opened={Boolean(imagePreview)}
+        onClose={closeImagePreview}
+        size="min(96vw, 1240px)"
+        centered
+        title={(
+          <Group justify="space-between" wrap="wrap" gap="xs">
+            <Text fw={600} size="sm">
+              截图预览
+            </Text>
+            {imagePreviewNaturalSize && (
+              <Text size="xs" c="dimmed">
+                {imagePreviewNaturalSize.width} × {imagePreviewNaturalSize.height}
+              </Text>
+            )}
+          </Group>
+        )}
+      >
+        <Stack gap="sm">
+          <Group gap="xs" wrap="wrap" justify="space-between">
+            <Group gap="xs" wrap="wrap">
+              <Button
+                size="compact-sm"
+                variant={resolvedImagePreviewFitMode === 'screen' ? 'filled' : 'light'}
+                color="gray"
+                onClick={() => handleImagePreviewFitModeChange('screen')}
+                disabled={!imagePreview}
+              >
+                适合屏幕
+              </Button>
+              <Button
+                size="compact-sm"
+                variant={resolvedImagePreviewFitMode === 'width' ? 'filled' : 'light'}
+                color="gray"
+                onClick={() => handleImagePreviewFitModeChange('width')}
+                disabled={!imagePreview}
+              >
+                适合宽度
+              </Button>
+              <Button
+                size="compact-sm"
+                variant="light"
+                color="gray"
+                onClick={handleImagePreviewReset}
+                disabled={!imagePreview}
+              >
+                重置
+              </Button>
+              <Button
+                size="compact-sm"
+                variant="light"
+                color="gray"
+                onClick={handleImagePreviewActualSize}
+                disabled={!imagePreview}
+              >
+                原始尺寸
+              </Button>
+            </Group>
+
+            <Group gap="xs" wrap="wrap">
+              <Text size="xs" c="dimmed">
+                缩放 {Math.round(imagePreviewScale * 100)}%
+              </Text>
+              <Button
+                size="compact-sm"
+                variant="light"
+                color="gray"
+                onClick={() => handleImagePreviewZoom('out')}
+                disabled={!imagePreview}
+              >
+                缩小
+              </Button>
+              <Button
+                size="compact-sm"
+                variant="light"
+                color="gray"
+                onClick={() => handleImagePreviewZoom('in')}
+                disabled={!imagePreview}
+              >
+                放大
+              </Button>
+            </Group>
+          </Group>
+
+          <Text size="xs" c="dimmed">
+            默认按浏览器可见区域截图展示；长图优先按宽度显示。支持放大到原始尺寸以上，Ctrl/⌘ + 滚轮可缩放。
+          </Text>
+
+          <div
+            onWheel={handleImagePreviewWheel}
+            style={{
+              maxHeight: CHAT_IMAGE_PREVIEW_MAX_HEIGHT,
+              overflow: 'auto',
+              border: '1px solid var(--app-border)',
+              borderRadius: 18,
+              background: 'rgba(15,23,42,0.03)',
+            }}
+          >
+            <div
+              style={{
+                minWidth: '100%',
+                display: 'flex',
+                justifyContent: 'center',
+                padding: 16,
+              }}
+            >
+              {imagePreview && (
+                <img
+                  src={imagePreview.image.url}
+                  alt={`聊天图片 ${imagePreview.index + 1}`}
+                  onLoad={handleImagePreviewLoad}
+                  style={{
+                    display: 'block',
+                    width: imagePreviewWidth ? `${imagePreviewWidth}px` : 'auto',
+                    maxWidth: 'none',
+                    height: 'auto',
+                    borderRadius: 14,
+                    boxShadow: '0 20px 60px rgba(15,23,42,0.18)',
+                    backgroundColor: 'white',
+                  }}
+                />
+              )}
+            </div>
+          </div>
+        </Stack>
+      </Modal>
+    </>
   )
 }

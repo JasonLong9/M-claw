@@ -15,6 +15,9 @@ import { tryNormalizeProcessCwd } from './runtime-working-directory'
 import { revealWindow, showOrCreateWindow } from './window-lifecycle'
 import { reloadGatewayForConfigChange } from './gateway-lifecycle-controller'
 import { sanitizeNodeOptionsForElectron } from './node-options'
+import { ensureRequiredOpenClawStateDirs, repairManagedOpenClawStateLayout } from './openclaw-state-bootstrap'
+import { resolveOpenClawPaths } from './openclaw-paths'
+import { mkdir } from 'node:fs/promises'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const OPEN_CONTACT_MODAL_CHANNEL = 'app:open-contact-modal'
@@ -72,8 +75,6 @@ function loadRuntimeAppIcon() {
 }
 
 function createWindow() {
-  process.env.QCLAW_USER_DATA_DIR = app.getPath('userData')
-  process.env.QCLAW_SAFE_WORK_DIR = path.join(process.env.QCLAW_USER_DATA_DIR, 'runtime')
   tryNormalizeProcessCwd()
 
   const workAreaSize = screen.getPrimaryDisplay().workAreaSize
@@ -139,6 +140,22 @@ function createWindow() {
   })
 
   return browserWindow
+}
+
+async function initializeManagedRuntimeEnvironment(): Promise<void> {
+  const userDataDir = app.getPath('userData')
+  process.env.QCLAW_USER_DATA_DIR = userDataDir
+  process.env.QCLAW_SAFE_WORK_DIR = path.join(userDataDir, 'runtime')
+
+  await mkdir(process.env.QCLAW_SAFE_WORK_DIR, { recursive: true }).catch(() => undefined)
+
+  const openClawPaths = resolveOpenClawPaths({
+    userDataDir,
+    userHomeDir: app.getPath('home'),
+    platform: process.platform,
+  })
+  await repairManagedOpenClawStateLayout(openClawPaths.homeDir).catch(() => undefined)
+  await ensureRequiredOpenClawStateDirs(path.join(openClawPaths.homeDir, '.openclaw')).catch(() => undefined)
 }
 
 function showMainWindow() {
@@ -265,9 +282,13 @@ function createTray() {
 }
 
 app.whenReady().then(() => {
+  return initializeManagedRuntimeEnvironment()
+    .catch(() => undefined)
+    .then(() => {
   registerIpcHandlers()
   createWindow()
   createTray()
+    })
 })
 
 app.on('window-all-closed', () => {

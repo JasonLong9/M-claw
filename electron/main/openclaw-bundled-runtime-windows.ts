@@ -5,6 +5,7 @@ import type { BundledOpenClawInstallPlan } from './openclaw-bundled-plan'
 export interface BundledOpenClawWindowsTargetLayout {
   prefixDir: string
   binaryTargets: string[]
+  nodeTarget: string
   packageRootTarget: string
 }
 
@@ -24,6 +25,7 @@ export interface BundledOpenClawWindowsExecutionPlan {
 export interface BundledOpenClawWindowsSourceLayout {
   runtimeRoot: string
   binarySources: string[]
+  nodeSource: string | null
   packageRootSource: string
   packageManifestSource: string
 }
@@ -35,6 +37,10 @@ export interface BundledOpenClawWindowsCopyPlan {
     sourcePath: string
     targetPath: string
   }>
+  nodeCopy: {
+    sourcePath: string
+    targetPath: string
+  } | null
   packageRootSource: string
   packageRootTarget: string
 }
@@ -42,6 +48,7 @@ export interface BundledOpenClawWindowsCopyPlan {
 export interface BundledOpenClawWindowsRuntimeValidationResult {
   ok: boolean
   binaryPath: string | null
+  nodePath: string
   packageManifestPath: string
   errors: string[]
 }
@@ -88,6 +95,7 @@ export function buildBundledOpenClawWindowsTargetLayout(
       path.join(prefixDir, 'openclaw.ps1'),
       path.join(prefixDir, 'openclaw'),
     ],
+    nodeTarget: path.join(prefixDir, 'node.exe'),
     packageRootTarget: path.join(prefixDir, 'node_modules', 'openclaw'),
   }
 }
@@ -112,6 +120,14 @@ export function inspectBundledOpenClawWindowsSourceLayout(
       return false
     }
   })
+  const nodeSource = path.join(runtimeRoot, 'node.exe')
+  const hasNodeSource = (() => {
+    try {
+      return exists(nodeSource)
+    } catch {
+      return false
+    }
+  })()
 
   const packageRootSource = path.join(runtimeRoot, 'node_modules', 'openclaw')
   const packageManifestSource = path.join(packageRootSource, 'package.json')
@@ -128,6 +144,7 @@ export function inspectBundledOpenClawWindowsSourceLayout(
   return {
     runtimeRoot,
     binarySources,
+    nodeSource: hasNodeSource ? nodeSource : null,
     packageRootSource,
     packageManifestSource,
   }
@@ -151,6 +168,12 @@ export function buildBundledOpenClawWindowsCopyPlan(
     runtimeRoot: sourceLayout.runtimeRoot,
     targetLayout: executionPlan.targetLayout,
     binaryCopies,
+    nodeCopy: sourceLayout.nodeSource
+      ? {
+          sourcePath: sourceLayout.nodeSource,
+          targetPath: executionPlan.targetLayout.nodeTarget,
+        }
+      : null,
     packageRootSource: sourceLayout.packageRootSource,
     packageRootTarget: executionPlan.targetLayout.packageRootTarget,
   }
@@ -161,6 +184,7 @@ export function validateBundledOpenClawWindowsCopyPlan(
   exists: (candidatePath: string) => boolean
 ): BundledOpenClawWindowsRuntimeValidationResult {
   const packageManifestPath = path.join(copyPlan.packageRootTarget, 'package.json')
+  const nodePath = copyPlan.targetLayout.nodeTarget
   const errors: string[] = []
 
   let binaryPath =
@@ -188,9 +212,20 @@ export function validateBundledOpenClawWindowsCopyPlan(
     errors.push(`failed to inspect target package manifest: ${packageManifestPath}`)
   }
 
+  if (copyPlan.nodeCopy) {
+    try {
+      if (!exists(nodePath)) {
+        errors.push(`missing target node runtime: ${nodePath}`)
+      }
+    } catch {
+      errors.push(`failed to inspect target node runtime: ${nodePath}`)
+    }
+  }
+
   return {
     ok: errors.length === 0,
     binaryPath,
+    nodePath,
     packageManifestPath,
     errors,
   }

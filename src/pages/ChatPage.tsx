@@ -8,6 +8,14 @@ import {
 } from './chat-availability-state'
 import { resolveChatSelectableModels } from './chat-model-options'
 import { createNextRequestId, shouldApplyRequestResult } from './chat-request-guards'
+import { pollWithBackoff } from '../shared/polling'
+import { UI_RUNTIME_DEFAULTS } from '../shared/runtime-policies'
+import { waitForDashboardGatewayRunning } from '../shared/dashboard-gateway-wait'
+import {
+  clearChatGatewayWarmupHint,
+  hasActiveChatGatewayWarmupHint,
+  markChatGatewayWarmupHint,
+} from '../shared/chat-gateway-warmup-hint'
 
 const INITIAL_AVAILABILITY_STATE: ChatPageAvailabilityState = {
   availabilityState: 'loading',
@@ -19,6 +27,7 @@ const INITIAL_AVAILABILITY_STATE: ChatPageAvailabilityState = {
 }
 
 const GATEWAY_START_RECOVERY_GRACE_MS = 60_000
+const CHAT_PAGE_AUTO_GATEWAY_RETRY_COOLDOWN_MS = 15_000
 
 export default function ChatPage() {
   const navigate = useNavigate()
@@ -31,6 +40,8 @@ export default function ChatPage() {
   const latestAvailabilityRequestIdRef = useRef(0)
   const availabilityInFlightRef = useRef(false)
   const gatewayStartRecoveryUntilRef = useRef(0)
+  const gatewayWarmupPromiseRef = useRef<Promise<boolean> | null>(null)
+  const autoGatewayRetryCooldownUntilRef = useRef(0)
 
   const loadAvailability = useCallback(async (): Promise<ChatPageAvailabilityState> => {
     const requestId = createNextRequestId(latestAvailabilityRequestIdRef.current)
@@ -42,15 +53,14 @@ export default function ChatPage() {
         getChatAvailability: () => window.api.getChatAvailability(),
         gatewayHealth: () => window.api.gatewayHealth(),
         readConfig: () => window.api.readConfig(),
+        getRuntimeReconcileState: () => window.api.getOpenClawRuntimeReconcileState(),
       })
       const recoveredState = recoverChatAvailabilityAfterGatewayStart({
         state: nextState,
         gatewayConfirmedRunning: Date.now() < gatewayStartRecoveryUntilRef.current,
       })
 
-      // Auto-extend the grace window while recovery keeps succeeding.
-      // On legacy runtimes where gatewayHealth() always returns false,
-      // this prevents the UI from flickering to 'offline' every 60 seconds.
+      // Keep a short recovery window after explicit starts so legacy runtimes can settle.
       if (recoveredState.canSend && recoveredState !== nextState) {
         gatewayStartRecoveryUntilRef.current = Date.now() + GATEWAY_START_RECOVERY_GRACE_MS
       }
@@ -70,16 +80,107 @@ export default function ChatPage() {
     }
   }, [])
 
-  useEffect(() => {
-    void loadAvailability()
-    const intervalId = window.setInterval(() => {
-      if (availabilityInFlightRef.current) return
-      void loadAvailability()
-    }, 10000)
-    return () => {
-      window.clearInterval(intervalId)
-    }
+  const waitForChatSendReady = useCallback(async (): Promise<ChatPageAvailabilityState> => {
+    const readiness = await pollWithBackoff({
+      policy: UI_RUNTIME_DEFAULTS.gatewayReadiness.poll,
+      execute: async () => {
+        const nextState = await loadAvailability()
+        return recoverChatAvailabilityAfterGatewayStart({
+          state: nextState,
+          gatewayConfirmedRunning: Date.now() < gatewayStartRecoveryUntilRef.current,
+        })
+      },
+      isSuccess: (state) => state.canSend,
+    })
+
+    return readiness.value || availabilityStateRef.current
   }, [loadAvailability])
+
+  const ensureGatewayReady = useCallback(
+    async (options: { source: 'auto' | 'manual' } = { source: 'manual' }): Promise<boolean> => {
+      if (gatewayWarmupPromiseRef.current) {
+        return gatewayWarmupPromiseRef.current
+      }
+
+      const task = (async () => {
+        const currentState = availabilityStateRef.current
+        const hasPotentialChat =
+          currentState.gatewayRunning ||
+          currentState.connectedModels.length > 0 ||
+          Boolean(String(currentState.defaultModel || '').trim()) ||
+          hasActiveChatGatewayWarmupHint()
+
+        if (!hasPotentialChat) {
+          setGatewayActionMessage('当前还没有可直接对话的模型，请先回到模型页完成配置。')
+          return false
+        }
+
+        setGatewayActionPending(true)
+        setGatewayActionMessage(
+          options.source === 'auto'
+            ? '正在等待网关准备完成，稍后即可直接对话...'
+            : '正在确认网关状态，请稍候...'
+        )
+
+        try {
+          const ensureResult = await window.api.ensureGatewayRunning()
+          markChatGatewayWarmupHint()
+          gatewayStartRecoveryUntilRef.current = Date.now() + GATEWAY_START_RECOVERY_GRACE_MS
+
+          const gatewayLikelyRunning = Boolean(ensureResult?.running) || Boolean(ensureResult?.ok)
+          if (!gatewayLikelyRunning && !currentState.gatewayRunning) {
+            setGatewayActionMessage(
+              String(
+                ensureResult?.summary ||
+                  ensureResult?.stderr ||
+                  ensureResult?.stdout ||
+                  '网关启动失败，请稍后重试。'
+              ).trim()
+            )
+          }
+
+          const readyResult = await waitForDashboardGatewayRunning({
+            gatewayHealth: () => window.api.gatewayHealth(),
+            getOpenClawRuntimeReconcileState: () => window.api.getOpenClawRuntimeReconcileState(),
+          })
+          if (readyResult.ok) {
+            gatewayStartRecoveryUntilRef.current = Date.now() + GATEWAY_START_RECOVERY_GRACE_MS
+          }
+
+          const recoveredState = await waitForChatSendReady()
+          if (recoveredState.canSend) {
+            if (recoveredState.availabilityState === 'ready') {
+              clearChatGatewayWarmupHint()
+              setGatewayActionMessage('')
+            } else {
+              setGatewayActionMessage('网关已接通，当前正在走兼容恢复链路，可以直接开始对话。')
+            }
+            return true
+          }
+
+          setGatewayActionMessage(
+            String(
+              recoveredState.availabilityMessage ||
+                (readyResult.ok ? '网关已启动，但聊天状态仍未恢复，请稍候再试。' : readyResult.message) ||
+                '网关已启动，但聊天状态仍未恢复，请稍候再试。'
+            ).trim()
+          )
+          return false
+        } catch (error) {
+          console.error('Failed to ensure gateway ready', error)
+          setGatewayActionMessage(error instanceof Error ? error.message : '启动网关失败，请稍后重试。')
+          return false
+        } finally {
+          setGatewayActionPending(false)
+          gatewayWarmupPromiseRef.current = null
+        }
+      })()
+
+      gatewayWarmupPromiseRef.current = task
+      return task
+    },
+    [waitForChatSendReady]
+  )
 
   const {
     availabilityState,
@@ -94,73 +195,48 @@ export default function ChatPage() {
     defaultModel,
   })
 
-  const handleEnsureGateway = async (): Promise<boolean> => {
-    setGatewayActionPending(true)
-    setGatewayActionMessage('')
-    try {
-      if (!gatewayRunning) {
-        const ensureResult = await window.api.ensureGatewayRunning()
-
-        // Always set recovery grace window after an explicit user "启动网关" action.
-        // On legacy Windows runtimes (e.g. OpenClaw 2026.3.24), the health probe may
-        // give false negatives (running=false) even though the gateway process is alive.
-        // The recovery function has its own guards (hasSavedModel, message matching)
-        // so setting the grace window here is safe — it only relaxes the time-bound
-        // within which the next availability poll may apply the recovery path.
-        gatewayStartRecoveryUntilRef.current = Date.now() + GATEWAY_START_RECOVERY_GRACE_MS
-
-        const gatewayLikelyRunning = Boolean(ensureResult?.running) || Boolean(ensureResult?.ok)
-
-        if (!gatewayLikelyRunning) {
-          // Gateway definitely failed to start — show the error but still allow
-          // recovery from the grace window in case a subsequent health probe succeeds.
-          setGatewayActionMessage(
-            String(
-              ensureResult?.summary ||
-              ensureResult?.stderr ||
-              ensureResult?.stdout ||
-              '启动网关失败，请稍后重试。'
-            ).trim()
-          )
-        } else {
-          setGatewayActionMessage('网关已启动，正在刷新对话状态...')
-        }
-
-        const nextState = await loadAvailability()
-        const recoveredState = recoverChatAvailabilityAfterGatewayStart({
-          state: nextState,
-          gatewayConfirmedRunning: gatewayLikelyRunning || Date.now() < gatewayStartRecoveryUntilRef.current,
-        })
-        if (recoveredState !== nextState) {
-          availabilityStateRef.current = recoveredState
-          setChatAvailability(recoveredState)
-        }
-        if (!recoveredState.canSend) {
-          setGatewayActionMessage(
-            String(recoveredState.availabilityMessage || '网关已启动，但聊天状态仍未恢复，请稍候再试。').trim()
-          )
-          return false
-        }
-        setGatewayActionMessage('')
-        return true
-      }
-      const nextState = await loadAvailability()
-      if (!nextState.canSend) {
-        setGatewayActionMessage(
-          String(nextState.availabilityMessage || '网关状态已刷新，但当前仍不可发送消息。').trim()
-        )
-      } else {
-        setGatewayActionMessage('')
-      }
-      return nextState.canSend
-    } catch (e) {
-      console.error('Failed to ensure gateway ready', e)
-      setGatewayActionMessage(e instanceof Error ? e.message : '启动网关失败，请稍后重试。')
-      return false
-    } finally {
-      setGatewayActionPending(false)
+  useEffect(() => {
+    void loadAvailability()
+    const intervalId = window.setInterval(() => {
+      if (availabilityInFlightRef.current) return
+      void loadAvailability()
+    }, 10000)
+    return () => {
+      window.clearInterval(intervalId)
     }
-  }
+  }, [loadAvailability])
+
+  useEffect(() => {
+    const hasPotentialChat =
+      gatewayRunning ||
+      connectedModels.length > 0 ||
+      Boolean(String(defaultModel || '').trim()) ||
+      hasActiveChatGatewayWarmupHint()
+    const shouldAutoWarmup =
+      hasPotentialChat &&
+      availabilityState !== 'loading' &&
+      !canSend &&
+      !gatewayActionPending &&
+      (gatewayRunning || hasActiveChatGatewayWarmupHint())
+
+    if (!shouldAutoWarmup) return
+    if (Date.now() < autoGatewayRetryCooldownUntilRef.current) return
+
+    autoGatewayRetryCooldownUntilRef.current = Date.now() + CHAT_PAGE_AUTO_GATEWAY_RETRY_COOLDOWN_MS
+    void ensureGatewayReady({ source: 'auto' })
+  }, [
+    availabilityState,
+    canSend,
+    connectedModels.length,
+    defaultModel,
+    ensureGatewayReady,
+    gatewayActionPending,
+    gatewayRunning,
+  ])
+
+  const handleEnsureGateway = useCallback(async (): Promise<boolean> => {
+    return ensureGatewayReady({ source: 'manual' })
+  }, [ensureGatewayReady])
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">

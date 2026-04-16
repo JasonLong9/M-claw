@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { normalizeAuthChoice, resolveOpenClawCommand } from '../openclaw-spawn'
 
+const fs = process.getBuiltinModule('node:fs') as typeof import('node:fs')
+const os = process.getBuiltinModule('node:os') as typeof import('node:os')
+const path = process.getBuiltinModule('node:path') as typeof import('node:path')
+
 describe('normalizeAuthChoice', () => {
   it('maps deprecated codex-cli to openai-codex', () => {
     expect(normalizeAuthChoice('codex-cli')).toBe('openai-codex')
@@ -90,6 +94,72 @@ describe('resolveOpenClawCommand', () => {
       args: ['models', 'auth', 'login', '--provider', 'openai', '--method', 'openai-codex'],
       shell: true,
     })
+  })
+
+  it('bypasses openclaw.cmd and invokes bundled node directly on windows', () => {
+    const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mclaw-openclaw-runtime-'))
+    try {
+      fs.mkdirSync(path.join(runtimeRoot, 'node_modules', 'openclaw'), { recursive: true })
+      fs.writeFileSync(path.join(runtimeRoot, 'openclaw.cmd'), '@echo off\r\n')
+      fs.writeFileSync(path.join(runtimeRoot, 'node.exe'), '')
+      fs.writeFileSync(path.join(runtimeRoot, 'node_modules', 'openclaw', 'openclaw.mjs'), 'console.log("ok")\n')
+
+      const args = ['gateway', 'call', 'sessions.get', '--params', '{"sessionId":"abc"}']
+      const resolved = resolveOpenClawCommand(args, {
+        platform: 'win32',
+        commandPath: path.join(runtimeRoot, 'openclaw.cmd'),
+      })
+
+      expect(resolved.command).toBe(path.join(runtimeRoot, 'node.exe'))
+      expect(resolved.args).toEqual([path.join(runtimeRoot, 'node_modules', 'openclaw', 'openclaw.mjs'), ...args])
+      expect(resolved.shell).toBe(false)
+    } finally {
+      fs.rmSync(runtimeRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('resolves bin/openclaw.cmd through the bundled runtime root on windows', () => {
+    const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mclaw-openclaw-runtime-bin-'))
+    try {
+      fs.mkdirSync(path.join(runtimeRoot, 'bin'), { recursive: true })
+      fs.mkdirSync(path.join(runtimeRoot, 'node_modules', 'openclaw'), { recursive: true })
+      fs.writeFileSync(path.join(runtimeRoot, 'bin', 'openclaw.cmd'), '@echo off\r\n')
+      fs.writeFileSync(path.join(runtimeRoot, 'node.exe'), '')
+      fs.writeFileSync(path.join(runtimeRoot, 'node_modules', 'openclaw', 'openclaw.mjs'), 'console.log("ok")\n')
+
+      const args = ['gateway', 'call', 'chat.history', '--params', '{"sessionId":"abc"}']
+      const resolved = resolveOpenClawCommand(args, {
+        platform: 'win32',
+        commandPath: path.join(runtimeRoot, 'bin', 'openclaw.cmd'),
+      })
+
+      expect(resolved.command).toBe(path.join(runtimeRoot, 'node.exe'))
+      expect(resolved.args).toEqual([path.join(runtimeRoot, 'node_modules', 'openclaw', 'openclaw.mjs'), ...args])
+      expect(resolved.shell).toBe(false)
+    } finally {
+      fs.rmSync(runtimeRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the legacy cmd execution path when bundled node files are not present', () => {
+    const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mclaw-openclaw-runtime-fallback-'))
+    try {
+      fs.writeFileSync(path.join(runtimeRoot, 'openclaw.cmd'), '@echo off\r\n')
+
+      const args = ['gateway', 'call', 'sessions.get', '--params', '{"sessionId":"abc"}']
+      const resolved = resolveOpenClawCommand(args, {
+        platform: 'win32',
+        commandPath: path.join(runtimeRoot, 'openclaw.cmd'),
+      })
+
+      expect(resolved).toEqual({
+        command: path.join(runtimeRoot, 'openclaw.cmd'),
+        args,
+        shell: true,
+      })
+    } finally {
+      fs.rmSync(runtimeRoot, { recursive: true, force: true })
+    }
   })
 
   it('falls back to direct openclaw execution when script is unavailable on POSIX', () => {

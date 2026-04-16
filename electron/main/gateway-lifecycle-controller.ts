@@ -1,4 +1,4 @@
-import { pollWithBackoff } from '../../src/shared/polling'
+﻿import { pollWithBackoff } from '../../src/shared/polling'
 import { UI_RUNTIME_DEFAULTS } from '../../src/shared/runtime-policies'
 import { classifyGatewayRuntimeState } from '../../src/shared/gateway-runtime-diagnostics'
 import type { CliResult, GatewayHealthCheckResult } from './cli'
@@ -112,15 +112,23 @@ async function ensureGatewayRunningDirect(
 }
 
 async function waitForGatewayHealthyAfterReload(
-  restartResult: CliResult
+  commandResult: CliResult,
+  actionLabel: 'start' | 'restart'
 ): Promise<GatewayReloadResult> {
+  const pendingSummary =
+    actionLabel === 'start' ? 'Gateway 启动后尚未恢复可用' : 'Gateway 重载后尚未恢复可用'
+  const successSummary =
+    actionLabel === 'start' ? 'Gateway 已启动并确认可用' : 'Gateway 已重载并确认可用'
+  const failedSummary =
+    actionLabel === 'start' ? 'Gateway 启动后健康检查未通过' : 'Gateway 重载后健康检查未通过'
+
   let lastHealth: GatewayHealthCheckResult = {
     running: false,
     raw: '',
     stderr: '',
     code: null,
     stateCode: 'gateway_not_running',
-    summary: 'Gateway 重载后尚未恢复可用',
+    summary: pendingSummary,
   }
 
   const readiness = await pollWithBackoff({
@@ -132,7 +140,7 @@ async function waitForGatewayHealthyAfterReload(
         stderr: '',
         code: null,
         stateCode: 'gateway_not_running',
-        summary: 'Gateway 重载后尚未恢复可用',
+        summary: pendingSummary,
       }))
       return lastHealth
     },
@@ -141,14 +149,14 @@ async function waitForGatewayHealthyAfterReload(
 
   if (readiness.ok && readiness.value?.running) {
     return {
-      ...restartResult,
+      ...commandResult,
       ok: true,
       code: 0,
       running: true,
       stateCode: 'healthy',
-      summary: readiness.value.summary || 'Gateway 已重载并确认可用',
-      stdout: readiness.value.raw || restartResult.stdout,
-      stderr: readiness.value.stderr || restartResult.stderr,
+      summary: readiness.value.summary || successSummary,
+      stdout: readiness.value.raw || commandResult.stdout,
+      stderr: readiness.value.stderr || commandResult.stderr,
     }
   }
 
@@ -156,8 +164,8 @@ async function waitForGatewayHealthyAfterReload(
   const classification = classifyGatewayRuntimeState({
     ok: false,
     running: false,
-    stdout: failedHealth.raw || restartResult.stdout,
-    stderr: failedHealth.stderr || restartResult.stderr || 'Gateway 重载后健康检查未通过',
+    stdout: failedHealth.raw || commandResult.stdout,
+    stderr: failedHealth.stderr || commandResult.stderr || failedSummary,
     diagnostics: {
       lastHealth: failedHealth,
     },
@@ -168,12 +176,24 @@ async function waitForGatewayHealthyAfterReload(
   return {
     ok: false,
     code: failedHealth.code ?? 1,
-    stdout: failedHealth.raw || restartResult.stdout,
-    stderr: failedHealth.stderr || restartResult.stderr || classification.summary,
+    stdout: failedHealth.raw || commandResult.stdout,
+    stderr: failedHealth.stderr || commandResult.stderr || classification.summary,
     running: false,
     stateCode: classification.stateCode,
     summary: classification.summary,
   }
+}
+
+async function executeLifecycleCommandAndWaitForHealthy(
+  actionLabel: 'start' | 'restart',
+  command: () => Promise<CliResult>
+): Promise<GatewayReloadResult> {
+  const commandResult = await command()
+  if (!commandResult.ok) {
+    return commandResult
+  }
+
+  return waitForGatewayHealthyAfterReload(commandResult, actionLabel)
 }
 
 export function getGatewayLifecycleState(): GatewayLifecycleState {
@@ -201,12 +221,16 @@ export async function ensureGatewayReady(
   )
 }
 
-export async function startGatewayLifecycle(reason = 'start'): Promise<CliResult> {
-  return runSharedLifecycleMutation('start', 'start', reason, () => gatewayStart())
+export async function startGatewayLifecycle(reason = 'start'): Promise<GatewayReloadResult> {
+  return runSharedLifecycleMutation('start', 'start', reason, () =>
+    executeLifecycleCommandAndWaitForHealthy('start', () => gatewayStart())
+  )
 }
 
-export async function restartGatewayLifecycle(reason = 'restart'): Promise<CliResult> {
-  return runSharedLifecycleMutation('restart', 'restart', reason, () => gatewayRestart())
+export async function restartGatewayLifecycle(reason = 'restart'): Promise<GatewayReloadResult> {
+  return runSharedLifecycleMutation('restart', 'restart', reason, () =>
+    executeLifecycleCommandAndWaitForHealthy('restart', () => gatewayRestart())
+  )
 }
 
 export async function reloadGatewayForConfigChange(
@@ -227,10 +251,11 @@ export async function reloadGatewayForConfigChange(
       return restartResult
     }
 
-    return waitForGatewayHealthyAfterReload(restartResult)
+    return waitForGatewayHealthyAfterReload(restartResult, 'restart')
   })
 }
 
 export async function stopGatewayIfOwned(reason = 'stop'): Promise<CliResult> {
   return runSharedLifecycleMutation('stop', 'stop', reason, () => gatewayStop())
 }
+

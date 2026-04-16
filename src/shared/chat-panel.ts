@@ -56,6 +56,11 @@ export interface ChatUsage {
   reasoningTokens?: number
 }
 
+export interface ChatImageAttachment {
+  url: string
+  mimeType?: string
+}
+
 export interface DashboardChatAvailability {
   state: DashboardChatAvailabilityState
   ready: boolean
@@ -114,6 +119,7 @@ export interface ChatMessage {
   id: string
   role: ChatMessageRole
   text: string
+  images?: ChatImageAttachment[]
   createdAt: number
   status?: ChatMessageStatus
   model?: string

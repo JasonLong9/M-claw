@@ -356,6 +356,18 @@ export async function resolveOpenClawBinaryPath(
   const resolveCommandPath =
     options.commandPathResolver ||
     ((commandName: string) => runCommandPathLookup(commandName, runtime))
+  const bundledRuntimeBinaryPath = inspectBundledOpenClawDeliveryStatus({
+    cwd: process.cwd(),
+    resourcesPath: process.resourcesPath,
+    env: runtime.env,
+    platform: runtime.platform,
+  }).runtimeBinaryPath
+
+  // Packaged Qclaw should keep using its own bundled OpenClaw runtime even when
+  // a separate global `openclaw` command is also installed on PATH.
+  if (bundledRuntimeBinaryPath) {
+    return bundledRuntimeBinaryPath
+  }
 
   try {
     const binaryPath = await resolveCommandPath('openclaw')
@@ -370,12 +382,6 @@ export async function resolveOpenClawBinaryPath(
       (await resolveNpmGlobalPrefix(runtime))
     const fallbackCandidate = findKnownCommandCandidate(runtime, npmPrefix, options.fileExists)
     if (fallbackCandidate) return fallbackCandidate
-    const bundledRuntimeBinaryPath = inspectBundledOpenClawDeliveryStatus({
-      cwd: process.cwd(),
-      resourcesPath: process.resourcesPath,
-      env: runtime.env,
-      platform: runtime.platform,
-    }).runtimeBinaryPath
     if (bundledRuntimeBinaryPath) return bundledRuntimeBinaryPath
     throw toActionableCommandLookupError('openclaw', error)
   }

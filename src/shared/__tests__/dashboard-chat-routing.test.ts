@@ -32,15 +32,17 @@ function createSession(overrides: Partial<ChatSessionSummary> & Pick<ChatSession
 }
 
 describe('dashboard chat routing', () => {
-  it('prefers the most recently updated session by default', () => {
+  it('prefers a local direct session by default over a newer external history session', () => {
     const selected = pickDefaultActiveSession({
       sessions: [
         createSession({
           sessionId: 'external-newer',
+          sessionKey: 'agent:main:history-direct-session',
           updatedAt: 200,
           kind: 'direct',
           hasLocalTranscript: false,
           localOnly: false,
+          authorityKind: 'upstream-direct',
         }),
         createSession({
           sessionId: 'local-older',
@@ -48,19 +50,86 @@ describe('dashboard chat routing', () => {
           kind: 'direct',
           hasLocalTranscript: true,
           localOnly: false,
+          authorityKind: 'mixed',
+          cachePresence: 'local-transcript',
         }),
       ],
     })
 
-    expect(selected).toBe('external-newer')
+    expect(selected).toBe('local-older')
   })
 
-  it('returns the newest available session when no local direct session exists', () => {
+  it('keeps the dashboard composer in create mode when only external direct history sessions exist', () => {
     const selected = pickDefaultActiveSession({
       sessions: [
         createSession({
           sessionId: 'external-only',
+          sessionKey: 'agent:main:history-direct-session',
           updatedAt: 200,
+          kind: 'direct',
+          hasLocalTranscript: false,
+          localOnly: false,
+          authorityKind: 'upstream-direct',
+        }),
+      ],
+    })
+
+    expect(selected).toBe('')
+    expect(resolveDirectChatSessionAction({ activeSessionId: selected })).toBe('create')
+  })
+
+  it('auto-selects an upstream-confirmed direct shadow created by Qclaw', () => {
+    const selected = pickDefaultActiveSession({
+      sessions: [
+        createSession({
+          sessionId: 'confirmed-shadow',
+          sessionKey: 'agent:main:confirmed-shadow',
+          updatedAt: 200,
+          kind: 'direct',
+          hasLocalTranscript: false,
+          localOnly: false,
+          authorityKind: 'upstream-direct',
+          cachePresence: 'local-shell',
+          canContinue: true,
+        }),
+      ],
+    })
+
+    expect(selected).toBe('confirmed-shadow')
+    expect(resolveDirectChatSessionAction({ activeSessionId: selected })).toBe('reuse')
+  })
+
+  it('does not auto-select the upstream OpenClaw main webchat session on dashboard entry', () => {
+    const selected = pickDefaultActiveSession({
+      sessions: [
+        createSession({
+          sessionId: 'webchat-main',
+          sessionKey: 'agent:main:main',
+          updatedAt: 300,
+          kind: 'direct',
+          hasLocalTranscript: false,
+          localOnly: false,
+        }),
+        createSession({
+          sessionId: 'local-dashboard',
+          updatedAt: 200,
+          kind: 'direct',
+          hasLocalTranscript: true,
+          localOnly: true,
+        }),
+      ],
+    })
+
+    expect(selected).toBe('local-dashboard')
+  })
+
+  it('keeps the dashboard composer in create mode when the only discovered session is OpenClaw main webchat', () => {
+    const selected = pickDefaultActiveSession({
+      sessions: [
+        createSession({
+          sessionId: 'webchat-main',
+          sessionKey: 'agent:main:main',
+          updatedAt: 300,
           kind: 'direct',
           hasLocalTranscript: false,
           localOnly: false,
@@ -68,8 +137,8 @@ describe('dashboard chat routing', () => {
       ],
     })
 
-    expect(selected).toBe('external-only')
-    expect(resolveDirectChatSessionAction({ activeSessionId: selected })).toBe('reuse')
+    expect(selected).toBe('')
+    expect(resolveDirectChatSessionAction({ activeSessionId: selected })).toBe('create')
   })
 
   it('keeps a preferred session when it still exists', () => {

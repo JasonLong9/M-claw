@@ -6,7 +6,6 @@ import { resolveOpenClawPaths } from './openclaw-paths'
 import { MAIN_RUNTIME_POLICY } from './runtime-policy'
 import { MODEL_CATALOG_LIMITS } from '../../src/shared/runtime-policies'
 
-const DEFAULT_CACHE_PATH = resolveOpenClawPaths().modelCatalogCacheFile
 const DEFAULT_CATALOG_TIMEOUT_MS = MAIN_RUNTIME_POLICY.modelCatalog.fetchTimeoutMs
 const DEFAULT_TTL_MS = MAIN_RUNTIME_POLICY.modelCatalog.cacheTtlMs
 const DEFAULT_PAGE_SIZE = MODEL_CATALOG_LIMITS.backendDefaultPageSize
@@ -172,7 +171,7 @@ async function resolveCapabilities(
 async function defaultReadCache(): Promise<ModelCatalogCache | null> {
   try {
     const { readFile } = await import('node:fs/promises')
-    const raw = await readFile(DEFAULT_CACHE_PATH, 'utf-8')
+    const raw = await readFile(resolveDefaultCachePath(), 'utf-8')
     const parsed = JSON.parse(raw) as ModelCatalogCache
     if (!parsed || !Array.isArray(parsed.models) || typeof parsed.fetchedAt !== 'string') return null
     return {
@@ -187,7 +186,7 @@ async function defaultReadCache(): Promise<ModelCatalogCache | null> {
 }
 
 async function defaultWriteCache(cache: ModelCatalogCache): Promise<void> {
-  await atomicWriteJson(DEFAULT_CACHE_PATH, cache, {
+  await atomicWriteJson(resolveDefaultCachePath(), cache, {
     description: '模型目录缓存',
   })
 }
@@ -292,4 +291,7 @@ export async function getAllModelCatalogItems(options: GetModelCatalogOptions = 
     source: resolved.source,
     stale: resolved.stale,
   }
+}
+function resolveDefaultCachePath(): string {
+  return resolveOpenClawPaths().modelCatalogCacheFile
 }

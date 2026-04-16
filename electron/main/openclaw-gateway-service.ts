@@ -44,6 +44,7 @@ import {
   findAvailableLoopbackPort,
   probeGatewayPortOwner,
   probeGatewayPortReachable,
+  probeGatewaySocketReady,
 } from './openclaw-gateway-probes'
 import { cleanupIsolatedNpmCacheEnv, createIsolatedNpmCacheEnv } from './npm-cache-env'
 import { reconcileTrustedPluginAllowlist, sanitizeManagedPluginConfig } from './openclaw-plugin-config'
@@ -60,6 +61,7 @@ import {
   recordObservedOpenClawVersion,
   resolveGatewayBlockingReasonFromState,
 } from './openclaw-runtime-reconcile'
+import { detectOpenClawVersionBand } from './openclaw-upgrade-compatibility'
 
 export type GatewayBootstrapPhase =
   | 'runtime-check'
@@ -373,10 +375,22 @@ function shouldAcceptLegacyGatewayStartAsDegradedReady(params: {
   startResult: CliResult
   classification: ReturnType<typeof classifyGatewayRuntimeState>
   doctorSummary?: string | null
+  openClawVersion?: string | null
+  socketReady?: boolean
 }): boolean {
   if (!params.startResult.ok) return false
-  if (params.classification.stateCode !== 'unknown_runtime_failure') return false
   if (!params.classification.safeToRetry) return false
+  if (!params.socketReady) return false
+  const openClawBand = detectOpenClawVersionBand(params.openClawVersion)
+  const isLegacyPinnedBand = openClawBand === 'openclaw_2026_3_23_to_2026_3_24'
+  const isRetryableLegacyHandshake =
+    params.classification.stateCode === 'websocket_1006' && isLegacyPinnedBand
+  if (
+    params.classification.stateCode !== 'unknown_runtime_failure'
+    && !isRetryableLegacyHandshake
+  ) {
+    return false
+  }
 
   const combined = joinNonEmpty([
     params.startResult.stderr,
@@ -386,14 +400,14 @@ function shouldAcceptLegacyGatewayStartAsDegradedReady(params: {
     params.classification.reasonDetail?.message,
   ]).toLowerCase()
 
-  return !(
-    /plugin|manifest|allowlist|failed to load plugin/.test(combined) ||
-    /config invalid|unrecognized key|unknown channel id|doctor --fix/.test(combined) ||
-    /token mismatch|websocket|1006/.test(combined) ||
-    /api[_ -]?key|credential|auth|unauthorized|forbidden|login/.test(combined) ||
-    /eacces|eperm|permission denied|operation not permitted/.test(combined) ||
-    /network|dns|proxy|certificate|tls|ssl|fetch failed/.test(combined)
-  )
+  if (/plugin|manifest|allowlist|failed to load plugin/.test(combined)) return false
+  if (/config invalid|unrecognized key|unknown channel id|doctor --fix/.test(combined)) return false
+  if (/token mismatch/.test(combined)) return false
+  if (!isRetryableLegacyHandshake && /websocket|1006/.test(combined)) return false
+  if (/api[_ -]?key|credential|auth|unauthorized|forbidden|login/.test(combined)) return false
+  if (/eacces|eperm|permission denied|operation not permitted/.test(combined)) return false
+  if (/network|dns|proxy|certificate|tls|ssl|fetch failed/.test(combined)) return false
+  return true
 }
 
 function buildGatewayDiagnosticsWithControlUi(
@@ -958,6 +972,10 @@ async function waitForGatewayReady(
       ) {
         const reachable = await probeGatewayPortReachable(Number(effectivePort)).catch(() => false)
         if (reachable) {
+          const socketReady = await probeGatewaySocketReady().catch(() => false)
+          if (!socketReady) {
+            return lastHealth
+          }
           lastHealth = {
             running: true,
             raw: lastHealth.raw,
@@ -965,7 +983,7 @@ async function waitForGatewayReady(
             code: lastHealth.code,
             stateCode: 'healthy',
             summary:
-              'Gateway port is reachable and the compatibility fallback has confirmed the local runtime is listening.',
+              'Gateway socket probe has confirmed the local runtime is listening and can answer RPC calls.',
           }
         }
       }
@@ -2355,10 +2373,13 @@ async function ensureGatewayRunningImpl(
     }
     appendGatewayEvidence(context, finalClassification.evidence)
 
+    const compatSocketReady = await probeGatewaySocketReady().catch(() => false)
     if (shouldAcceptLegacyGatewayStartAsDegradedReady({
       startResult,
       classification: finalClassification,
       doctorSummary: doctorFlow.summary,
+      openClawVersion,
+      socketReady: compatSocketReady,
     })) {
       appendGatewayEvidence(context, {
         source: 'health',

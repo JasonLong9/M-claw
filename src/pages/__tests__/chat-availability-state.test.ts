@@ -4,6 +4,7 @@ import {
   resolveChatPageAvailabilityState,
 } from '../chat-availability-state'
 import type { DashboardChatAvailability } from '../../shared/chat-panel'
+import type { OpenClawRuntimeReconcileStore } from '../../shared/gateway-runtime-reconcile-state'
 
 function buildAvailability(overrides: Partial<DashboardChatAvailability> = {}): DashboardChatAvailability {
   return {
@@ -16,6 +17,42 @@ function buildAvailability(overrides: Partial<DashboardChatAvailability> = {}): 
     defaultModel: undefined,
     agentId: 'main',
     message: '当前还没有可直接对话的模型',
+    ...overrides,
+  }
+}
+
+function buildRuntimeReconcileStore(
+  overrides: Partial<OpenClawRuntimeReconcileStore> = {}
+): OpenClawRuntimeReconcileStore {
+  return {
+    version: 1,
+    lastSeenOpenClawVersion: 'OpenClaw 2026.3.24',
+    lastSeenVersionBand: 'openclaw_2026_3_23_to_2026_3_24',
+    lastSeenAt: '2026-04-10T00:00:00.000Z',
+    lastCompatibility: {
+      status: 'steady_state',
+      currentVersion: '2026.3.24',
+      currentBand: 'openclaw_2026_3_23_to_2026_3_24',
+      previousVersion: '2026.3.24',
+      previousBand: 'openclaw_2026_3_23_to_2026_3_24',
+      conservativeMode: false,
+      warningCodes: [],
+      summary: 'compat ok',
+      assessedAt: '2026-04-10T00:00:00.000Z',
+    },
+    runtime: {
+      stateCode: 'degraded',
+      desiredRevision: 1,
+      appliedRevision: 1,
+      pendingReasons: [],
+      lastMutationSource: 'gateway-bootstrap',
+      blockingReason: 'control_ui_handshake_failed',
+      blockingDetail: null,
+      safeToRetry: true,
+      lastReconcileAt: '2026-04-10T00:00:00.000Z',
+      lastReconcileSummary: 'Gateway 已按兼容模式放行',
+      lastActions: [],
+    },
     ...overrides,
   }
 }
@@ -78,6 +115,83 @@ describe('resolveChatPageAvailabilityState', () => {
     expect(result.availabilityMessage).toBe('')
     expect(gatewayHealth).not.toHaveBeenCalled()
     expect(readConfig).not.toHaveBeenCalled()
+  })
+
+  it('hydrates a saved default model from config when legacy availability omits model fields', async () => {
+    const getChatAvailability = vi.fn(async () =>
+      buildAvailability({
+        state: 'offline',
+        ready: false,
+        canSend: false,
+        reason: 'gateway-offline',
+        gatewayRunning: false,
+        connectedModels: [],
+        defaultModel: '',
+        message: '模型已配置，但网关当前未运行',
+      })
+    )
+    const gatewayHealth = vi.fn(async () => ({ running: false }))
+    const readConfig = vi.fn(async () => ({
+      agents: {
+        defaults: {
+          model: {
+            primary: 'custom-openai/deepseek-chat',
+          },
+        },
+      },
+    }))
+
+    const result = await resolveChatPageAvailabilityState({
+      getChatAvailability,
+      gatewayHealth,
+      readConfig,
+    })
+
+    expect(result.availabilityState).toBe('offline')
+    expect(result.canSend).toBe(false)
+    expect(result.connectedModels).toEqual([])
+    expect(result.defaultModel).toBe('custom-openai/deepseek-chat')
+    expect(readConfig).toHaveBeenCalledTimes(1)
+    expect(gatewayHealth).not.toHaveBeenCalled()
+  })
+
+  it('treats runtime reconcile compatibility success as a durable gateway-running signal', async () => {
+    const getChatAvailability = vi.fn(async () =>
+      buildAvailability({
+        state: 'offline',
+        ready: false,
+        canSend: false,
+        reason: 'gateway-offline',
+        gatewayRunning: false,
+        connectedModels: [],
+        defaultModel: '',
+        message: '模型已配置，但网关当前未运行',
+      })
+    )
+    const gatewayHealth = vi.fn(async () => ({ running: false }))
+    const readConfig = vi.fn(async () => ({
+      agents: {
+        defaults: {
+          model: {
+            primary: 'custom-openai/deepseek-chat',
+          },
+        },
+      },
+    }))
+    const getRuntimeReconcileState = vi.fn(async () => buildRuntimeReconcileStore())
+
+    const result = await resolveChatPageAvailabilityState({
+      getChatAvailability,
+      gatewayHealth,
+      readConfig,
+      getRuntimeReconcileState,
+    })
+
+    expect(result.availabilityState).toBe('degraded')
+    expect(result.canSend).toBe(true)
+    expect(result.gatewayRunning).toBe(true)
+    expect(result.defaultModel).toBe('custom-openai/deepseek-chat')
+    expect(getRuntimeReconcileState).toHaveBeenCalledTimes(1)
   })
 
   it('falls back to gateway/config snapshot when chat availability API fails', async () => {
@@ -168,6 +282,26 @@ describe('resolveChatPageAvailabilityState', () => {
     expect(result.canSend).toBe(true)
     expect(result.gatewayRunning).toBe(true)
     expect(result.availabilityMessage).toContain('已先放行直接发送消息验证实际对话链路')
+  })
+
+  it('normalizes stale handshake errors once the gateway is already usable', () => {
+    const result = recoverChatAvailabilityAfterGatewayStart({
+      gatewayConfirmedRunning: true,
+      state: {
+        availabilityState: 'degraded',
+        canSend: true,
+        gatewayRunning: false,
+        connectedModels: ['custom-openai/deepseek-chat'],
+        defaultModel: 'custom-openai/deepseek-chat',
+        availabilityMessage: '控制界面与 Gateway 握手失败',
+      },
+    })
+
+    expect(result.availabilityState).toBe('degraded')
+    expect(result.canSend).toBe(true)
+    expect(result.gatewayRunning).toBe(true)
+    expect(result.availabilityMessage).toContain('兼容模式运行')
+    expect(result.availabilityMessage).not.toContain('握手失败')
   })
 
   it('does not recover a no-model snapshot even if a default model string still exists', () => {
@@ -262,4 +396,3 @@ describe('resolveChatPageAvailabilityState', () => {
     expect(result).toEqual(originalState)
   })
 })
-

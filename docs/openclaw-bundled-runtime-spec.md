@@ -22,12 +22,15 @@
 3. `bundled-fallback` 仅指内置 `tgz` 的受控降级路径。
 4. `online-fallback` 仅作为最后兜底，不再作为默认实现。
 5. Windows 与 macOS 必须对等设计，不能长期只做单平台真内置、另一平台继续在线安装。
-6. 当前主线阶段已经完成：
+6. Windows `bundled-runtime` 的完整形态必须包含：`openclaw.cmd/openclaw.ps1`、`node_modules/openclaw`，以及与其同目录共置的 `node.exe`。
+7. 在 Windows 真内置闭环完成前，系统 Node 只能作为临时兼容兜底，不得继续被视为正式主路径。
+8. 当前主线阶段已经完成：
    - `win32-x64`
    - `darwin-arm64`
    - `darwin-x64`
    三平台 bundled-runtime 收口。
-7. 当前文档示例与 manifest 基线继续锁定 `2026.3.24`；外部 `2026.4.x` 候选线在未完成兼容审计前，不得直接写回 spec 示例或主 manifest。
+9. 当前文档示例与 manifest 基线继续锁定 `2026.3.24`；外部 `2026.4.x` 候选线在未完成兼容审计前，不得直接写回 spec 示例或主 manifest。
+10. Windows bundled Node 当前统一锁定为 `Node 24.14.1 x64`，用于提前对齐 OpenClaw 的推荐运行时主线，而不是继续围绕 `Node 22` 做长期封装。
 
 ## 3. 当前仓库实际状态
 
@@ -50,6 +53,7 @@
    - macOS runtime 接管复制骨架与版本探测
 4. 近期一次失败验证已确认：仅从 pinned `tgz` 手动解包出的 npm 包体并不等于“可运行 bundled runtime”，因为缺少完整依赖闭包。
 5. 因此当前瓶颈不是“缺设计”，而是“缺真正可运行的 runtime 本体 + 缺端到端验证”。
+6. 对 Windows 而言，这个“真正可运行”的定义已进一步明确为：**不能只带 OpenClaw 包体，还必须能在没有系统 Node 的前提下独立启动**。
 
 补充说明：
 

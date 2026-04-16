@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+﻿import { describe, expect, it, vi } from 'vitest'
 import {
   AUTH_RETRY_HINT,
   DEFAULT_PROVIDER_CONFIG_EXPANDED,
@@ -212,12 +212,12 @@ describe('buildProviderOptions', () => {
 
     expect(customProvider).toMatchObject({
       id: 'custom',
-      name: '手动配置兼容 API',
+      name: '鎵嬪姩閰嶇疆鍏煎 API',
       hint: '手动填写 Base URL、Model ID 和认证信息，适合通用 OpenAI / Anthropic 兼容接口。',
     })
     expect(customProvider?.methods[0]).toMatchObject({
       id: 'custom-api-key',
-      label: '手动填写接口信息',
+      label: '鎵嬪姩濉啓鎺ュ彛淇℃伅',
       hint: '填写 Base URL、Model ID 和认证信息后，按兼容协议写入 OpenClaw。',
     })
   })
@@ -338,11 +338,11 @@ describe('resolveNextProviderMethodSelection', () => {
 
 describe('descriptor driven ui helpers', () => {
   it('appends the retry and refresh hint to auth failures', () => {
-    expect(appendRetryRefreshHint('认证失败，请检查 API Key 或认证配置。')).toBe(
-      `认证失败，请检查 API Key 或认证配置。\n（${AUTH_RETRY_HINT}）`
+    expect(appendRetryRefreshHint('Auth failed.')).toBe(
+      `Auth failed.\n${AUTH_RETRY_HINT}`
     )
-    expect(appendRetryRefreshHint(`认证失败，请检查 API Key 或认证配置。\n（${AUTH_RETRY_HINT}）`)).toBe(
-      `认证失败，请检查 API Key 或认证配置。\n（${AUTH_RETRY_HINT}）`
+    expect(appendRetryRefreshHint(`Auth failed.\n${AUTH_RETRY_HINT}`)).toBe(
+      `Auth failed.\n${AUTH_RETRY_HINT}`
     )
   })
 
@@ -471,7 +471,7 @@ describe('descriptor driven ui helpers', () => {
     expect(
       getRecommendedDependencyInstallOption({
         dependencyId: 'gemini-cli',
-        title: '安装 Gemini CLI',
+        title: '瀹夎 Gemini CLI',
         message: 'missing',
         commandName: 'gemini',
         recommendedMethod: 'npm',
@@ -641,8 +641,8 @@ describe('executeRemoteModelAuthSubmission', () => {
 
 describe('formatAuthRegistrySourceLabel', () => {
   it('formats the metadata source for display', () => {
-    expect(formatAuthRegistrySourceLabel('openclaw-internal-registry')).toContain('OpenClaw 官方注册表')
-    expect(formatAuthRegistrySourceLabel('unsupported-openclaw-layout')).toContain('不受支持')
+    expect(formatAuthRegistrySourceLabel('openclaw-internal-registry')).toContain('OpenClaw')
+    expect(formatAuthRegistrySourceLabel('unsupported-openclaw-layout')).toContain('涓嶅彈鏀寔')
   })
 })
 
@@ -1628,14 +1628,14 @@ describe('joinModelCenterNonBlockingMessages', () => {
   it('joins non-empty warnings with a stable separator', () => {
     expect(
       joinModelCenterNonBlockingMessages(
-        '认证已完成，但默认模型尚未完全生效。',
-        '模型信息已保存，但状态刷新失败：timeout'
+        'Auth completed, but the default model is not fully applied yet.',
+        '妯″瀷淇℃伅宸蹭繚瀛橈紝浣嗙姸鎬佸埛鏂板け璐ワ細timeout'
       )
-    ).toBe('认证已完成，但默认模型尚未完全生效。；另外模型信息已保存，但状态刷新失败：timeout')
+    ).toBe('Auth completed, but the default model is not fully applied yet.; Also, model metadata was saved but status refresh failed: timeout')
   })
 
   it('skips empty warning fragments', () => {
-    expect(joinModelCenterNonBlockingMessages('', '模型信息已保存')).toBe('模型信息已保存')
+    expect(joinModelCenterNonBlockingMessages('', 'Model metadata saved')).toBe('Model metadata saved')
   })
 })
 
@@ -1657,10 +1657,10 @@ describe('capabilities loading helpers', () => {
   it('switches stage copy as loading progresses', () => {
     expect(buildCapabilitiesLoadingDisplay(0)).toMatchObject({
       progress: 6,
-      stageLabel: '连接 OpenClaw',
+      stageLabel: '杩炴帴 OpenClaw',
     })
-    expect(buildCapabilitiesLoadingDisplay(2500).stageLabel).toBe('整理认证方式')
-    expect(buildCapabilitiesLoadingDisplay(7000).stageLabel).toBe('准备配置界面')
+    expect(buildCapabilitiesLoadingDisplay(2500).stageLabel).toBe('鏁寸悊璁よ瘉鏂瑰紡')
+    expect(buildCapabilitiesLoadingDisplay(7000).stageLabel).toBe('鍑嗗閰嶇疆鐣岄潰')
   })
 })
 
@@ -1690,8 +1690,8 @@ describe('buildBusyStateDisplay', () => {
       canceling: false,
     })
 
-    expect(display.title).toContain('提交认证信息')
-    expect(display.detail).toContain('官方认证路由')
+    expect(display.title).toContain('鎻愪氦璁よ瘉淇℃伅')
+    expect(display.detail).toContain('瀹樻柟璁よ瘉璺敱')
   })
 
   it('returns canceling message when canceling', () => {
@@ -1704,8 +1704,8 @@ describe('buildBusyStateDisplay', () => {
       elapsedSeconds: 12,
       canceling: true,
     })
-    expect(display.title).toContain('正在取消')
-    expect(display.detail).toContain('取消')
+    expect(display.title).toContain('姝ｅ湪鍙栨秷')
+    expect(display.detail).toContain('鍙栨秷')
   })
 })
 
@@ -1713,7 +1713,7 @@ describe('getLocalDiscoveryDisplay', () => {
   it('prompts the user to fill Base URL before discovery', () => {
     expect(getLocalDiscoveryDisplay({ testing: false }, false, null, false, 'ollama')).toEqual({
       buttonColor: 'brand',
-      message: '填写 Base URL 后可获取本地模型',
+      message: '濉啓 Base URL 鍚庡彲鑾峰彇鏈湴妯″瀷',
       messageColor: 'dimmed',
     })
   })
@@ -1721,7 +1721,7 @@ describe('getLocalDiscoveryDisplay', () => {
   it('shows scanning progress while local model discovery is running', () => {
     expect(getLocalDiscoveryDisplay({ testing: false }, true, null, true, 'ollama')).toEqual({
       buttonColor: 'brand',
-      message: '正在扫描模型...',
+      message: '姝ｅ湪鎵弿妯″瀷...',
       messageColor: 'dimmed',
     })
   })
@@ -1737,7 +1737,7 @@ describe('getLocalDiscoveryDisplay', () => {
       )
     ).toEqual({
       buttonColor: 'teal',
-      message: '连接成功，已发现 3 个本地模型',
+      message: 'Connected successfully and found 3 local models.',
       messageColor: 'teal',
     })
   })
@@ -1747,13 +1747,13 @@ describe('getLocalDiscoveryDisplay', () => {
       getLocalDiscoveryDisplay(
         { testing: false, result: { ok: true, reachable: true } },
         false,
-        { ok: false, error: '模型扫描失败' },
+        { ok: false, error: '妯″瀷鎵弿澶辫触' },
         true,
         'ollama'
       )
     ).toEqual({
       buttonColor: 'red',
-      message: '模型扫描失败',
+      message: '妯″瀷鎵弿澶辫触',
       messageColor: 'red',
     })
   })
@@ -1870,6 +1870,37 @@ describe('buildLocalProviderConfigSnapshotForSubmit', () => {
     })
   })
 
+  it('writes bundled DeepSeek provider config when the submit target is normalized to deepseek', () => {
+    expect(
+      buildLocalProviderConfigSnapshotForSubmit({
+        currentConfig: {
+          models: {
+            providers: {
+              'custom-openai': {
+                baseUrl: 'https://api.deepseek.com/v1',
+                models: [{ id: 'deepseek-chat', name: 'deepseek-chat' }],
+              },
+            },
+          },
+        },
+        providerId: 'deepseek',
+        baseUrl: 'https://api.deepseek.com',
+        selectedModel: 'deepseek/deepseek-chat',
+        cleanupProviderIds: ['custom-openai'],
+      })
+    ).toMatchObject({
+      models: {
+        providers: {
+          deepseek: {
+            api: 'openai-completions',
+            baseUrl: 'https://api.deepseek.com',
+            models: [{ id: 'deepseek-chat', name: 'deepseek-chat' }],
+          },
+        },
+      },
+    })
+  })
+
   it('keeps existing provider models while avoiding duplicate entries', () => {
     expect(
       buildLocalProviderConfigSnapshotForSubmit({
@@ -1915,11 +1946,11 @@ describe('resolveModelCenterProviderDisplayCopy', () => {
     expect(
       resolveModelCenterProviderDisplayCopy({
         providerId: 'custom-openai',
-        fallbackName: '自定义 OpenAI 兼容',
+        fallbackName: '鑷畾涔?OpenAI 鍏煎',
       })
     ).toEqual({
-      name: '本地 OpenAI 兼容端点',
-      hint: '连接 LM Studio、LocalAI 或其他本地 / 自托管 OpenAI 兼容服务。',
+      name: 'OpenAI 兼容服务',
+      hint: '连接远程、自托管或本地 OpenAI 兼容服务，支持手填 Base URL、API Key 与模型 ID。',
     })
   })
 })
@@ -1933,8 +1964,8 @@ describe('resolveModelCenterMethodDisplayCopy', () => {
         fallbackLabel: 'Custom Provider',
       })
     ).toEqual({
-      label: '手动填写接口信息',
-      hint: '填写 Base URL、Model ID 和认证信息后，按兼容协议写入 OpenClaw。',
+      label: '鎵嬪姩濉啓鎺ュ彛淇℃伅',
+      hint: 'Fill in Base URL, model ID, and auth fields, then write them into OpenClaw through the compatible flow.',
     })
   })
 })
@@ -1952,8 +1983,8 @@ describe('provider config collapse helpers', () => {
   })
 
   it('returns accessible toggle labels for collapsed and expanded states', () => {
-    expect(getProviderConfigToggleAriaLabel(false)).toBe('展开配置 AI 提供商')
-    expect(getProviderConfigToggleAriaLabel(true)).toBe('收起配置 AI 提供商')
+    expect(getProviderConfigToggleAriaLabel(false)).toBe('Expand AI provider config')
+    expect(getProviderConfigToggleAriaLabel(true)).toBe('Collapse AI provider config')
   })
 
   it('always shows provider config content when collapse is disabled', () => {

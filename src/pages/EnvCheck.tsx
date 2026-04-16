@@ -362,9 +362,9 @@ export function resolveOpenClawInstallBehavior(): EnvCheckOpenClawInstallBehavio
 
 export function resolveGatewayBehavior(): EnvCheckGatewayBehavior {
   return {
-    deferredCheckingDescription: '当前阶段先跳过 Gateway 运行态检查，完成后续配置后会再次自动确认...',
-    deferredStepVersion: '后续确认',
-    deferredReadyDescription: '完成认证和渠道配置后再确认 Gateway 可用性',
+    deferredCheckingDescription: '当前先完成模型配置；进入控制面板后启动 Gateway，再验证本地对话是否可用。',
+    deferredStepVersion: '待启动',
+    deferredReadyDescription: '完成模型配置后，请先启动 Gateway，再进入对话页面验证本地直聊。',
     resolveContinueLabel: (sharedConfigInitialized: boolean) =>
       sharedConfigInitialized ? '进入控制面板' : '开始配置',
   }
@@ -843,7 +843,7 @@ function formatCancelDomainSummary(domains: string[]): string {
 const INITIAL_STEPS: Step[] = [
   { id: 'node', label: 'Node.js 运行时', description: '检查或补齐 Node.js 依赖', status: 'pending' },
   { id: 'openclaw', label: 'OpenClaw 核心', description: '优先释放内置 OpenClaw 本体', status: 'pending' },
-  { id: 'gateway', label: 'Gateway 服务', description: '记录后续 Gateway 确认时机', status: 'pending' },
+  { id: 'gateway', label: 'Gateway 服务', description: '完成模型配置后启动 Gateway，并验证本地直聊', status: 'pending' },
 ]
 
 function createInitialSteps(): Step[] {

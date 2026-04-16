@@ -128,6 +128,16 @@ const KNOWN_PROVIDER_METADATA: ProviderMetadata[] = [
     description: 'GitHub Copilot 订阅用户',
   },
   {
+    id: 'deepseek',
+    name: 'DeepSeek',
+    logo: 'DS',
+    region: 'global',
+    signupUrl: 'https://platform.deepseek.com/',
+    description: 'DeepSeek Chat, DeepSeek Reasoner',
+    primaryEnvKey: 'DEEPSEEK_API_KEY',
+    methods: [{ authChoice: 'deepseek-api-key', envKey: 'DEEPSEEK_API_KEY' }],
+  },
+  {
     id: 'openrouter',
     name: 'OpenRouter',
     logo: '🌐',
@@ -266,6 +276,7 @@ const AUTH_CHOICE_CLI_FLAG_OVERRIDES: Record<string, string> = {
 }
 
 const ADDITIONAL_PROVIDER_ENV_KEYS: Record<string, string[]> = {
+  deepseek: ['DEEPSEEK_API_KEY'],
   ollama: ['OLLAMA_HOST', 'OLLAMA_API_KEY'],
   vllm: ['VLLM_BASE_URL', 'VLLM_API_KEY'],
   'custom-openai': ['OPENAI_BASE_URL', 'OPENAI_API_KEY'],

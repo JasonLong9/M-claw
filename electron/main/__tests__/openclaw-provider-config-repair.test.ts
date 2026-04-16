@@ -58,8 +58,8 @@ describe('openclaw provider config repair', () => {
         providers: {
           'custom-openai': {
             enabled: true,
-            baseUrl: 'https://api.deepseek.com/v1',
-            models: [{ id: 'deepseek-chat', name: 'deepseek-chat' }],
+            baseUrl: 'http://127.0.0.1:1234/v1',
+            models: [{ id: 'qwen3', name: 'qwen3' }],
           },
         },
       },
@@ -71,8 +71,61 @@ describe('openclaw provider config repair', () => {
       models: {
         providers: {
           'custom-openai': {
+            baseUrl: 'http://127.0.0.1:1234/v1',
+            models: [{ id: 'qwen3', name: 'qwen3' }],
+          },
+        },
+      },
+    })
+  })
+
+  it('migrates DeepSeek official custom-openai configs onto the bundled deepseek provider', () => {
+    const result = repairKnownProviderConfigGaps({
+      models: {
+        providers: {
+          'custom-openai': {
+            enabled: true,
             baseUrl: 'https://api.deepseek.com/v1',
             models: [{ id: 'deepseek-chat', name: 'deepseek-chat' }],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: {
+            primary: 'custom-openai/deepseek-chat',
+          },
+          models: {
+            'custom-openai/deepseek-chat': {
+              alias: 'DeepSeek',
+            },
+          },
+        },
+      },
+    })
+
+    expect(result.changed).toBe(true)
+    expect(result.repairedJsonPaths).toEqual(['$.models.providers.custom-openai->deepseek'])
+    expect(result.providerMigrations).toEqual([{ fromProvider: 'custom-openai', toProvider: 'deepseek' }])
+    expect(result.config).toEqual({
+      models: {
+        providers: {
+          deepseek: {
+            api: 'openai-completions',
+            baseUrl: 'https://api.deepseek.com',
+            models: [{ id: 'deepseek-chat', name: 'deepseek-chat' }],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: {
+            primary: 'deepseek/deepseek-chat',
+          },
+          models: {
+            'deepseek/deepseek-chat': {
+              alias: 'DeepSeek',
+            },
           },
         },
       },
@@ -92,8 +145,8 @@ describe('openclaw provider config repair', () => {
             },
             'custom-openai': {
               enabled: true,
-              baseUrl: 'https://api.deepseek.com/v1',
-              models: [{ id: 'deepseek-chat', name: 'deepseek-chat' }],
+              baseUrl: 'http://127.0.0.1:1234/v1',
+              models: [{ id: 'qwen3', name: 'qwen3' }],
             },
           },
         },
@@ -115,8 +168,8 @@ describe('openclaw provider config repair', () => {
             api: 'anthropic-messages',
           },
           'custom-openai': {
-            baseUrl: 'https://api.deepseek.com/v1',
-            models: [{ id: 'deepseek-chat', name: 'deepseek-chat' }],
+            baseUrl: 'http://127.0.0.1:1234/v1',
+            models: [{ id: 'qwen3', name: 'qwen3' }],
           },
         },
       },

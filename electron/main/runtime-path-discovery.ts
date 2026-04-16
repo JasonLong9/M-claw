@@ -185,6 +185,19 @@ function resolveNodeCommonBinDirs(platform: NodeJS.Platform, env: NodeJS.Process
   return uniqueNonEmpty([...resolvePosixSharedBinDirs(platform, env), '/usr/bin'], platform)
 }
 
+function resolveWindowsSystemBinDirs(env: NodeJS.ProcessEnv): string[] {
+  const systemRoot = resolveEnvValue(env, 'SystemRoot') || 'C:\\Windows'
+  return uniqueNonEmpty(
+    [
+      joinBinPath(systemRoot, 'System32', 'win32'),
+      joinBinPath(systemRoot, 'System32\\Wbem', 'win32'),
+      joinBinPath(systemRoot, 'System32\\WindowsPowerShell\\v1.0', 'win32'),
+      systemRoot,
+    ],
+    'win32'
+  )
+}
+
 function resolveOpenClawCommonBinDirs(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string[] {
   if (platform === 'win32') {
     const appData = resolveEnvValue(env, 'APPDATA')
@@ -211,6 +224,7 @@ function resolveOpenClawCommonBinDirs(platform: NodeJS.Platform, env: NodeJS.Pro
 function listAugmentBinDirs(options: Required<RuntimePathDiscoveryOptions>): string[] {
   return uniqueNonEmpty(
     [
+      ...(options.platform === 'win32' ? resolveWindowsSystemBinDirs(options.env) : []),
       ...resolveExtraBinDirs(options.env, options.platform, [
         SHARED_EXTRA_BIN_DIRS_ENV,
         NODE_EXTRA_BIN_DIRS_ENV,

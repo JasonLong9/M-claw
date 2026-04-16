@@ -135,6 +135,23 @@ function findExistingSessionId(
   return sessions.some((session) => session.sessionId === normalizedSessionId) ? normalizedSessionId : ''
 }
 
+function isOpenClawMainWebchatSession(session: ChatSessionSummary | null | undefined): boolean {
+  if (!session) return false
+  return parseChatSessionSourceFromKey(session.sessionKey).sourceType === 'webchat'
+}
+
+function shouldAutoSelectDashboardSession(session: ChatSessionSummary | null | undefined): boolean {
+  if (!session) return false
+  if (isOpenClawMainWebchatSession(session)) return false
+
+  const origin = resolveChatSessionOrigin(session)
+  if (origin === 'channel') return false
+  if (session.hasLocalTranscript) return true
+  if (session.authorityKind === 'local-cache-only' || session.localOnly === true) return true
+  if (isUpstreamConfirmedDirectShadow(session)) return true
+  return false
+}
+
 export function pickDefaultActiveSession(params: {
   sessions: ChatSessionSummary[]
   preferredSessionId?: string
@@ -147,7 +164,8 @@ export function pickDefaultActiveSession(params: {
   const currentActiveSessionId = findExistingSessionId(sessions, params.currentActiveSessionId)
   if (currentActiveSessionId) return currentActiveSessionId
 
-  return sessions[0]?.sessionId || ''
+  const firstAutoSelectableSession = sessions.find((session) => shouldAutoSelectDashboardSession(session))
+  return firstAutoSelectableSession?.sessionId || ''
 }
 
 export function resolveDirectChatSessionAction(params: { activeSessionId?: string }): DirectChatSessionAction {

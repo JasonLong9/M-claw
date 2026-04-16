@@ -1,12 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+﻿import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
+  pollWithBackoffMock,
   gatewayHealthMock,
   gatewayStartMock,
   gatewayRestartMock,
   gatewayStopMock,
   ensureGatewayRunningMock,
 } = vi.hoisted(() => ({
+  pollWithBackoffMock: vi.fn(),
   gatewayHealthMock: vi.fn(),
   gatewayStartMock: vi.fn(),
   gatewayRestartMock: vi.fn(),
@@ -14,6 +16,10 @@ const {
   ensureGatewayRunningMock: vi.fn(),
 }))
 
+
+vi.mock('../../../src/shared/polling', () => ({
+  pollWithBackoff: pollWithBackoffMock,
+}))
 vi.mock('../cli', () => ({
   gatewayHealth: gatewayHealthMock,
   gatewayStart: gatewayStartMock,
@@ -62,11 +68,29 @@ function createCliOkResult() {
 
 describe('gateway lifecycle controller', () => {
   beforeEach(() => {
+    pollWithBackoffMock.mockReset()
     gatewayHealthMock.mockReset()
     gatewayStartMock.mockReset()
     gatewayRestartMock.mockReset()
     gatewayStopMock.mockReset()
     ensureGatewayRunningMock.mockReset()
+
+    pollWithBackoffMock.mockImplementation(async ({ execute, isSuccess }: any) => {
+      let lastValue: any = undefined
+      for (let index = 0; index < 3; index += 1) {
+        lastValue = await execute()
+        if (isSuccess(lastValue)) {
+          return {
+            ok: true,
+            value: lastValue,
+          }
+        }
+      }
+      return {
+        ok: false,
+        value: lastValue,
+      }
+    })
 
     gatewayHealthMock.mockResolvedValue({
       running: true,
@@ -125,6 +149,49 @@ describe('gateway lifecycle controller', () => {
     await Promise.all([startPromise, restartPromise])
 
     expect(gatewayStartMock).toHaveBeenCalledTimes(1)
+    expect(gatewayRestartMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('waits for gateway health confirmation after start succeeds', async () => {
+    gatewayHealthMock.mockResolvedValueOnce({
+      running: true,
+      raw: '{"ok":true}',
+      stderr: '',
+      code: 0,
+      stateCode: 'healthy',
+      summary: 'Gateway healthy',
+    })
+
+    const result = await startGatewayLifecycle('start')
+
+    expect(result).toMatchObject({
+      ok: true,
+      running: true,
+      stateCode: 'healthy',
+      summary: 'Gateway healthy',
+    })
+    expect(gatewayStartMock).toHaveBeenCalledTimes(1)
+    expect(gatewayHealthMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('surfaces a failed restart when the gateway command succeeds but health never recovers', async () => {
+    gatewayHealthMock.mockResolvedValue({
+      running: false,
+      raw: '',
+      stderr: 'connection refused',
+      code: 1,
+      stateCode: 'gateway_not_running',
+      summary: 'Gateway not running',
+    })
+
+    const result = await restartGatewayLifecycle('restart')
+
+    expect(result).toMatchObject({
+      ok: false,
+      running: false,
+      stateCode: 'gateway_not_running',
+    })
+    expect(String(result.summary || '')).toContain('Gateway')
     expect(gatewayRestartMock).toHaveBeenCalledTimes(1)
   })
 
@@ -197,7 +264,7 @@ describe('gateway lifecycle controller', () => {
         stderr: '',
         code: 0,
         stateCode: 'healthy',
-        summary: 'Gateway 已确认可用',
+        summary: 'ok',
       })
 
     const result = await reloadGatewayForConfigChange('config-change')
@@ -206,10 +273,11 @@ describe('gateway lifecycle controller', () => {
       ok: true,
       running: true,
       stateCode: 'healthy',
-      summary: 'Gateway 已确认可用',
+      summary: 'ok',
     })
     expect(gatewayRestartMock).toHaveBeenCalledTimes(1)
     expect(ensureGatewayRunningMock).toHaveBeenCalledTimes(0)
     expect(gatewayHealthMock).toHaveBeenCalledTimes(2)
   })
 })
+

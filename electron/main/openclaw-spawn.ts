@@ -1,5 +1,8 @@
 import { shouldAutoOpenBrowserForArgs } from './oauth-browser'
 
+const fs = process.getBuiltinModule('node:fs') as typeof import('node:fs')
+const path = process.getBuiltinModule('node:path') as typeof import('node:path')
+
 export interface ResolvedCliCommand {
   command: string
   args: string[]
@@ -76,6 +79,34 @@ function buildGeminiExpectWrapperScript(commandPath: string, args: string[]): st
   ].join('\n')
 }
 
+function resolveBundledWindowsDirectInvocation(
+  commandPath: string,
+  args: string[]
+): ResolvedCliCommand | null {
+  const normalizedCommandPath = String(commandPath || '').trim()
+  if (!/\.cmd$/i.test(normalizedCommandPath)) return null
+
+  const commandDir = path.dirname(normalizedCommandPath)
+  const runtimeRoots = [commandDir]
+  if (path.basename(commandDir).toLowerCase() === 'bin') {
+    runtimeRoots.push(path.dirname(commandDir))
+  }
+
+  for (const runtimeRoot of runtimeRoots) {
+    const nodePath = path.join(runtimeRoot, 'node.exe')
+    const entryPointPath = path.join(runtimeRoot, 'node_modules', 'openclaw', 'openclaw.mjs')
+    if (!fs.existsSync(nodePath) || !fs.existsSync(entryPointPath)) continue
+
+    return {
+      command: nodePath,
+      args: [entryPointPath, ...args],
+      shell: false,
+    }
+  }
+
+  return null
+}
+
 export function resolveOpenClawCommand(
   args: string[],
   platformOrRuntime: NodeJS.Platform | ResolveOpenClawRuntime = process.platform
@@ -91,8 +122,9 @@ export function resolveOpenClawCommand(
   const shouldUseGeminiExpectWrapper = isGeminiCliOAuthLoginArgs(args) && !isWin
   const geminiExpectWarning =
     shouldUseGeminiExpectWrapper && runtime.expectAvailable === false ? runtime.expectWarning : undefined
+  const directWindowsRuntime = isWin ? resolveBundledWindowsDirectInvocation(commandPath, args) : null
   if (!shouldUsePty || isWin) {
-    return { command: commandPath, args, shell: isWin }
+    return directWindowsRuntime || { command: commandPath, args, shell: isWin }
   }
 
   if (shouldUseGeminiExpectWrapper && runtime.expectAvailable !== false) {

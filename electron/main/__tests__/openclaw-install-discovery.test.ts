@@ -13,8 +13,7 @@ const {
   getBaselineBackupStatusMock,
   getBaselineBackupBypassStatusMock,
   resolveRuntimeOpenClawPathsMock,
-  readBundledOpenClawManifestMock,
-  resolveBundledOpenClawRuntimeArtifactPathMock,
+  inspectBundledOpenClawDeliveryStatusMock,
 } = vi.hoisted(() => ({
   resolveOpenClawBinaryPathMock: vi.fn(),
   readOpenClawPackageInfoMock: vi.fn(),
@@ -22,8 +21,18 @@ const {
   getBaselineBackupStatusMock: vi.fn(),
   getBaselineBackupBypassStatusMock: vi.fn(),
   resolveRuntimeOpenClawPathsMock: vi.fn(),
-  readBundledOpenClawManifestMock: vi.fn(),
-  resolveBundledOpenClawRuntimeArtifactPathMock: vi.fn(),
+  inspectBundledOpenClawDeliveryStatusMock: vi.fn(() => ({
+    manifestPath: null,
+    manifest: null,
+    error: null,
+    platform: process.platform,
+    arch: process.arch,
+    defaultDeliveryMode: null,
+    targetDeliveryMode: null,
+    runtimePath: null,
+    runtimeBinaryPath: null,
+    payloadPath: null,
+  }) as any),
 }))
 
 vi.mock('../openclaw-package', () => ({
@@ -49,8 +58,7 @@ vi.mock('../openclaw-runtime-paths', () => ({
 }))
 
 vi.mock('../openclaw-bundled-manifest', () => ({
-  readBundledOpenClawManifest: readBundledOpenClawManifestMock,
-  resolveBundledOpenClawRuntimeArtifactPath: resolveBundledOpenClawRuntimeArtifactPathMock,
+  inspectBundledOpenClawDeliveryStatus: inspectBundledOpenClawDeliveryStatusMock,
 }))
 
 describe('inferOpenClawInstallSource', () => {
@@ -111,6 +119,9 @@ describe('discoverOpenClawInstallations', () => {
   const tempDirs: string[] = []
   const originalUserDataDir = process.env.QCLAW_USER_DATA_DIR
   const originalHome = process.env.HOME
+  const originalUserProfile = process.env.USERPROFILE
+  const originalHomeDrive = process.env.HOMEDRIVE
+  const originalHomePath = process.env.HOMEPATH
 
   function makeTempDir(): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qclaw-openclaw-discovery-'))
@@ -125,13 +136,19 @@ describe('discoverOpenClawInstallations', () => {
     getBaselineBackupStatusMock.mockReset()
     getBaselineBackupBypassStatusMock.mockReset()
     resolveRuntimeOpenClawPathsMock.mockReset()
-    readBundledOpenClawManifestMock.mockReset()
-    resolveBundledOpenClawRuntimeArtifactPathMock.mockReset()
-    readBundledOpenClawManifestMock.mockReturnValue({
+    inspectBundledOpenClawDeliveryStatusMock.mockReset()
+    inspectBundledOpenClawDeliveryStatusMock.mockReturnValue({
       manifestPath: null,
       manifest: null,
-    })
-    resolveBundledOpenClawRuntimeArtifactPathMock.mockReturnValue(null)
+      error: null,
+      platform: process.platform,
+      arch: process.arch,
+      defaultDeliveryMode: null,
+      targetDeliveryMode: null,
+      runtimePath: null,
+      runtimeBinaryPath: null,
+      payloadPath: null,
+    } as any)
     if (originalUserDataDir === undefined) {
       delete process.env.QCLAW_USER_DATA_DIR
     } else {
@@ -141,6 +158,21 @@ describe('discoverOpenClawInstallations', () => {
       delete process.env.HOME
     } else {
       process.env.HOME = originalHome
+    }
+    if (originalUserProfile === undefined) {
+      delete process.env.USERPROFILE
+    } else {
+      process.env.USERPROFILE = originalUserProfile
+    }
+    if (originalHomeDrive === undefined) {
+      delete process.env.HOMEDRIVE
+    } else {
+      process.env.HOMEDRIVE = originalHomeDrive
+    }
+    if (originalHomePath === undefined) {
+      delete process.env.HOMEPATH
+    } else {
+      process.env.HOMEPATH = originalHomePath
     }
 
     while (tempDirs.length > 0) {
@@ -352,25 +384,21 @@ describe('discoverOpenClawInstallations', () => {
     })
     getBaselineBackupStatusMock.mockResolvedValue(null)
     getBaselineBackupBypassStatusMock.mockResolvedValue(null)
-    readBundledOpenClawManifestMock.mockReturnValue({
+    inspectBundledOpenClawDeliveryStatusMock.mockReturnValue({
       manifestPath: path.join(installDir, 'resources', 'openclaw-bundle', 'manifest.json'),
       manifest: {
         schemaVersion: 1,
         product: 'Mclaw',
-        openclawVersion: '2026.3.24',
-        defaultDeliveryMode: 'bundled-fallback',
-        targetDeliveryMode: 'bundled-runtime',
-        artifacts: {
-          tgz: {
-            fileName: 'openclaw-2026.3.24.tgz',
-            version: '2026.3.24',
-          },
-          runtime: [],
-        },
-        notes: [],
       },
-    })
-    resolveBundledOpenClawRuntimeArtifactPathMock.mockReturnValue(null)
+      error: null,
+      platform: process.platform,
+      arch: process.arch,
+      defaultDeliveryMode: 'bundled-fallback',
+      targetDeliveryMode: 'bundled-runtime',
+      runtimePath: null,
+      runtimeBinaryPath: null,
+      payloadPath: path.join(installDir, 'resources', 'openclaw-bundle', 'openclaw-2026.3.24.tgz'),
+    } as any)
 
     const installFingerprint = createHash('sha256')
       .update([binaryPath, path.join(installDir, 'lib', 'node_modules', 'openclaw'), '2026.3.24', path.join(stateRoot, 'openclaw.json'), stateRoot].join('\n'))
@@ -401,7 +429,7 @@ describe('discoverOpenClawInstallations', () => {
     expect(result.bundledRuntimePath).toBeNull()
     expect(result.bundledRuntimeBinaryPath).toBeNull()
     expect(result.candidates[0]?.ownershipState).toBe('qclaw-installed')
-    expect(result.candidates[0]?.deliveryMode).toBe('bundled-fallback')
+    expect(result.candidates[0]?.deliveryMode).toBe('bundled-runtime')
     expect(result.warnings).toContain(
       '当前 OpenClaw 内置交付模式为 bundled-fallback，目标模式为 bundled-runtime；请检查当前平台载荷是否缺失、损坏或在安装包中打包不完整。'
     )
@@ -410,6 +438,9 @@ describe('discoverOpenClawInstallations', () => {
   it('reports history-only when only historical state files exist', async () => {
     const homeDir = makeTempDir()
     process.env.HOME = homeDir
+    process.env.USERPROFILE = homeDir
+    process.env.HOMEDRIVE = path.parse(homeDir).root.replace(/[\\/]+$/, '')
+    process.env.HOMEPATH = homeDir.slice(path.parse(homeDir).root.length - 1)
 
     const openClawHome = path.join(homeDir, '.openclaw')
     fs.mkdirSync(openClawHome, { recursive: true })
@@ -426,10 +457,76 @@ describe('discoverOpenClawInstallations', () => {
     expect(result.historyDataCandidates).toEqual([
       {
         path: openClawHome,
-        displayPath: '~/.openclaw',
+        displayPath: process.platform === 'win32' ? '~\\.openclaw' : '~/.openclaw',
         reason: 'default-home-dir',
       },
     ])
     expect(result.warnings).toContain('检测到历史 OpenClaw 数据，但当前机器缺少可执行 OpenClaw 运行环境。')
+  })
+
+  it('prefers the bundled runtime candidate as active when bundled-runtime is the target delivery mode', async () => {
+    const installDir = makeTempDir()
+    const bundledRoot = path.join(installDir, 'resources', 'openclaw-bundle', 'runtime', 'windows-x64')
+    const bundledBinaryPath = path.join(bundledRoot, 'openclaw.cmd')
+    const globalBinaryPath = path.join(installDir, 'roaming', 'npm', 'openclaw.cmd')
+    const stateRoot = path.join(installDir, 'profiles', 'bundled')
+
+    fs.mkdirSync(path.dirname(bundledBinaryPath), { recursive: true })
+    fs.mkdirSync(path.dirname(globalBinaryPath), { recursive: true })
+    fs.mkdirSync(stateRoot, { recursive: true })
+    fs.writeFileSync(path.join(stateRoot, 'openclaw.json'), '{}')
+    fs.writeFileSync(bundledBinaryPath, '@echo off\r\n')
+    fs.writeFileSync(globalBinaryPath, '@echo off\r\n')
+
+    resolveOpenClawBinaryPathMock.mockResolvedValue(globalBinaryPath)
+    listExecutablePathCandidatesMock.mockReturnValue([globalBinaryPath, bundledBinaryPath])
+    readOpenClawPackageInfoMock.mockImplementation(async ({ binaryPath }: { binaryPath: string }) => ({
+      name: 'openclaw',
+      version: '2026.3.24',
+      packageRoot: binaryPath === bundledBinaryPath
+        ? path.join(bundledRoot, 'node_modules', 'openclaw')
+        : path.join(installDir, 'roaming', 'npm', 'node_modules', 'openclaw'),
+      packageJsonPath: path.join(path.dirname(binaryPath), 'node_modules', 'openclaw', 'package.json'),
+      binaryPath,
+      resolvedBinaryPath: binaryPath,
+    }))
+    resolveRuntimeOpenClawPathsMock.mockResolvedValue({
+      homeDir: stateRoot,
+      configFile: path.join(stateRoot, 'openclaw.json'),
+      envFile: path.join(stateRoot, '.env'),
+      credentialsDir: path.join(stateRoot, 'credentials'),
+      modelCatalogCacheFile: path.join(stateRoot, 'qclaw-model-catalog-cache.json'),
+      displayHomeDir: stateRoot,
+      displayConfigFile: path.join(stateRoot, 'openclaw.json'),
+      displayEnvFile: path.join(stateRoot, '.env'),
+      displayCredentialsDir: path.join(stateRoot, 'credentials'),
+      displayModelCatalogCacheFile: path.join(stateRoot, 'qclaw-model-catalog-cache.json'),
+    })
+    getBaselineBackupStatusMock.mockResolvedValue(null)
+    getBaselineBackupBypassStatusMock.mockResolvedValue(null)
+    inspectBundledOpenClawDeliveryStatusMock.mockReturnValue({
+      manifestPath: path.join(installDir, 'resources', 'openclaw-bundle', 'manifest.json'),
+      manifest: { schemaVersion: 1, product: 'Mclaw' },
+      error: null,
+      platform: 'win32',
+      arch: 'x64',
+      defaultDeliveryMode: 'bundled-runtime',
+      targetDeliveryMode: 'bundled-runtime',
+      runtimePath: bundledRoot,
+      runtimeBinaryPath: bundledBinaryPath,
+      payloadPath: null,
+    } as any)
+
+    const { discoverOpenClawInstallations } = await import('../openclaw-install-discovery')
+    const result = await discoverOpenClawInstallations()
+
+    expect(result.activeCandidateId).toBe(result.candidates[0]?.candidateId)
+    expect(result.candidates[0]).toMatchObject({
+      binaryPath: bundledBinaryPath,
+      installSource: 'bundled-runtime',
+      deliveryMode: 'bundled-runtime',
+      ownershipState: 'qclaw-installed',
+      isPathActive: true,
+    })
   })
 })

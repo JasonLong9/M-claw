@@ -36,14 +36,39 @@ describe('dashboard chat panel guardrails', () => {
   it('does not expose the session diagnostics toggle in the user-facing toolbar', () => {
     const source = readDashboardChatPanelSource()
 
-    expect(source).not.toContain("label={showDiagnostics ? '收起诊断' : '会话诊断'}")
+    expect(source).not.toContain('label={showDiagnostics ?')
     expect(source).not.toContain('IconActivityHeartbeat')
   })
 
   it('keeps the composer footer free of session continuation status text', () => {
     const source = readDashboardChatPanelSource()
 
-    expect(source).not.toContain("activeSessionStatus.willForkOnSend ? '新会话' : '继续会话'")
+    expect(source).not.toContain("activeSessionStatus.willForkOnSend ? '")
     expect(source).not.toContain('首次发送时自动创建会话')
+  })
+
+  it('renders chat images as clickable thumbnails with a preview modal', () => {
+    const source = readDashboardChatPanelSource()
+
+    expect(source).toContain('const [imagePreview, setImagePreview]')
+    expect(source).toContain('const [imagePreviewScale, setImagePreviewScale]')
+    expect(source).toContain("const [imagePreviewFitMode, setImagePreviewFitMode] = useState<ImagePreviewFitMode>('auto')")
+    expect(source).toContain('const imageAttachments = Array.isArray(message.images)')
+    expect(source).toContain("cursor: 'zoom-in'")
+    expect(source).toContain("objectFit: 'contain'")
+    expect(source).toContain('opened={Boolean(imagePreview)}')
+    expect(source).toContain('CHAT_IMAGE_PREVIEW_MAX_HEIGHT')
+    expect(source).toContain('onWheel={handleImagePreviewWheel}')
+    expect(source).toContain("handleImagePreviewFitModeChange('width')")
+    expect(source).toContain('event.ctrlKey || event.metaKey')
+  })
+
+  it('renders assistant file paths as clickable open-file actions', () => {
+    const source = readDashboardChatPanelSource()
+
+    expect(source).toContain('collectAssistantLocalPaths(messageText)')
+    expect(source).toContain('normalizedLine.match(/(?:^|[^a-z0-9+.-])([a-z]:[\\\\/].+)$/i)')
+    expect(source).toContain('window.api.openLocalPath(normalizedPath)')
+    expect(source).toContain('打开 {describeLocalPathLabel(targetPath)}')
   })
 })

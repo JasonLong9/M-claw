@@ -174,13 +174,29 @@ function sanitizeMessage(value: unknown): ChatMessage | null {
   const message = value as Partial<ChatMessage>
   const id = String(message.id || '').trim()
   const text = String(message.text || '').trim()
+  const images = Array.isArray(message.images)
+    ? message.images
+        .map((entry) => {
+          if (!entry || typeof entry !== 'object') return null
+          const image = entry as { url?: unknown; mimeType?: unknown }
+          const url = String(image.url || '').trim()
+          if (!url) return null
+          const mimeType = String(image.mimeType || '').trim()
+          return {
+            url,
+            mimeType: mimeType || undefined,
+          }
+        })
+        .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+    : undefined
   const role = message.role === 'assistant' || message.role === 'system' ? message.role : 'user'
-  if (!id || !text) return null
+  if (!id || (!text && !(images && images.length > 0))) return null
 
   return {
     id,
     role,
     text,
+    images: images && images.length > 0 ? images : undefined,
     createdAt: Number.isFinite(message.createdAt) ? Number(message.createdAt) : Date.now(),
     status: message.status === 'pending' || message.status === 'error' ? message.status : 'sent',
     model: String(message.model || '').trim() || undefined,

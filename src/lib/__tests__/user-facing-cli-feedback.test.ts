@@ -61,6 +61,15 @@ describe('user-facing-cli-feedback', () => {
     expect(message).toBe('ClawHub 当前请求过于频繁，已被限流，请稍后再试。')
   })
 
+  it('surfaces timeout failures before falling back to generic network wording', () => {
+    const message = toUserFacingCliFailureMessage({
+      stderr: 'gateway request timeout for chat.send',
+      fallback: 'fallback',
+    })
+
+    expect(message).toBe('请求超时，请稍后重试。若持续失败，请检查 Gateway 与当前模型服务状态。')
+  })
+
   it('surfaces the busy skill mutation hint emitted by the main process marker', () => {
     const message = toUserFacingCliFailureMessage({
       stderr: [

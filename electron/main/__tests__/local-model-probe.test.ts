@@ -4,10 +4,12 @@ import {
   ensureLocalAuthProfile,
   extractAuthStorePathFromModelStatus,
   inspectModelAuthProfilesByProvider,
+  migrateAuthProfile,
   repairAgentAuthProfilesFromOtherAgentStores,
   repairMainAuthProfilesFromOtherAgentStores,
   resolveMainAuthStorePath,
   resolveLocalAuthStorePath,
+  resolvePreferredAuthStorePathFromHomeDir,
   testLocalConnection,
   upsertApiKeyAuthProfile,
 } from '../local-model-probe'
@@ -90,6 +92,43 @@ describe('resolveLocalAuthStorePath', () => {
 
     expect(result).toBe(path.join('/tmp/openclaw/profiles/team-b', 'agents', 'main', 'agent', 'auth-profiles.json'))
   })
+
+  it('prefers the nested runtime auth store when the managed state root contains .openclaw', async () => {
+    const result = await resolveLocalAuthStorePath({
+      getModelStatusCommand: async () => ({
+        ok: false,
+        stdout: '',
+        stderr: 'status unavailable',
+        code: 1,
+      }),
+      resolveRuntimePaths: async () => ({
+        homeDir: '/tmp/openclaw/profiles/team-c',
+      }),
+      pathExists: async (targetPath) => targetPath.replace(/\\/g, '/') === '/tmp/openclaw/profiles/team-c/.openclaw',
+    })
+
+    expect(result).toBe(
+      path.join('/tmp/openclaw/profiles/team-c', '.openclaw', 'agents', 'main', 'agent', 'auth-profiles.json')
+    )
+  })
+
+  it('does not append a second .openclaw segment when the runtime home is already the state root', async () => {
+    const result = await resolveLocalAuthStorePath({
+      getModelStatusCommand: async () => ({
+        ok: false,
+        stdout: '',
+        stderr: 'status unavailable',
+        code: 1,
+      }),
+      resolveRuntimePaths: async () => ({
+        homeDir: '/tmp/openclaw/profiles/team-c/.openclaw',
+      }),
+    })
+
+    expect(result).toBe(
+      path.join('/tmp/openclaw/profiles/team-c', '.openclaw', 'agents', 'main', 'agent', 'auth-profiles.json')
+    )
+  })
 })
 
 describe('resolveMainAuthStorePath', () => {
@@ -127,6 +166,34 @@ describe('resolveMainAuthStorePath', () => {
     })
 
     expect(result).toBe(path.join('/tmp/openclaw/profiles/team-b', 'agents', 'main', 'agent', 'auth-profiles.json'))
+  })
+})
+
+describe('resolvePreferredAuthStorePathFromHomeDir', () => {
+  it('returns an existing nested auth store before the legacy flat path', async () => {
+    const nestedPath = path.join(
+      '/tmp/openclaw/profiles/team-d',
+      '.openclaw',
+      'agents',
+      'main',
+      'agent',
+      'auth-profiles.json'
+    )
+    const result = await resolvePreferredAuthStorePathFromHomeDir('/tmp/openclaw/profiles/team-d', {
+      pathExists: async (targetPath) => targetPath === nestedPath,
+    })
+
+    expect(result).toBe(nestedPath)
+  })
+
+  it('keeps the current state root when the incoming homeDir already points at .openclaw', async () => {
+    const result = await resolvePreferredAuthStorePathFromHomeDir('/tmp/openclaw/profiles/team-e/.openclaw', {
+      pathExists: async () => false,
+    })
+
+    expect(result).toBe(
+      path.join('/tmp/openclaw/profiles/team-e', '.openclaw', 'agents', 'main', 'agent', 'auth-profiles.json')
+    )
   })
 })
 
@@ -194,6 +261,113 @@ describe('ensureLocalAuthProfile', () => {
       provider: 'custom-openai',
       key: 'custom-local',
     })
+  })
+
+  it('writes a real deepseek profile via the main auth-store path', async () => {
+    let writtenPath = ''
+    const written = { value: null as Record<string, any> | null }
+
+    const readFileSpy = vi.fn(async () => {
+      throw new Error('ENOENT')
+    })
+    const writeJsonSpy = vi.fn(async (filePath: unknown, value: unknown) => {
+      writtenPath = String(filePath || '')
+      written.value = value as Record<string, any>
+    })
+
+    const result = await ensureLocalAuthProfile(
+      {
+        provider: 'deepseek',
+        apiKey: 'sk-deepseek-live',
+      },
+      {
+        authStorePath: '/tmp/openclaw/profiles/team-a/agents/main/agent/auth-profiles.json',
+        readFileFn: readFileSpy as any,
+        writeJsonFn: writeJsonSpy as any,
+      }
+    )
+
+    expect(result).toMatchObject({
+      ok: true,
+      created: true,
+      profileId: 'deepseek:default',
+    })
+    expect(writtenPath).toBe('/tmp/openclaw/profiles/team-a/agents/main/agent/auth-profiles.json')
+
+    if (!written.value) throw new Error('expected writeJsonFn to receive a JSON payload')
+    expect(written.value.profiles['deepseek:default']).toEqual({
+      type: 'api_key',
+      provider: 'deepseek',
+      key: 'sk-deepseek-live',
+    })
+  })
+})
+
+describe('migrateAuthProfile', () => {
+  it('moves a real custom-openai profile to deepseek and removes the stale source entry', async () => {
+    let writtenPath = ''
+    const written = { value: null as Record<string, any> | null }
+
+    const readFileSpy = vi.fn(async () =>
+      JSON.stringify({
+        version: 1,
+        profiles: {
+          'custom-openai:local': {
+            type: 'api_key',
+            provider: 'custom-openai',
+            key: 'sk-deepseek-live',
+          },
+        },
+        lastGood: {
+          'custom-openai': 'custom-openai:local',
+        },
+        usageStats: {
+          'custom-openai:local': {
+            total: 1,
+          },
+        },
+      })
+    )
+    const writeJsonSpy = vi.fn(async (filePath: unknown, value: unknown) => {
+      writtenPath = String(filePath || '')
+      written.value = value as Record<string, any>
+    })
+
+    const result = await migrateAuthProfile(
+      {
+        fromProvider: 'custom-openai',
+        toProvider: 'deepseek',
+        fromProfileId: 'custom-openai:local',
+        toProfileId: 'deepseek:default',
+        deleteSourceProfile: true,
+        authStorePath: '/tmp/openclaw/profiles/team-a/agents/main/agent/auth-profiles.json',
+      },
+      {
+        readFileFn: readFileSpy as any,
+        writeJsonFn: writeJsonSpy as any,
+      }
+    )
+
+    expect(result).toMatchObject({
+      ok: true,
+      migrated: true,
+      fromProfileId: 'custom-openai:local',
+      toProfileId: 'deepseek:default',
+    })
+    expect(writtenPath).toBe('/tmp/openclaw/profiles/team-a/agents/main/agent/auth-profiles.json')
+
+    if (!written.value) throw new Error('expected writeJsonFn to receive a JSON payload')
+    expect(written.value.profiles).toEqual({
+      'deepseek:default': {
+        type: 'api_key',
+        provider: 'deepseek',
+        key: 'sk-deepseek-live',
+      },
+    })
+    expect(written.value.lastGood).toEqual({
+      deepseek: 'deepseek:default',
+    })
+    expect(written.value.usageStats).toEqual({})
   })
 })
 
@@ -342,8 +516,20 @@ describe('repairMainAuthProfilesFromOtherAgentStores', () => {
 
 describe('repairAgentAuthProfilesFromOtherAgentStores', () => {
   it('copies minimax-portal oauth auth when repair is requested for canonical minimax', async () => {
-    const channelDefaultAuthStorePath = '/tmp/openclaw/profiles/team-a/agents/channel-default/agent/auth-profiles.json'
-    const channelBotAuthStorePath = '/tmp/openclaw/profiles/team-a/agents/channel-bot/agent/auth-profiles.json'
+    const channelDefaultAuthStorePath = path.join(
+      '/tmp/openclaw/profiles/team-a',
+      'agents',
+      'channel-default',
+      'agent',
+      'auth-profiles.json'
+    )
+    const channelBotAuthStorePath = path.join(
+      '/tmp/openclaw/profiles/team-a',
+      'agents',
+      'channel-bot',
+      'agent',
+      'auth-profiles.json'
+    )
     let writeCount = 0
     let writtenPath = ''
     const written = { value: null as Record<string, any> | null }
@@ -414,7 +600,13 @@ describe('repairAgentAuthProfilesFromOtherAgentStores', () => {
   })
 
   it('ignores unsafe target agent ids that would escape the agents directory', async () => {
-    const channelDefaultAuthStorePath = '/tmp/openclaw/profiles/team-a/agents/channel-default/agent/auth-profiles.json'
+    const channelDefaultAuthStorePath = path.join(
+      '/tmp/openclaw/profiles/team-a',
+      'agents',
+      'channel-default',
+      'agent',
+      'auth-profiles.json'
+    )
     const writeJsonSpy = vi.fn(async () => undefined)
 
     const readFileSpy = vi.fn(async (filePath: unknown) => {
@@ -463,8 +655,20 @@ describe('repairAgentAuthProfilesFromOtherAgentStores', () => {
   })
 
   it('keeps non-minimax provider repair exact and does not pull sibling aliases', async () => {
-    const channelDefaultAuthStorePath = '/tmp/openclaw/profiles/team-a/agents/channel-default/agent/auth-profiles.json'
-    const channelBotAuthStorePath = '/tmp/openclaw/profiles/team-a/agents/channel-bot/agent/auth-profiles.json'
+    const channelDefaultAuthStorePath = path.join(
+      '/tmp/openclaw/profiles/team-a',
+      'agents',
+      'channel-default',
+      'agent',
+      'auth-profiles.json'
+    )
+    const channelBotAuthStorePath = path.join(
+      '/tmp/openclaw/profiles/team-a',
+      'agents',
+      'channel-bot',
+      'agent',
+      'auth-profiles.json'
+    )
     const writeJsonSpy = vi.fn(async () => undefined)
 
     const readFileSpy = vi.fn(async (filePath: unknown) => {

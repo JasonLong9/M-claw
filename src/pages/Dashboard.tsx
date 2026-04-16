@@ -4,9 +4,10 @@ import { notifications } from '@mantine/notifications'
 import { IconChevronRight, IconRefresh } from '@tabler/icons-react'
 import { getChannelDefinition } from '../lib/openclaw-channel-registry'
 import { getManagedChannelPluginByChannelId } from '../shared/managed-channel-plugin-registry'
-import { pollWithBackoff } from '../shared/polling'
-import { UI_RUNTIME_DEFAULTS, type BackoffPollingPolicy } from '../shared/runtime-policies'
+import { resolveEffectiveGatewayRunning } from '../shared/gateway-effective-running'
 import { runManagedChannelRepairFlow } from '../shared/managed-channel-repair'
+import { waitForDashboardGatewayRunning } from '../shared/dashboard-gateway-wait'
+import { markChatGatewayWarmupHint } from '../shared/chat-gateway-warmup-hint'
 import { runDashboardInitialLoad } from './dashboard-initial-load'
 import {
   buildModelCatalogDisplaySummary,
@@ -16,13 +17,10 @@ import {
 } from '../lib/model-catalog-display'
 import { listAllModelCatalogItems } from '../lib/model-catalog-pagination'
 import {
-  buildEffectiveModelCatalog,
-  buildModelsPageConfiguredProviders,
-  filterModelsPageCatalogByConfiguredProviders,
-  filterConfiguredProvidersWithVisibleModels,
   getModelsPageProviderModels,
   resolveConfiguredProviderRuntimeState,
   resolveModelsPageActiveModel,
+  resolveModelsPageCatalogState,
   resolveVisibleConfiguredActiveModel,
 } from './models-page-state'
 import { applyDefaultModelWithGatewayReload } from '../shared/model-config-gateway'
@@ -78,13 +76,6 @@ function toDashboardCatalogModel(item: {
     provider: item.provider,
     available: item.available !== false,
   }
-}
-
-interface DashboardGatewayHealthLike {
-  running?: boolean
-  summary?: string
-  stderr?: string
-  raw?: string
 }
 
 type PluginRepairResult = Awaited<ReturnType<typeof window.api.repairIncompatiblePlugins>>
@@ -182,7 +173,7 @@ export const DASHBOARD_PLUGIN_ACTIONS: DashboardPluginActionDefinition[] = [
   {
     id: 'qqbot',
     channelName: 'QQ',
-    buttonLabel: '修复QQ插件',
+    buttonLabel: '修复 QQ 插件',
     installKind: 'package',
     installTarget: getManagedChannelPluginByChannelId('qqbot')?.packageName || '@tencent-connect/openclaw-qqbot@latest',
     expectedPluginIds: ['openclaw-qqbot', 'qqbot'],
@@ -227,8 +218,8 @@ function buildWeixinInstallerOutcome(accountCount: number): DashboardPluginInsta
       ? `微信官方安装器已完成，并新增 ${accountCount} 个微信账号。`
       : '微信官方安装器已完成。',
     log: accountCount > 0
-      ? `✅ 微信官方安装器已完成，新增 ${accountCount} 个微信账号`
-      : '✅ 微信官方安装器已完成',
+      ? `已完成微信官方安装器处理，并新增 ${accountCount} 个微信账号`
+      : '已完成微信官方安装器处理',
   }
 }
 
@@ -296,7 +287,7 @@ export async function waitForDashboardWeixinInstallerCompletion(
       if (snapshot.ok && !snapshot.canceled) {
         finishResolve(buildWeixinInstallerOutcome(snapshot.newAccountIds.length))
       } else {
-        finishReject(new Error(snapshot.output || '个人微信安装器未完成，请重试。'))
+        finishReject(new Error(snapshot.output || '微信官方安装器未完成，请重试。'))
       }
       return true
     }
@@ -332,7 +323,7 @@ export async function waitForDashboardWeixinInstallerCompletion(
 
       void pollInstallerState().then(() => {
         if (!settled) {
-          finishReject(new Error('个人微信安装器未完成，请重试。'))
+          finishReject(new Error('微信官方安装器未完成，请重试。'))
         }
       })
     })
@@ -351,7 +342,7 @@ export async function waitForDashboardWeixinInstallerCompletion(
 
         const startedSnapshot = await api.startWeixinInstaller()
         if (!startedSnapshot.sessionId) {
-          finishReject(new Error(startedSnapshot.output || '个人微信安装器启动失败'))
+          finishReject(new Error(startedSnapshot.output || '微信官方安装器启动失败'))
           return
         }
 
@@ -363,7 +354,7 @@ export async function waitForDashboardWeixinInstallerCompletion(
         }
 
         if (!startedSnapshot.active && startedSnapshot.phase !== 'running') {
-          finishReject(new Error(startedSnapshot.output || '个人微信安装器启动失败'))
+          finishReject(new Error(startedSnapshot.output || '微信官方安装器启动失败'))
           return
         }
 
@@ -373,45 +364,6 @@ export async function waitForDashboardWeixinInstallerCompletion(
       }
     })()
   })
-}
-
-export async function waitForDashboardGatewayRunning(
-  api: {
-    gatewayHealth: () => Promise<DashboardGatewayHealthLike>
-  },
-  options: {
-    policy?: BackoffPollingPolicy
-  } = {}
-): Promise<{ ok: true; health: DashboardGatewayHealthLike } | { ok: false; message: string }> {
-  let lastHealth: DashboardGatewayHealthLike | null = null
-  const readiness = await pollWithBackoff({
-    policy: options.policy || UI_RUNTIME_DEFAULTS.gatewayReadiness.poll,
-    execute: async () => {
-      lastHealth = await api.gatewayHealth().catch(() => ({
-        running: false,
-        summary: 'Gateway 尚未确认可用',
-      }))
-      return lastHealth
-    },
-    isSuccess: (value) => value?.running === true,
-  })
-
-  if (readiness.ok && readiness.value) {
-    return {
-      ok: true,
-      health: readiness.value,
-    }
-  }
-
-  const failedHealth = readiness.value || lastHealth
-  return {
-    ok: false,
-    message:
-      String(failedHealth?.summary || '').trim() ||
-      String(failedHealth?.stderr || '').trim() ||
-      String(failedHealth?.raw || '').trim() ||
-      'Gateway 尚未确认可用',
-  }
 }
 
 function extractChannelsFromConfig(config: Record<string, any> | null): ChannelInfo[] {
@@ -472,28 +424,25 @@ export default function Dashboard({
   const pluginCenterProgressRef = useRef(0)
   const pluginCenterProgressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const activeModelHint = resolveModelsPageActiveModel(modelStatus, config)
-  const locallyConfiguredProviders = buildModelsPageConfiguredProviders({
+  const {
+    effectiveCatalog,
+    visibleCatalog,
+    scopedCatalog: configuredCatalog,
+    configuredProviders: locallyConfiguredProviders,
+  } = resolveModelsPageCatalogState({
+    catalog,
     envVars,
     config,
     statusData: modelStatus,
-  })
-  const effectiveCatalog = buildEffectiveModelCatalog(catalog, {
-    statusData: modelStatus,
-    preferredModelKey: activeModelHint,
-    configuredProviderIds: locallyConfiguredProviders.map((provider) => provider.id),
     verificationRecords,
+    preferredModelKey: activeModelHint,
+    mode: catalogMode,
   })
-  const visibleCatalog = filterCatalogForDisplay(effectiveCatalog, catalogMode)
-  const providers: ModelProvider[] = filterConfiguredProvidersWithVisibleModels(
-    locallyConfiguredProviders,
-    visibleCatalog,
-    effectiveCatalog
-  ).map((provider) => ({
+  const providers: ModelProvider[] = locallyConfiguredProviders.map((provider) => ({
     id: provider.id,
     name: provider.name,
     logo: provider.logo,
   }))
-  const configuredCatalog = filterModelsPageCatalogByConfiguredProviders(effectiveCatalog, providers)
   const catalogSummary = buildModelCatalogDisplaySummary(configuredCatalog, catalogMode)
   const displayedPluginRepairResult = selectDashboardPluginRepairResult(pluginRepairResult, pluginCenterRepairResult)
   const pluginRepairErrorSummary =
@@ -520,10 +469,53 @@ export default function Dashboard({
 
   const fetchGatewayStatus = async () => {
     try {
-      const health = await window.api.gatewayHealth()
-      setGateway({ running: health.running || false })
+      const [availabilityResult, healthResult, runtimeResult] = await Promise.allSettled([
+        window.api.getChatAvailability(),
+        window.api.gatewayHealth(),
+        window.api.getOpenClawRuntimeReconcileState(),
+      ])
+      const availabilityRunning =
+        availabilityResult.status === 'fulfilled'
+          ? Boolean(availabilityResult.value?.gatewayRunning)
+          : null
+      const healthRunning = healthResult.status === 'fulfilled' ? Boolean(healthResult.value?.running) : false
+      const runtimeStore = runtimeResult.status === 'fulfilled' ? runtimeResult.value : null
+      setGateway({
+        running:
+          availabilityRunning ??
+          resolveEffectiveGatewayRunning({
+            healthRunning,
+            runtimeStore,
+          }),
+      })
     } catch (e) {
-      console.error('获取网关状态失败:', e)
+      console.error('获取网关状态失败', e)
+    }
+  }
+
+  const confirmGatewayReadyAfterCompatibleRecovery = async (): Promise<boolean> => {
+    try {
+      const [availabilityResult, healthResult, runtimeResult] = await Promise.allSettled([
+        window.api.getChatAvailability(),
+        window.api.gatewayHealth(),
+        window.api.getOpenClawRuntimeReconcileState(),
+      ])
+      const availabilityRunning =
+        availabilityResult.status === 'fulfilled'
+          ? Boolean(availabilityResult.value?.gatewayRunning)
+          : null
+      const healthRunning = healthResult.status === 'fulfilled' ? Boolean(healthResult.value?.running) : false
+      const runtimeStore = runtimeResult.status === 'fulfilled' ? runtimeResult.value : null
+      const running =
+        availabilityRunning ??
+        resolveEffectiveGatewayRunning({
+          healthRunning,
+          runtimeStore,
+        })
+      setGateway({ running })
+      return running
+    } catch {
+      return false
     }
   }
 
@@ -592,7 +584,7 @@ export default function Dashboard({
         setVerificationRecords(verificationSnapshot.records)
       }
     } catch (e) {
-      console.error('刷新模型状态失败:', e)
+      console.error('刷新模型状态失败', e)
       const verificationSnapshot = await window.api.syncModelVerificationState({
         statusData: null,
       }).catch(() => null)
@@ -714,9 +706,17 @@ export default function Dashboard({
           upstreamItems,
         }))
         setCatalogLastUpdatedAt(new Date().toISOString())
-        setCatalogRefreshError(options?.forceRefresh ? '模型目录强制刷新失败，已回退到上游目录快照' : '模型目录刷新失败，已回退到上游目录快照')
+        setCatalogRefreshError(
+          options?.forceRefresh
+            ? '模型目录强制刷新失败，已回退到上游目录快照'
+            : '模型目录刷新失败，已回退到上游目录快照'
+        )
       } else {
-        setCatalogRefreshError(options?.forceRefresh ? '模型目录强制刷新失败，已保留当前显示数据' : '模型目录刷新失败，已保留当前显示数据')
+        setCatalogRefreshError(
+          options?.forceRefresh
+            ? '模型目录强制刷新失败，已保留当前显示数据'
+            : '模型目录刷新失败，已保留当前显示数据'
+        )
       }
     } finally {
       if (catalogRequestIdRef.current === requestId) {
@@ -828,17 +828,33 @@ export default function Dashboard({
       message: '正在执行网关重载，请稍候...',
     })
     try {
-      const result = await window.api.reloadGatewayManual()
-      if (!result?.ok) {
-        throw new Error(result?.stderr || result?.stdout || '网关重载失败')
+      if (gateway.running) {
+        const result = await window.api.reloadGatewayManual()
+        if (!result?.ok) {
+          throw new Error(result?.summary || result?.stderr || result?.stdout || '网关重载失败')
+        }
+        const readyResult = await waitForDashboardGatewayRunning({
+          gatewayHealth: () => window.api.gatewayHealth(),
+          getOpenClawRuntimeReconcileState: () => window.api.getOpenClawRuntimeReconcileState(),
+        })
+        const compatibleRecovered = !readyResult.ok
+          ? await confirmGatewayReadyAfterCompatibleRecovery()
+          : false
+        if (!readyResult.ok && !compatibleRecovered) {
+          throw new Error(`网关重载命令已执行，但当前仍未确认可用：${readyResult.message}`)
+        }
+      } else {
+        const result = await window.api.ensureGatewayRunning()
+        const compatibleRecovered = (!result?.ok || result.running !== true)
+          ? await confirmGatewayReadyAfterCompatibleRecovery()
+          : false
+        if ((!result?.ok || result.running !== true) && !compatibleRecovered) {
+          throw new Error(result?.summary || result?.stderr || result?.stdout || '网关启动失败')
+        }
       }
-      const readyResult = await waitForDashboardGatewayRunning({
-        gatewayHealth: () => window.api.gatewayHealth(),
-      })
-      if (!readyResult.ok) {
-        throw new Error(`网关重载命令已执行，但 ${readyResult.message}`)
-      }
+      markChatGatewayWarmupHint()
       await fetchGatewayStatus()
+      await fetchConfig()
       notifications.hide(notificationId)
       notifications.show({
         color: 'teal',
@@ -864,7 +880,7 @@ export default function Dashboard({
     try {
       await window.api.openDashboard()
     } catch (e) {
-      console.error('打开开发者面板失败:', e)
+      console.error('打开开发者面板失败', e)
     }
   }
 
@@ -872,7 +888,7 @@ export default function Dashboard({
     try {
       await window.api.openOpenClawWorkspace()
     } catch (e) {
-      console.error('打开工作区失败:', e)
+      console.error('打开工作区失败', e)
     }
   }
 
@@ -892,10 +908,15 @@ export default function Dashboard({
       }
       const readyResult = await waitForDashboardGatewayRunning({
         gatewayHealth: () => window.api.gatewayHealth(),
+        getOpenClawRuntimeReconcileState: () => window.api.getOpenClawRuntimeReconcileState(),
       })
-      if (!readyResult.ok) {
-        throw new Error(`强制重启命令已执行，但 ${readyResult.message}`)
+      const compatibleRecovered = !readyResult.ok
+        ? await confirmGatewayReadyAfterCompatibleRecovery()
+        : false
+      if (!readyResult.ok && !compatibleRecovered) {
+        throw new Error(`强制重启命令已执行，但当前仍未确认可用：${readyResult.message}`)
       }
+      markChatGatewayWarmupHint()
       await fetchGatewayStatus()
       notifications.hide(notificationId)
       notifications.show({
@@ -929,9 +950,13 @@ export default function Dashboard({
     })
     try {
       const result = await window.api.ensureGatewayRunning()
-      if (!result?.ok || !result?.running) {
+      const compatibleRecovered = (!result?.ok || !result?.running)
+        ? await confirmGatewayReadyAfterCompatibleRecovery()
+        : false
+      if ((!result?.ok || !result?.running) && !compatibleRecovered) {
         throw new Error(result?.summary || result?.stderr || result?.stdout || '自检修复未完成')
       }
+      markChatGatewayWarmupHint()
       await fetchGatewayStatus()
       notifications.hide(notificationId)
       notifications.show({
@@ -981,7 +1006,7 @@ export default function Dashboard({
     setPluginCenterPreserveStateOnNextOpen(false)
     setPluginCenterActionId(action.id)
     setPluginCenterPhaseTitle(`正在修复 ${action.channelName} 插件`)
-    setPluginCenterPhaseDetail('先检查坏插件环境，再安装对应官方插件。')
+    setPluginCenterPhaseDetail('先检查插件环境，再安装对应的官方插件。')
     setPluginCenterError('')
     setPluginCenterSummary('')
     setPluginCenterLog('')
@@ -993,8 +1018,8 @@ export default function Dashboard({
       setPluginCenterPhaseTitle(`正在检查 ${action.channelName} 插件状态`)
       setPluginCenterPhaseDetail(
         action.installKind === 'weixin-installer'
-          ? '将优先执行托管插件修复；如遇交互式插件，会继续拉起官方安装器。'
-          : '当前插件将通过统一托管生命周期执行修复与状态校验。'
+          ? '会优先执行托管插件修复；如遇交互式插件，会继续拉起官方安装器。'
+          : '当前插件会通过统一托管生命周期执行修复与状态校验。'
       )
       startPluginCenterProgressTimer(8, 88, 2, 240)
 
@@ -1015,7 +1040,10 @@ export default function Dashboard({
           if (isDashboardPluginCenterRepairableReloadState(reloadResult.stateCode)) {
             appendPluginCenterLog(`⚠️ Gateway 重载命中可修复状态：${reloadResult.summary || reloadResult.stderr || '待继续复检'}`)
             const ensureResult = await window.api.ensureGatewayRunning({ skipRuntimePrecheck: true })
-            if (!ensureResult.ok || ensureResult.running !== true) {
+            const compatibleRecovered = (!ensureResult.ok || ensureResult.running !== true)
+              ? await confirmGatewayReadyAfterCompatibleRecovery()
+              : false
+            if ((!ensureResult.ok || ensureResult.running !== true) && !compatibleRecovered) {
               throw new Error(
                 ensureResult.summary
                   || ensureResult.stderr
@@ -1023,6 +1051,7 @@ export default function Dashboard({
                   || 'Gateway 重载失败'
               )
             }
+            markChatGatewayWarmupHint()
             const targetStatus = await window.api.getManagedChannelPluginStatus(action.id)
             if (!hasVerifiedManagedChannelInstall(targetStatus)) {
               throw new Error(targetStatus.summary || `${action.channelName} 插件仍未确认安装`)
@@ -1035,13 +1064,15 @@ export default function Dashboard({
                 || 'Gateway 重载失败'
             )
           }
+        } else {
+          markChatGatewayWarmupHint()
         }
       }
       await fetchGatewayStatus()
       await fetchConfig()
       stopPluginCenterProgressTimer(100)
 
-      const finalSummary = installOutcome.summary || `${action.channelName} 插件处理完成。`
+      const finalSummary = installOutcome.summary || `${action.channelName} 插件处理完成`
       setPluginCenterSummary(finalSummary)
       setPluginCenterPhaseTitle(`${action.channelName} 插件处理完成`)
       setPluginCenterPhaseDetail('你可以继续处理其他插件，或关闭当前弹窗。')
@@ -1057,7 +1088,7 @@ export default function Dashboard({
       setPluginCenterError(message)
       setPluginCenterPhaseTitle(`${action.channelName} 插件处理失败`)
       setPluginCenterPhaseDetail('可以稍后重试，或根据错误信息继续排查。')
-      appendPluginCenterLog(`❌ ${action.channelName} 插件处理失败：${message}`)
+      appendPluginCenterLog(`插件处理失败：${action.channelName} - ${message}`)
       notifications.show({
         color: 'red',
         title: `${action.channelName} 插件处理失败`,
@@ -1098,7 +1129,7 @@ export default function Dashboard({
         <Alert
           color="yellow"
           variant="light"
-          title="已自动隔离坏插件"
+          title="已自动隔离损坏插件"
           withCloseButton
           onClose={() => setPluginRepairNoticeVisible(false)}
         >
@@ -1109,7 +1140,7 @@ export default function Dashboard({
         <Alert
           color="red"
           variant="light"
-          title="坏插件环境修复失败"
+          title="插件环境修复失败"
           withCloseButton
           onClose={() => setPluginRepairErrorVisible(false)}
         >
@@ -1263,7 +1294,7 @@ export default function Dashboard({
                 fullWidth
                 className="cursor-pointer"
               >
-                打开工作区文件夹 (~/.openclaw)
+                打开 OpenClaw 工作区
               </Button>
             </Tooltip>
           </div>
@@ -1327,7 +1358,7 @@ export default function Dashboard({
                   onChange={(value) => setCatalogMode(value as ModelCatalogDisplayMode)}
                   data={[
                     { label: '可用', value: 'available' },
-                    { label: '全量', value: 'all' },
+                    { label: '全部', value: 'all' },
                   ]}
                 />
                 <Tooltip label="刷新模型目录" withArrow>
@@ -1347,7 +1378,7 @@ export default function Dashboard({
               <Text size="xs" c="dimmed">{catalogSummary.visibleCount}</Text>
             </Group>
             <Text size="xs" c="dimmed">
-              {catalogSummary.label} · {catalogSummary.detail}
+              {catalogSummary.label} 路 {catalogSummary.detail}
             </Text>
             <Text size="xs" c="dimmed">
               {catalogRefreshLabel}
@@ -1516,7 +1547,7 @@ export default function Dashboard({
         </Collapse>
       </div>
 
-      {/* 切换模型确认框 */}
+      {/* 插件修复中心 */}
       <Modal
         opened={pluginCenterOpened}
         onClose={handleClosePluginCenter}
@@ -1528,7 +1559,7 @@ export default function Dashboard({
         withCloseButton={!pluginCenterRunning}
       >
         <Text size="sm" className="app-text-secondary" mb="md">
-          选择一个渠道后，Qclaw 会先检查并修复坏插件环境，再安装对应插件。整个过程中都会显示进度条。
+          选择一个渠道后，Mclaw 会先检查并修复损坏插件环境，再安装对应插件。整个过程中都会显示进度条。
         </Text>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -1601,7 +1632,7 @@ export default function Dashboard({
 
         <Group justify="space-between" align="flex-start" gap="sm" mt="md">
           <Text size="xs" c="dimmed" style={{ flex: 1 }}>
-            {pluginCenterRunning ? '关闭后修复流程会继续在后台执行，你可以稍后再次打开查看进度。' : ''}
+            {pluginCenterRunning ? '关闭后修复流程仍会继续在后台执行，你可以稍后再次打开查看进度。' : ''}
           </Text>
           <Button variant="default" size="xs" onClick={handleClosePluginCenter}>
             {pluginCenterRunning ? '关闭窗口' : '关闭'}
@@ -1617,7 +1648,7 @@ export default function Dashboard({
         size="xs"
       >
         <Text size="sm" className="app-text-secondary" mb="md">
-          确认将默认模型切换为 <Text span fw={600} className="app-text-primary">{confirmModel}</Text> ?
+          确认将默认模型切换为 <Text span fw={600} className="app-text-primary">{confirmModel}</Text> 吗？
         </Text>
         <Group justify="flex-end" gap="xs">
           <Button variant="default" size="xs" onClick={() => setConfirmModel('')}>取消</Button>
@@ -1627,3 +1658,5 @@ export default function Dashboard({
     </div>
   )
 }
+
+

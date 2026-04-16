@@ -7,6 +7,11 @@ import {
   OPENCLAW_WEBCHAT_CLIENT_VERSION,
 } from '../gateway-streaming-chat-transport'
 
+const fs = process.getBuiltinModule('node:fs') as typeof import('node:fs')
+const os = process.getBuiltinModule('node:os') as typeof import('node:os')
+const path = process.getBuiltinModule('node:path') as typeof import('node:path')
+const { mkdtemp, rm, writeFile } = fs.promises
+
 class FakeWebSocket {
   static readonly CONNECTING = 0
   static readonly OPEN = 1
@@ -258,6 +263,164 @@ describe('gateway streaming chat transport', () => {
     expect(JSON.parse(result.stdout).sessionKey).toBe(explicitSessionKey)
   })
 
+  it('forwards extra system prompt guidance through gateway chat.send', async () => {
+    let sentExtraSystemPrompt = ''
+    const transport = createGatewayStreamingChatTransport({
+      readConfig: async () => ({
+        gateway: {
+          port: 18789,
+          auth: {
+            token: 'gateway-token',
+          },
+        },
+      }),
+      readEnvFile: async () => ({}),
+      loadGatewayRuntime: async () => null,
+      createSocket: () =>
+        new FakeWebSocket((frame, socket) => {
+          if (frame.method === 'connect') {
+            socket.emit('message', {
+              data: JSON.stringify({
+                type: 'res',
+                id: frame.id,
+                ok: true,
+              }),
+            })
+            return
+          }
+
+          if (frame.method === 'chat.send') {
+            sentExtraSystemPrompt = String(frame.params?.extraSystemPrompt || '')
+            socket.emit('message', {
+              data: JSON.stringify({
+                type: 'res',
+                id: frame.id,
+                ok: true,
+                payload: {
+                  runId: 'run-extra-system-prompt',
+                },
+              }),
+            })
+
+            socket.emit('message', {
+              data: JSON.stringify({
+                type: 'event',
+                event: 'chat.stream',
+                payload: {
+                  runId: 'run-extra-system-prompt',
+                  sessionKey: 'agent:main:session-extra-system-prompt',
+                  seq: 1,
+                  state: 'final',
+                  message: {
+                    text: '截图已完成',
+                    model: 'zai/glm-5',
+                  },
+                },
+              }),
+            })
+          }
+        }) as unknown as WebSocket,
+    })
+
+    const result = await transport.run({
+      transportSessionId: 'session-extra-system-prompt',
+      messageText: '请截图',
+      extraSystemPrompt: 'Use viewport screenshots only.',
+      thinking: 'off',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(sentExtraSystemPrompt).toBe('Use viewport screenshots only.')
+  })
+
+  it('retries chat.send without extra system prompt when legacy gateway rejects the field', async () => {
+    const sentPayloads: Array<Record<string, unknown>> = []
+    const transport = createGatewayStreamingChatTransport({
+      readConfig: async () => ({
+        gateway: {
+          port: 18789,
+          auth: {
+            token: 'gateway-token',
+          },
+        },
+      }),
+      readEnvFile: async () => ({}),
+      loadGatewayRuntime: async () => null,
+      createSocket: () =>
+        new FakeWebSocket((frame, socket) => {
+          if (frame.method === 'connect') {
+            socket.emit('message', {
+              data: JSON.stringify({
+                type: 'res',
+                id: frame.id,
+                ok: true,
+              }),
+            })
+            return
+          }
+
+          if (frame.method === 'chat.send') {
+            sentPayloads.push({ ...((frame.params || {}) as Record<string, unknown>) })
+
+            if (sentPayloads.length === 1) {
+              socket.emit('message', {
+                data: JSON.stringify({
+                  type: 'res',
+                  id: frame.id,
+                  ok: false,
+                  error: {
+                    message:
+                      "invalid chat.send params: at root: unexpected property 'extraSystemPrompt'",
+                  },
+                }),
+              })
+              return
+            }
+
+            socket.emit('message', {
+              data: JSON.stringify({
+                type: 'res',
+                id: frame.id,
+                ok: true,
+                payload: {
+                  runId: 'run-extra-system-prompt-retry',
+                },
+              }),
+            })
+
+            socket.emit('message', {
+              data: JSON.stringify({
+                type: 'event',
+                event: 'chat.stream',
+                payload: {
+                  runId: 'run-extra-system-prompt-retry',
+                  sessionKey: 'agent:main:session-extra-system-prompt-retry',
+                  seq: 1,
+                  state: 'final',
+                  message: {
+                    text: 'screenshot captured',
+                    model: 'zai/glm-5',
+                  },
+                },
+              }),
+            })
+          }
+        }) as unknown as WebSocket,
+    })
+
+    const result = await transport.run({
+      transportSessionId: 'session-extra-system-prompt-retry',
+      messageText: 'please capture a screenshot',
+      extraSystemPrompt: 'Use viewport screenshots only.',
+      thinking: 'off',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(sentPayloads).toHaveLength(2)
+    expect(sentPayloads[0]?.extraSystemPrompt).toBe('Use viewport screenshots only.')
+    expect(sentPayloads[1]).not.toHaveProperty('extraSystemPrompt')
+  })
+
   it('ignores structured tool payloads from gateway chat events', async () => {
     const onAssistantDelta = vi.fn()
     const transport = createGatewayStreamingChatTransport({
@@ -328,6 +491,85 @@ describe('gateway streaming chat transport', () => {
     expect(result.ok).toBe(true)
     expect(result.streamedText).toBe('')
     expect(onAssistantDelta).not.toHaveBeenCalled()
+  })
+
+  it('keeps image-only control-ui blocks from gateway chat events', async () => {
+    const transport = createGatewayStreamingChatTransport({
+      readConfig: async () => ({
+        gateway: {
+          port: 18789,
+          auth: {
+            token: 'gateway-token',
+          },
+        },
+      }),
+      readEnvFile: async () => ({}),
+      loadGatewayRuntime: async () => null,
+      createSocket: () =>
+        new FakeWebSocket((frame, socket) => {
+          if (frame.method === 'connect') {
+            socket.emit('message', {
+              data: JSON.stringify({
+                type: 'res',
+                id: frame.id,
+                ok: true,
+              }),
+            })
+            return
+          }
+
+          if (frame.method === 'chat.send') {
+            socket.emit('message', {
+              data: JSON.stringify({
+                type: 'res',
+                id: frame.id,
+                ok: true,
+                payload: {
+                  runId: 'run-image-block',
+                },
+              }),
+            })
+
+            socket.emit('message', {
+              data: JSON.stringify({
+                type: 'event',
+                event: 'chat.stream',
+                payload: {
+                  runId: 'run-image-block',
+                  sessionKey: 'agent:main:session-image-block',
+                  seq: 1,
+                  state: 'final',
+                  message: {
+                    content: [
+                      {
+                        type: 'image',
+                        props: {
+                          url: 'data:image/png;base64,Y29udHJvbC11aS1pbWFnZQ==',
+                        },
+                      },
+                    ],
+                  },
+                },
+              }),
+            })
+          }
+        }) as unknown as WebSocket,
+    })
+
+    const result = await transport.run({
+      transportSessionId: 'session-image-block',
+      messageText: '截图',
+      thinking: 'off',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(result.streamedText).toBe('')
+    expect(result.streamedImages).toEqual([
+      {
+        url: 'data:image/png;base64,Y29udHJvbC11aS1pbWFnZQ==',
+        mimeType: 'image/png',
+      },
+    ])
   })
 
   it('ignores stringified tool payloads from gateway chat events', async () => {
@@ -813,5 +1055,208 @@ describe('gateway streaming chat transport', () => {
     expect(result.canceled).toBe(true)
     expect(abortFrames).toHaveLength(1)
     expect(abortFrames[0].params.sessionKey).toBe('agent:main:session-cancel')
+  })
+
+  it('extracts embedded raw WebP base64 from arbitrary nested toolresult fields', async () => {
+    const rawWebpBase64 = `UklG${'A'.repeat(260)}`
+    const transport = createGatewayStreamingChatTransport({
+      readConfig: async () => ({
+        gateway: {
+          port: 18789,
+          auth: {
+            token: 'gateway-token',
+          },
+        },
+      }),
+      readEnvFile: async () => ({}),
+      loadGatewayRuntime: async () => null,
+      createSocket: () =>
+        new FakeWebSocket((frame, socket) => {
+          if (frame.method === 'connect') {
+            socket.emit('message', {
+              data: JSON.stringify({ type: 'res', id: frame.id, ok: true }),
+            })
+            return
+          }
+
+          if (frame.method === 'chat.send') {
+            socket.emit('message', {
+              data: JSON.stringify({ type: 'res', id: frame.id, ok: true, payload: { runId: 'run-nested-webp' } }),
+            })
+
+            socket.emit('message', {
+              data: JSON.stringify({
+                type: 'event',
+                event: 'chat.stream',
+                payload: {
+                  runId: 'run-nested-webp',
+                  sessionKey: 'agent:main:session-nested-webp',
+                  seq: 1,
+                  state: 'final',
+                  message: {
+                    result: {
+                      payload: {
+                        screenshot: rawWebpBase64,
+                      }
+                    }
+                  },
+                },
+              }),
+            })
+          }
+        }) as unknown as WebSocket,
+    })
+
+    const result = await transport.run({
+      transportSessionId: 'session-nested-webp',
+      messageText: 'Screenshot WebP',
+      thinking: 'off',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(result.streamedImages).toBeDefined()
+    expect(result.streamedImages?.length).toBe(1)
+    expect(result.streamedImages?.[0]).toEqual({
+      url: `data:image/webp;base64,${rawWebpBase64}`,
+      mimeType: 'image/webp',
+    })
+  })
+
+  it('extracts local Windows picture paths embedded inside tool result structures', async () => {
+    const transport = createGatewayStreamingChatTransport({
+      readConfig: async () => ({
+        gateway: {
+          port: 18789,
+          auth: {
+            token: 'gateway-token',
+          },
+        },
+      }),
+      readEnvFile: async () => ({}),
+      loadGatewayRuntime: async () => null,
+      createSocket: () =>
+        new FakeWebSocket((frame, socket) => {
+          if (frame.method === 'connect') {
+            socket.emit('message', {
+              data: JSON.stringify({ type: 'res', id: frame.id, ok: true }),
+            })
+            return
+          }
+
+          if (frame.method === 'chat.send') {
+            socket.emit('message', {
+              data: JSON.stringify({ type: 'res', id: frame.id, ok: true, payload: { runId: 'run-win-path' } }),
+            })
+
+            socket.emit('message', {
+              data: JSON.stringify({
+                type: 'event',
+                event: 'chat.stream',
+                payload: {
+                  runId: 'run-win-path',
+                  sessionKey: 'agent:main:session-win-path',
+                  seq: 1,
+                  state: 'final',
+                  message: {
+                    tool_calls: [
+                      {
+                        action: 'browser_screenshot',
+                        result: {
+                          file_path: 'C:\\Users\\TestUser\\AppData\\Local\\Temp\\screenshot_xyz.webp'
+                        }
+                      }
+                    ]
+                  },
+                },
+              }),
+            })
+          }
+        }) as unknown as WebSocket,
+    })
+
+    const result = await transport.run({
+      transportSessionId: 'session-win-path',
+      messageText: 'Local file screenshot',
+      thinking: 'off',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(result.streamedImages).toBeDefined()
+    expect(result.streamedImages?.length).toBe(1)
+    expect(result.streamedImages?.[0]).toEqual({
+      url: `file:///C:/Users/TestUser/AppData/Local/Temp/screenshot_xyz.webp`,
+      mimeType: 'image/webp',
+    })
+  })
+
+  it('hydrates readable local screenshot paths found inside arbitrary string leaves into data URLs', async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'gateway-transport-image-path-'))
+    const imagePath = path.join(tempDir, 'transport-screenshot.webp')
+    const imageBuffer = Buffer.from('fake-readable-webp-image')
+    await writeFile(imagePath, imageBuffer)
+
+    try {
+      const transport = createGatewayStreamingChatTransport({
+        readConfig: async () => ({
+          gateway: {
+            port: 18789,
+            auth: {
+              token: 'gateway-token',
+            },
+          },
+        }),
+        readEnvFile: async () => ({}),
+        loadGatewayRuntime: async () => null,
+        createSocket: () =>
+          new FakeWebSocket((frame, socket) => {
+            if (frame.method === 'connect') {
+              socket.emit('message', {
+                data: JSON.stringify({ type: 'res', id: frame.id, ok: true }),
+              })
+              return
+            }
+
+            if (frame.method === 'chat.send') {
+              socket.emit('message', {
+                data: JSON.stringify({ type: 'res', id: frame.id, ok: true, payload: { runId: 'run-string-path' } }),
+              })
+
+              socket.emit('message', {
+                data: JSON.stringify({
+                  type: 'event',
+                  event: 'chat.stream',
+                  payload: {
+                    runId: 'run-string-path',
+                    sessionKey: 'agent:main:session-string-path',
+                    seq: 1,
+                    state: 'final',
+                    message: {
+                      result: {
+                        output: `Screenshot cached at ${imagePath}`,
+                      },
+                    },
+                  },
+                }),
+              })
+            }
+          }) as unknown as WebSocket,
+      })
+
+      const result = await transport.run({
+        transportSessionId: 'session-string-path',
+        messageText: 'Read screenshot path from text',
+        thinking: 'off',
+      })
+
+      expect(result.ok).toBe(true)
+      expect(result.streamedImages).toEqual([
+        {
+          url: `data:image/webp;base64,${imageBuffer.toString('base64')}`,
+          mimeType: 'image/webp',
+        },
+      ])
+    } finally {
+      await rm(tempDir, { recursive: true, force: true })
+    }
   })
 })

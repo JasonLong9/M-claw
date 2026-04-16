@@ -23,6 +23,8 @@ import {
 import { toUserFacingCliFailureMessage, toUserFacingUnknownErrorMessage } from '../lib/user-facing-cli-feedback'
 
 const LOCAL_PROVIDER_IDS = new Set(['ollama', 'vllm', 'custom-openai'])
+const DEEPSEEK_PROVIDER_ID = 'deepseek'
+const DEEPSEEK_BASE_URL = 'https://api.deepseek.com'
 const CUSTOM_PROVIDER_AMBIGUOUS_ERROR_MESSAGE = '检测到多个同 endpoint/model 的自定义 Provider，请填写 Provider ID 后重试。'
 
 function isLocalProvider(providerId: string): boolean {
@@ -33,6 +35,16 @@ const LOCAL_PROVIDER_DEFAULTS: Record<string, { baseUrl: string; needsApiKey: bo
   ollama: { baseUrl: 'http://127.0.0.1:11434', needsApiKey: false },
   vllm: { baseUrl: 'http://127.0.0.1:8000/v1', needsApiKey: true },
   'custom-openai': { baseUrl: '', needsApiKey: true },
+}
+
+function isOfficialDeepSeekBaseUrl(value: string): boolean {
+  const normalized = String(value || '').trim().toLowerCase()
+  return (
+    normalized === 'https://api.deepseek.com'
+    || normalized === 'https://api.deepseek.com/'
+    || normalized === 'https://api.deepseek.com/v1'
+    || normalized === 'https://api.deepseek.com/v1/'
+  )
 }
 
 export function buildLocalProviderEnvUpdatesForSubmit(params: {
@@ -102,11 +114,49 @@ function extractLocalProviderModelId(modelKey: string, providerId: string): stri
   return rest.join('/').trim()
 }
 
+function resolveLocalProviderSubmitTarget(params: {
+  providerId: string
+  baseUrl: string
+  selectedModel: string
+}): {
+  providerId: string
+  baseUrl: string
+  selectedModel: string
+  cleanupProviderIds: string[]
+  clearEnvUpdates: Record<string, string | undefined>
+} {
+  const providerId = String(params.providerId || '').trim()
+  const baseUrl = String(params.baseUrl || '').trim()
+  const selectedModel = String(params.selectedModel || '').trim()
+
+  if (providerId === 'custom-openai' && isOfficialDeepSeekBaseUrl(baseUrl)) {
+    const migratedModelId = extractLocalProviderModelId(selectedModel, providerId)
+    return {
+      providerId: DEEPSEEK_PROVIDER_ID,
+      baseUrl: DEEPSEEK_BASE_URL,
+      selectedModel: migratedModelId ? `${DEEPSEEK_PROVIDER_ID}/${migratedModelId}` : '',
+      cleanupProviderIds: ['custom-openai'],
+      clearEnvUpdates: {
+        OPENAI_BASE_URL: undefined,
+      },
+    }
+  }
+
+  return {
+    providerId,
+    baseUrl,
+    selectedModel,
+    cleanupProviderIds: [],
+    clearEnvUpdates: {},
+  }
+}
+
 export function buildLocalProviderConfigSnapshotForSubmit(params: {
   currentConfig: Record<string, any> | null
   providerId: string
   baseUrl: string
   selectedModel: string
+  cleanupProviderIds?: string[]
 }): Record<string, any> {
   const providerId = String(params.providerId || '').trim()
   const baseUrl = String(params.baseUrl || '').trim()
@@ -142,13 +192,24 @@ export function buildLocalProviderConfigSnapshotForSubmit(params: {
     ...currentProviderConfig,
     ...(providerModels.length > 0 ? { models: providerModels } : {}),
     ...(providerId === 'custom-openai' && baseUrl ? { baseUrl } : {}),
+    ...(providerId === DEEPSEEK_PROVIDER_ID
+      ? {
+          api: 'openai-completions',
+          baseUrl: DEEPSEEK_BASE_URL,
+        }
+      : {}),
   }
-  if (providerId === 'custom-openai') {
+  if (providerId === 'custom-openai' || providerId === DEEPSEEK_PROVIDER_ID) {
     delete nextProviderConfig.enabled
   } else {
     nextProviderConfig.enabled = true
   }
   nextProviders[providerId] = nextProviderConfig
+  for (const cleanupProviderId of params.cleanupProviderIds || []) {
+    if (cleanupProviderId && cleanupProviderId !== providerId) {
+      delete nextProviders[cleanupProviderId]
+    }
+  }
   nextModels.providers = nextProviders
   nextConfig.models = nextModels
 
@@ -2286,20 +2347,30 @@ export default function ModelCenter({
     setStatusText('正在写入环境变量...')
 
     try {
-      // Write env vars if needed
-      const envUpdates = buildLocalProviderEnvUpdatesForSubmit({
+      const submitTarget = resolveLocalProviderSubmitTarget({
         providerId: selectedProviderId,
         baseUrl: localBaseUrl,
+        selectedModel: localSubmitModelId,
+      })
+
+      // Write env vars if needed
+      const envUpdates = buildLocalProviderEnvUpdatesForSubmit({
+        providerId: submitTarget.providerId,
+        baseUrl: submitTarget.baseUrl,
         apiKey: localApiKey,
       })
-      if (Object.keys(envUpdates).length > 0) {
-        await window.api.writeLocalModelEnv(envUpdates)
+      const mergedEnvUpdates = {
+        ...envUpdates,
+        ...submitTarget.clearEnvUpdates,
+      }
+      if (Object.keys(mergedEnvUpdates).length > 0) {
+        await window.api.writeLocalModelEnv(mergedEnvUpdates)
       }
 
       // Ensure auth profile exists for local provider (Gateway requires it)
       setStatusText('正在写入认证配置...')
       const authResult = await window.api.ensureLocalAuthProfile({
-        provider: selectedProviderId as 'ollama' | 'vllm' | 'custom-openai',
+        provider: submitTarget.providerId as 'ollama' | 'vllm' | 'custom-openai' | 'deepseek',
         apiKey: localApiKey.trim() || undefined,
       })
       if (!authResult.ok) {
@@ -2316,7 +2387,7 @@ export default function ModelCenter({
 
       setStatusText('正在应用默认模型...')
       const applyResult = await applyDefaultModelWithGatewayReload({
-        model: localSubmitModelId,
+        model: submitTarget.selectedModel,
         readConfig: () => window.api.readConfig(),
         readUpstreamState: () => window.api.getModelUpstreamState(),
         applyUpstreamModelWrite: (request) => window.api.applyModelConfigViaUpstream(request),
@@ -2341,9 +2412,10 @@ export default function ModelCenter({
       const currentConfig = await window.api.readConfig().catch(() => null)
       const providerSnapshotConfig = buildLocalProviderConfigSnapshotForSubmit({
         currentConfig,
-        providerId: selectedProviderId,
-        baseUrl: localBaseUrl,
-        selectedModel: localSubmitModelId,
+        providerId: submitTarget.providerId,
+        baseUrl: submitTarget.baseUrl,
+        selectedModel: submitTarget.selectedModel,
+        cleanupProviderIds: submitTarget.cleanupProviderIds,
       })
       const providerSnapshotWriteResult = await window.api.applyConfigPatchGuarded({
         beforeConfig: currentConfig,
@@ -2362,15 +2434,21 @@ export default function ModelCenter({
         return
       }
 
+      if (submitTarget.cleanupProviderIds.length > 0) {
+        await window.api.clearModelAuthProfiles({
+          providerIds: submitTarget.cleanupProviderIds,
+        })
+      }
+
       setPhase('ready')
       setStatusText('')
       onConfigured({
-        providerId: selectedProviderId,
+        providerId: submitTarget.providerId,
         methodId: 'local',
         methodType: 'custom',
-        providerStatusIds: [selectedProviderId],
+        providerStatusIds: [submitTarget.providerId],
         needsInitialization: false,
-        preferredModelKey: localSubmitModelId,
+        preferredModelKey: submitTarget.selectedModel,
       })
     } catch (e: any) {
       setPhase('ready')

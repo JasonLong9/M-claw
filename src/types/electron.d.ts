@@ -776,6 +776,8 @@ interface NodeCheckResult {
   requiredVersion: string
   targetVersion: string
   installStrategy: 'nvm' | 'installer'
+  runtimeSource?: 'bundled' | 'shell' | 'nvm' | 'candidate'
+  executablePath?: string
 }
 
 interface NodeInstallPlan {
@@ -1452,6 +1454,11 @@ interface ChatUsage {
   reasoningTokens?: number
 }
 
+interface ChatImageAttachment {
+  url: string
+  mimeType?: string
+}
+
 interface DashboardChatAvailability {
   state: DashboardChatAvailabilityState
   ready: boolean
@@ -1492,6 +1499,7 @@ interface ChatMessage {
   id: string
   role: ChatMessageRole
   text: string
+  images?: ChatImageAttachment[]
   createdAt: number
   status?: ChatMessageStatus
   model?: string
@@ -1675,6 +1683,7 @@ interface ElectronApi {
   deleteAllOpenClawBackups: () => Promise<OpenClawBackupDeleteResult>
   openOpenClawBackupDirectory: (targetPath?: string) => Promise<{ ok: boolean; path: string; error?: string }>
   openOpenClawWorkspace: () => Promise<{ ok: boolean; path: string; error?: string }>
+  openLocalPath: (targetPath: string) => Promise<{ ok: boolean; path: string; error?: string }>
   previewOpenClawRestore: (backupId: string) => Promise<OpenClawRestorePreviewResult>
   runOpenClawRestore: (backupId: string, scope: OpenClawRestoreScope) => Promise<OpenClawRestoreRunResult>
   checkOpenClawUpgrade: () => Promise<OpenClawUpgradeCheckResult>
@@ -1827,7 +1836,7 @@ interface ElectronApi {
   }): Promise<ModelConfigCommandResult<Record<string, any>>>
   writeLocalModelEnv(updates: Record<string, string | undefined>): Promise<void>
   ensureLocalAuthProfile(input: {
-    provider: 'ollama' | 'vllm' | 'custom-openai'
+    provider: 'ollama' | 'vllm' | 'custom-openai' | 'deepseek'
     apiKey?: string
   }): Promise<{
     ok: boolean

@@ -42,6 +42,27 @@ describe('buildCliPathWithCandidates', () => {
     expect(entries).toContain('/usr/local/bin')
     expect(entries.slice(-2)).toEqual(['/usr/bin', '/bin'])
   })
+
+  it('prepends Windows system directories so bundled runtimes can find schtasks and related tools', () => {
+    const pathValue = buildCliPathWithCandidates({
+      platform: 'win32',
+      currentPath: 'D:\\workspace\\Mclaw\\release\\runtime;C:\\Users\\alice\\AppData\\Roaming\\npm',
+      env: buildTestEnv({
+        SystemRoot: 'C:\\Windows',
+        APPDATA: 'C:\\Users\\alice\\AppData\\Roaming',
+      }),
+    })
+
+    const entries = pathValue.split(';')
+    expect(entries.slice(0, 4)).toEqual([
+      'C:\\Windows\\System32',
+      'C:\\Windows\\System32\\Wbem',
+      'C:\\Windows\\System32\\WindowsPowerShell\\v1.0',
+      'C:\\Windows',
+    ])
+    expect(entries).toContain('D:\\workspace\\Mclaw\\release\\runtime')
+    expect(entries).toContain('C:\\Users\\alice\\AppData\\Roaming\\npm')
+  })
 })
 
 describe('listExecutablePathCandidates', () => {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+﻿import { useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Button, Text } from '@mantine/core'
 import BrandWordmark from '@/components/BrandWordmark'
 import {
@@ -11,13 +11,13 @@ import {
   type DashboardEntryBootstrapTaskKey,
   type DashboardEntryBootstrapTaskStatus,
 } from '../shared/dashboard-entry-bootstrap'
-import {
-  type GatewayBootstrapFailureView,
-} from '../shared/gateway-bootstrap-diagnostics'
+import { type GatewayBootstrapFailureView } from '../shared/gateway-bootstrap-diagnostics'
 import {
   getUpstreamModelStatusLike,
   readOpenClawUpstreamModelState,
 } from '../shared/upstream-model-state'
+import type { OpenClawRuntimeReconcileStore } from '../shared/gateway-runtime-reconcile-state'
+import { resolveEffectiveGatewayRunning } from '../shared/gateway-effective-running'
 import { listFeishuBots, sanitizeFeishuPluginConfig } from './feishu-bots'
 
 interface FeishuRuntimeStatusSummary {
@@ -27,7 +27,9 @@ interface FeishuRuntimeStatusSummary {
 }
 
 export interface DashboardEntryBootstrapApi {
+  getChatAvailability: () => Promise<Awaited<ReturnType<typeof window.api.getChatAvailability>>>
   gatewayHealth: () => Promise<GatewayHealthCheckResult>
+  getOpenClawRuntimeReconcileState: () => Promise<OpenClawRuntimeReconcileStore>
   readConfig: () => Promise<Record<string, any> | null>
   getModelUpstreamState: () => Promise<Awaited<ReturnType<typeof window.api.getModelUpstreamState>>>
   getModelStatus: () => Promise<{ ok: boolean; data?: Record<string, any> | null }>
@@ -97,7 +99,7 @@ async function summarizePairing(
     return {
       summary:
         otherChannelCount > 0
-          ? `已整理 ${otherChannelCount} 个非飞书渠道状态，当前没有飞书 Bot 需要配对摘要。`
+          ? `已整理 ${otherChannelCount} 个非飞书渠道状态，当前没有需要汇总的飞书 Bot。`
           : '当前没有需要汇总的渠道配对状态。',
       data: {
         feishuBotCount: 0,
@@ -177,16 +179,36 @@ export async function runDashboardEntryBootstrapFlow(
 
   const softWarnings: string[] = []
   notify('gateway', 'active', '正在读取当前 Gateway 状态快照...')
-  const health = await api.gatewayHealth().catch((error) => {
-    softWarnings.push(formatProbeErrorMessage('Gateway 状态读取失败，控制面板将先按离线快照进入', error))
-    return null
-  })
-  const gatewayRunning = health?.running === true
+  const [chatAvailability, health, runtimeStore] = await Promise.all([
+    api.getChatAvailability().catch(() => null),
+    api.gatewayHealth().catch((error) => {
+      softWarnings.push(formatProbeErrorMessage('Gateway 状态读取失败，控制面板将先按离线快照进入', error))
+      return null
+    }),
+    api.getOpenClawRuntimeReconcileState().catch(() => null),
+  ])
+  const gatewayRunning =
+    typeof chatAvailability?.gatewayRunning === 'boolean'
+      ? chatAvailability.gatewayRunning
+      : resolveEffectiveGatewayRunning({
+          healthRunning: health?.running === true,
+          runtimeStore,
+        })
   if (gatewayRunning) {
-    notify('gateway', 'done', String(health?.summary || '').trim() || 'Gateway 运行快照已就绪。')
+    const availabilitySummary = String(chatAvailability?.message || '').trim()
+    const runtimeSummary =
+      runtimeStore && health?.running !== true
+        ? String(runtimeStore.runtime.lastReconcileSummary || '').trim()
+        : ''
+    notify(
+      'gateway',
+      'done',
+      availabilitySummary || String(health?.summary || runtimeSummary).trim() || 'Gateway 运行快照已就绪。'
+    )
   } else {
     const gatewayWarning =
-      String(health?.summary || '').trim() || 'Gateway 当前未就绪，进入控制面板后可继续处理。'
+      String(chatAvailability?.message || health?.summary || '').trim() ||
+      'Gateway 当前未就绪，进入控制面板后可继续处理。'
     if (health) {
       softWarnings.push(`Gateway 当前未就绪：${gatewayWarning}`)
     }
@@ -202,9 +224,7 @@ export async function runDashboardEntryBootstrapFlow(
   let modelStatus = upstreamModelStatus
   if (!modelStatus) {
     const modelStatusResult = await api.getModelStatus().catch(() => null)
-    modelStatus = modelStatusResult?.ok
-      ? ((modelStatusResult.data as Record<string, any>) || null)
-      : null
+    modelStatus = modelStatusResult?.ok ? ((modelStatusResult.data as Record<string, any>) || null) : null
   }
   if (!modelStatus) {
     softWarnings.push('模型状态读取失败：控制面板将先按配置快照显示模型信息。')
@@ -267,9 +287,7 @@ export default function GatewayBootstrapGate({
     status: DashboardEntryBootstrapTaskStatus,
     detail?: string
   ) => {
-    setTaskState((current) => {
-      return { ...current, [key]: status }
-    })
+    setTaskState((current) => ({ ...current, [key]: status }))
     if (detail) {
       setTaskDetails((current) => ({ ...current, [key]: detail }))
     }
@@ -336,7 +354,6 @@ export default function GatewayBootstrapGate({
       `}</style>
       <Text size="lg" fw={600} className="app-text-primary">正在进入控制面板</Text>
 
-      {/* 进度条 */}
       <div className="w-full">
         <div className="flex items-center justify-between mb-1">
           <Text size="xs" c="dimmed">{heroCopy.title}</Text>
@@ -353,38 +370,30 @@ export default function GatewayBootstrapGate({
         </div>
       </div>
 
-      {/* 当前步骤详情 */}
       <Text size="xs" c="dimmed" ta="center" lh={1.6}>
         {heroCopy.detail}
       </Text>
 
-      {/* 软警告 */}
       {softWarnings.length > 0 && (
         <Alert color="yellow" variant="light" w="100%" title="已降级继续" styles={{ title: { fontSize: 'var(--mantine-font-size-xs)' } }}>
-          {softWarnings.map((w) => (
-            <Text key={w} size="xs">{w}</Text>
+          {softWarnings.map((warning) => (
+            <Text key={warning} size="xs">{warning}</Text>
           ))}
         </Alert>
       )}
 
-      {/* 致命错误 */}
       {fatalError && (
         <Alert color="red" variant="light" w="100%" title={fatalError.title} styles={{ title: { fontSize: 'var(--mantine-font-size-xs)' } }}>
           <Text size="xs" mb={fatalError.hints.length > 0 ? 'xs' : 0}>{fatalError.detail}</Text>
           {fatalError.hints.map((hint) => (
-            <Text key={hint} size="xs" c="dimmed">• {hint}</Text>
+            <Text key={hint} size="xs" c="dimmed">- {hint}</Text>
           ))}
         </Alert>
       )}
 
-      {/* 操作按钮 — 仅在失败或完成后显示 */}
       {(fatalError || !bootstrapping) && (
         <div className="flex gap-2">
-          <Button
-            onClick={() => void runBootstrap()}
-            disabled={bootstrapping}
-            size="xs"
-          >
+          <Button onClick={() => void runBootstrap()} disabled={bootstrapping} size="xs">
             {bootstrapping ? '检查中...' : fatalError ? '重试' : '重新检查'}
           </Button>
           <Button onClick={onReconfigure} variant="default" size="xs" disabled={bootstrapping}>
@@ -395,3 +404,4 @@ export default function GatewayBootstrapGate({
     </div>
   )
 }
+

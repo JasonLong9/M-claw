@@ -72,6 +72,43 @@ function normalizeForCompare(value: string): string {
   return process.platform === 'win32' ? String(value || '').toLowerCase() : String(value || '')
 }
 
+function isPathInside(parentPath: string, childPath: string): boolean {
+  const normalizedParent = normalizeForCompare(String(parentPath || '').trim())
+    .replace(/[/\\]+/g, path.sep)
+    .replace(/[\\/]+$/, '')
+  const normalizedChild = normalizeForCompare(String(childPath || '').trim())
+    .replace(/[/\\]+/g, path.sep)
+  if (!normalizedParent || !normalizedChild) return false
+  return normalizedChild === normalizedParent || normalizedChild.startsWith(`${normalizedParent}${path.sep}`)
+}
+
+function isBundledRuntimeCandidate(input: {
+  binaryPath?: string
+  resolvedBinaryPath?: string
+  packageRoot?: string
+  bundledRuntimePath?: string | null
+  bundledRuntimeBinaryPath?: string | null
+}): boolean {
+  const bundledRuntimeBinaryPath = String(input.bundledRuntimeBinaryPath || '').trim()
+  if (
+    bundledRuntimeBinaryPath &&
+    (
+      normalizeForCompare(input.binaryPath || '') === normalizeForCompare(bundledRuntimeBinaryPath) ||
+      normalizeForCompare(input.resolvedBinaryPath || '') === normalizeForCompare(bundledRuntimeBinaryPath)
+    )
+  ) {
+    return true
+  }
+
+  const bundledRuntimePath = String(input.bundledRuntimePath || '').trim()
+  if (!bundledRuntimePath) return false
+  return (
+    isPathInside(bundledRuntimePath, input.binaryPath || '') ||
+    isPathInside(bundledRuntimePath, input.resolvedBinaryPath || '') ||
+    isPathInside(bundledRuntimePath, input.packageRoot || '')
+  )
+}
+
 function resolveManagedInstallStorePath(): string {
   return path.join(String(process.env.QCLAW_USER_DATA_DIR || path.join(homedir(), '.qclaw-lite')).trim(), MANAGED_INSTALL_STORE_PATH)
 }
@@ -169,7 +206,10 @@ export function inferOpenClawInstallSource(input: {
   binaryPath: string
   resolvedBinaryPath?: string
   packageRoot?: string
+  bundledRuntimePath?: string | null
+  bundledRuntimeBinaryPath?: string | null
 }): OpenClawInstallSource {
+  if (isBundledRuntimeCandidate(input)) return 'bundled-runtime'
   const binaryPath = String(input.binaryPath || '').replace(/\\/g, '/').toLowerCase()
   const resolvedBinaryPath = String(input.resolvedBinaryPath || '').replace(/\\/g, '/').toLowerCase()
   const packageRoot = String(input.packageRoot || '').replace(/\\/g, '/').toLowerCase()
@@ -249,11 +289,21 @@ async function runBinaryVersion(binaryPath: string): Promise<string> {
 async function buildCandidateFromBinary(
   binaryPath: string,
   activeBinaryPath: string | null,
-  bundledDeliveryMode: OpenClawBundledDeliveryMode | null
+  bundledDeliveryMode: OpenClawBundledDeliveryMode | null,
+  bundledTargetDeliveryMode: OpenClawBundledDeliveryMode | null,
+  bundledRuntimePath: string | null,
+  bundledRuntimeBinaryPath: string | null
 ): Promise<OpenClawInstallCandidate | null> {
   const openClawPaths = await resolveRuntimeOpenClawPaths({ binaryPath })
   try {
     const packageInfo = await readOpenClawPackageInfo({ binaryPath })
+    const bundledRuntimeCandidate = isBundledRuntimeCandidate({
+      binaryPath: packageInfo.binaryPath,
+      resolvedBinaryPath: packageInfo.resolvedBinaryPath,
+      packageRoot: packageInfo.packageRoot,
+      bundledRuntimePath,
+      bundledRuntimeBinaryPath,
+    })
     const installFingerprint = buildFingerprint(
       packageInfo.resolvedBinaryPath,
       packageInfo.packageRoot,
@@ -263,7 +313,7 @@ async function buildCandidateFromBinary(
     )
     const baselineBackup = await getBaselineBackupStatus(installFingerprint)
     const baselineBackupBypass = await getBaselineBackupBypassStatus(installFingerprint)
-    const managedInstall = await isManagedInstallFingerprint(installFingerprint)
+    const managedInstall = bundledRuntimeCandidate || await isManagedInstallFingerprint(installFingerprint)
 
     return {
       candidateId: installFingerprint.slice(0, 16),
@@ -271,8 +321,12 @@ async function buildCandidateFromBinary(
       resolvedBinaryPath: packageInfo.resolvedBinaryPath,
       packageRoot: packageInfo.packageRoot,
       version: packageInfo.version,
-      installSource: inferOpenClawInstallSource(packageInfo),
-      deliveryMode: managedInstall ? bundledDeliveryMode : null,
+      installSource: inferOpenClawInstallSource({
+        ...packageInfo,
+        bundledRuntimePath,
+        bundledRuntimeBinaryPath,
+      }),
+      deliveryMode: managedInstall ? (bundledTargetDeliveryMode || bundledDeliveryMode) : null,
       isPathActive:
         normalizeForCompare(activeBinaryPath || '') === normalizeForCompare(packageInfo.binaryPath) ||
         normalizeForCompare(activeBinaryPath || '') === normalizeForCompare(packageInfo.resolvedBinaryPath),
@@ -291,6 +345,13 @@ async function buildCandidateFromBinary(
     if (!version) return null
 
     const packageRoot = path.dirname(resolvedBinaryPath)
+    const bundledRuntimeCandidate = isBundledRuntimeCandidate({
+      binaryPath,
+      resolvedBinaryPath,
+      packageRoot,
+      bundledRuntimePath,
+      bundledRuntimeBinaryPath,
+    })
     const installFingerprint = buildFingerprint(
       resolvedBinaryPath,
       packageRoot,
@@ -300,7 +361,7 @@ async function buildCandidateFromBinary(
     )
     const baselineBackup = await getBaselineBackupStatus(installFingerprint)
     const baselineBackupBypass = await getBaselineBackupBypassStatus(installFingerprint)
-    const managedInstall = await isManagedInstallFingerprint(installFingerprint)
+    const managedInstall = bundledRuntimeCandidate || await isManagedInstallFingerprint(installFingerprint)
 
     return {
       candidateId: installFingerprint.slice(0, 16),
@@ -308,8 +369,14 @@ async function buildCandidateFromBinary(
       resolvedBinaryPath,
       packageRoot,
       version,
-      installSource: inferOpenClawInstallSource({ binaryPath, resolvedBinaryPath, packageRoot }),
-      deliveryMode: managedInstall ? bundledDeliveryMode : null,
+      installSource: inferOpenClawInstallSource({
+        binaryPath,
+        resolvedBinaryPath,
+        packageRoot,
+        bundledRuntimePath,
+        bundledRuntimeBinaryPath,
+      }),
+      deliveryMode: managedInstall ? (bundledTargetDeliveryMode || bundledDeliveryMode) : null,
       isPathActive:
         normalizeForCompare(activeBinaryPath || '') === normalizeForCompare(binaryPath) ||
         normalizeForCompare(activeBinaryPath || '') === normalizeForCompare(resolvedBinaryPath),
@@ -427,8 +494,13 @@ export async function discoverOpenClawInstallations(): Promise<OpenClawDiscovery
     )
   }
 
-  const activeBinaryPath = await resolveOpenClawBinaryPath().catch(() => null)
+  const resolvedActiveBinaryPath = await resolveOpenClawBinaryPath().catch(() => null)
+  const activeBinaryPath =
+    bundledTargetDeliveryMode === 'bundled-runtime' && bundledRuntimeBinaryPath
+      ? bundledRuntimeBinaryPath
+      : resolvedActiveBinaryPath
   const knownPaths = [
+    bundledRuntimeBinaryPath,
     activeBinaryPath,
     ...listExecutablePathCandidates('openclaw', {
       platform: process.platform,
@@ -452,7 +524,14 @@ export async function discoverOpenClawInstallations(): Promise<OpenClawDiscovery
   const seenFingerprints = new Set<string>()
   for (const candidatePath of uniquePaths) {
     if (!(await pathExists(candidatePath))) continue
-    const candidate = await buildCandidateFromBinary(candidatePath, activeBinaryPath, bundledDeliveryMode)
+    const candidate = await buildCandidateFromBinary(
+      candidatePath,
+      activeBinaryPath,
+      bundledDeliveryMode,
+      bundledTargetDeliveryMode,
+      bundledRuntimePath,
+      bundledRuntimeBinaryPath
+    )
     if (!candidate) continue
     if (seenFingerprints.has(candidate.installFingerprint)) continue
     seenFingerprints.add(candidate.installFingerprint)

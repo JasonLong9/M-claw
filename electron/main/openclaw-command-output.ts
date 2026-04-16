@@ -16,8 +16,9 @@ const WRITE_FAILURE_REGEX =
   /\b(failed to write|write failed|cannot write|permission denied|operation not permitted|eacces|erofs|read-only file system|no space left on device|disk full|写入失败|保存失败|权限不足)\b/i
 const GATEWAY_UNREADY_REGEX =
   /\b(gateway did not become reachable|not become reachable|gateway.+(?:offline|unreachable|not running)|connection refused|econnrefused|websocket.+(?:1006|1008)|gateway closed)\b/i
+const TIMEOUT_FAILURE_REGEX = /\b(timeout|timed out|request timeout|请求超时|响应超时|超时)\b/i
 const NETWORK_BLOCKED_REGEX =
-  /\b(timeout|timed out|network|dns|proxy|certificate|tls|ssl|socket hang up|econnreset|enotfound|fetch failed)\b/i
+  /\b(network|dns|proxy|certificate|tls|ssl|socket hang up|econnreset|enotfound|fetch failed)\b/i
 const MULTI_MODEL_FALLBACK_FAILURE_REGEX =
   /\b(all models failed|embedded agent failed before reply|followup agent failed before reply)\b/i
 const NOISY_LOG_BLOB_REGEX = /\b(config overwrite|workspace ok|sessions ok|sha256|gateway did not become reachable at ws:)\b/i
@@ -87,6 +88,14 @@ function classifyCliFailureOutput(output: string): { message: string; warningOnl
   if (GATEWAY_UNREADY_REGEX.test(combined)) {
     return {
       message: 'Gateway 尚未就绪，请稍后重试。若持续失败，请重启 Gateway 后再试。',
+      warningOnly: false,
+      priority: 3,
+    }
+  }
+
+  if (TIMEOUT_FAILURE_REGEX.test(combined)) {
+    return {
+      message: '请求超时，请稍后重试。若持续失败，请检查 Gateway 与当前模型服务状态。',
       warningOnly: false,
       priority: 3,
     }

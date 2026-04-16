@@ -39,6 +39,7 @@ import type {
   OpenClawRuntimeReconcileStore,
   RuntimeReconcileStateCode,
 } from './shared/gateway-runtime-reconcile-state'
+import { resolveEffectiveGatewayRunning } from './shared/gateway-effective-running'
 import { describeGatewayRuntimeReasonDetail } from './shared/gateway-runtime-reason-detail'
 import {
   formatOpenClawVersionLabel,
@@ -622,14 +623,18 @@ function App() {
         openClawResult.status === 'fulfilled' && openClawResult.value.installed
           ? String(openClawResult.value.version || '').trim() || null
           : null
-      const gatewayRunning =
-        gatewayHealthResult.status === 'fulfilled' && gatewayHealthResult.value.running === true
+      const runtimeStore =
+        runtimeResult.status === 'fulfilled'
+          ? applyLiveOpenClawVersionToRuntimeStore(runtimeResult.value, liveOpenClawVersion)
+          : null
+      const gatewayRunning = resolveEffectiveGatewayRunning({
+        healthRunning:
+          gatewayHealthResult.status === 'fulfilled' && gatewayHealthResult.value.running === true,
+        runtimeStore,
+      })
 
       setEntryCompatibilitySnapshot({
-        runtimeStore:
-          runtimeResult.status === 'fulfilled'
-            ? applyLiveOpenClawVersionToRuntimeStore(runtimeResult.value, liveOpenClawVersion)
-            : null,
+        runtimeStore,
         capabilities: capabilitiesResult.status === 'fulfilled' ? capabilitiesResult.value : null,
         gatewayRunning,
       })

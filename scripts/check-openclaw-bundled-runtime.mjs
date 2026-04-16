@@ -78,6 +78,11 @@ function validateRuntimeArtifact(artifact) {
     return
   }
 
+  if (artifact.platform === 'win32') {
+    const nodeRuntimePath = path.join(runtimeDir, 'node.exe')
+    ensureFile(nodeRuntimePath, `bundled node runtime for ${artifact.platform}-${artifact.arch}`)
+  }
+
   info(
     `Validated runtime artifact ${artifact.platform}-${artifact.arch}: ${path.relative(repoRoot, runtimeBinaryPath)}`
   )

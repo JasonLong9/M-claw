@@ -54,6 +54,12 @@ describe('normalizeCliFailureMessage', () => {
       '当前模型暂时不可用，备用模型也未就绪。请稍后重试，或到模型设置中切换到已配置模型。'
     )
   })
+
+  it('maps timeout failures into a timeout-specific message instead of generic network wording', () => {
+    expect(normalizeCliFailureMessage('gateway request timeout for chat.send')).toBe(
+      '请求超时，请稍后重试。若持续失败，请检查 Gateway 与当前模型服务状态。'
+    )
+  })
 })
 
 describe('getCliFailureMessage', () => {
@@ -103,6 +109,18 @@ describe('getCliFailureMessage', () => {
         'fallback'
       )
     ).toBe('当前模型暂时不可用，备用模型也未就绪。请稍后重试，或到模型设置中切换到已配置模型。')
+  })
+
+  it('returns a timeout-specific message for request timeout failures', () => {
+    expect(
+      getCliFailureMessage(
+        {
+          stdout: '',
+          stderr: 'gateway request timeout for chat.send',
+        },
+        'fallback'
+      )
+    ).toBe('请求超时，请稍后重试。若持续失败，请检查 Gateway 与当前模型服务状态。')
   })
 })
 
