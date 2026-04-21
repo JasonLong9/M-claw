@@ -1,10 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Button, Card, Group, Loader, Modal, Select, Stack, Text } from '@mantine/core'
+import FeishuSharedStatusAlert, { type FeishuSharedStatusAlertState } from './FeishuSharedStatusAlert'
 
 import type {
   FeishuBotDiagnosticListenResult,
   FeishuBotDiagnosticSendResult,
 } from '../shared/feishu-diagnostics'
+
+export interface FeishuDiagnosticsRepairOutcome {
+  ok: boolean
+  message: string
+}
 
 interface FeishuDiagnosticsModalProps {
   opened: boolean
@@ -12,6 +18,9 @@ interface FeishuDiagnosticsModalProps {
   accountId: string
   botLabel: string
   agentId?: string
+  sharedStatusAlert?: FeishuSharedStatusAlertState | null
+  repairingSharedStatus?: boolean
+  onRepairSharedStatus?: (() => Promise<FeishuDiagnosticsRepairOutcome>) | null
 }
 
 interface PairedFeishuAccount {
@@ -28,8 +37,8 @@ function getAlertColor(result: { ok: boolean; detected?: boolean }): string {
 }
 
 function formatDuration(waitedMs: number): string {
-  if (!Number.isFinite(waitedMs) || waitedMs <= 0) return '0s'
-  return `${Math.max(1, Math.round(waitedMs / 1000))}s`
+  if (!Number.isFinite(waitedMs) || waitedMs <= 0) return '0 秒'
+  return `${Math.max(1, Math.round(waitedMs / 1000))} 秒`
 }
 
 export default function FeishuDiagnosticsModal({
@@ -38,6 +47,9 @@ export default function FeishuDiagnosticsModal({
   accountId,
   botLabel,
   agentId,
+  sharedStatusAlert,
+  repairingSharedStatus = false,
+  onRepairSharedStatus,
 }: FeishuDiagnosticsModalProps) {
   const [pairedAccounts, setPairedAccounts] = useState<PairedFeishuAccount[]>([])
   const [loadingAccounts, setLoadingAccounts] = useState(false)
@@ -47,8 +59,37 @@ export default function FeishuDiagnosticsModal({
   const [sending, setSending] = useState(false)
   const [listenResult, setListenResult] = useState<FeishuBotDiagnosticListenResult | null>(null)
   const [sendResult, setSendResult] = useState<FeishuBotDiagnosticSendResult | null>(null)
+  const [repairResult, setRepairResult] = useState<FeishuDiagnosticsRepairOutcome | null>(null)
   const mountedRef = useRef(true)
   const activeListenRequestIdRef = useRef<string | null>(null)
+  const pairedAccountsLoadVersionRef = useRef(0)
+  const probeBlockedBySharedStatus = Boolean(sharedStatusAlert)
+
+  const loadPairedAccounts = useCallback(async () => {
+    const loadVersion = pairedAccountsLoadVersionRef.current + 1
+    pairedAccountsLoadVersionRef.current = loadVersion
+    setAccountsError('')
+    setLoadingAccounts(true)
+
+    try {
+      const accounts = await window.api.pairingFeishuAccounts(accountId)
+      if (!mountedRef.current || pairedAccountsLoadVersionRef.current !== loadVersion) return
+      const normalized = Array.isArray(accounts) ? accounts : []
+      setPairedAccounts(normalized)
+      setSelectedOpenId((current) => {
+        if (current && normalized.some((item) => item.openId === current)) return current
+        return normalized[0]?.openId || null
+      })
+    } catch (error) {
+      if (!mountedRef.current || pairedAccountsLoadVersionRef.current !== loadVersion) return
+      setPairedAccounts([])
+      setSelectedOpenId(null)
+      setAccountsError(error instanceof Error ? error.message : '加载已配对飞书账号失败。')
+    } finally {
+      if (!mountedRef.current || pairedAccountsLoadVersionRef.current !== loadVersion) return
+      setLoadingAccounts(false)
+    }
+  }, [accountId])
 
   useEffect(() => {
     mountedRef.current = true
@@ -64,38 +105,12 @@ export default function FeishuDiagnosticsModal({
 
   useEffect(() => {
     if (!opened) return
-    let active = true
 
     setListenResult(null)
     setSendResult(null)
-    setAccountsError('')
-    setLoadingAccounts(true)
-
-    void window.api.pairingFeishuAccounts(accountId)
-      .then((accounts) => {
-        if (!active || !mountedRef.current) return
-        const normalized = Array.isArray(accounts) ? accounts : []
-        setPairedAccounts(normalized)
-        setSelectedOpenId((current) => {
-          if (current && normalized.some((item) => item.openId === current)) return current
-          return normalized[0]?.openId || null
-        })
-      })
-      .catch((error) => {
-        if (!active || !mountedRef.current) return
-        setPairedAccounts([])
-        setSelectedOpenId(null)
-        setAccountsError(error instanceof Error ? error.message : '读取已配对用户失败')
-      })
-      .finally(() => {
-        if (!active || !mountedRef.current) return
-        setLoadingAccounts(false)
-      })
-
-    return () => {
-      active = false
-    }
-  }, [opened, accountId])
+    setRepairResult(null)
+    void loadPairedAccounts()
+  }, [opened, loadPairedAccounts])
 
   const pairedAccountOptions = useMemo(
     () =>
@@ -125,6 +140,7 @@ export default function FeishuDiagnosticsModal({
   }
 
   const handleListen = async () => {
+    if (probeBlockedBySharedStatus) return
     const startedAt = new Date().toISOString()
     const requestId =
       typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -144,7 +160,7 @@ export default function FeishuDiagnosticsModal({
         detected: false,
         accountId,
         activityKind: 'none',
-        summary: '监听当前 Bot 活动失败，请稍后重试。',
+        summary: '监听当前机器人活动失败，请稍后重试。',
         startedAt,
         endedAt: new Date().toISOString(),
         timeoutMs: 60_000,
@@ -163,6 +179,7 @@ export default function FeishuDiagnosticsModal({
   }
 
   const handleSend = async () => {
+    if (probeBlockedBySharedStatus) return
     if (!selectedOpenId) return
     const sentAt = new Date().toISOString()
     setSending(true)
@@ -189,7 +206,7 @@ export default function FeishuDiagnosticsModal({
         traceId: 'trace-unavailable',
         sentAt,
         sentText: '',
-        summary: '发送定位消息失败，请稍后重试。',
+        summary: '发送诊断消息失败，请稍后重试。',
         code: 1,
         stderr: error instanceof Error ? error.message : String(error),
       })
@@ -200,41 +217,95 @@ export default function FeishuDiagnosticsModal({
     }
   }
 
+  const handleRepairSharedStatus = async () => {
+    if (!onRepairSharedStatus || repairingSharedStatus) return
+
+    cancelActiveListen()
+    setListenResult(null)
+    setSendResult(null)
+    setRepairResult(null)
+
+    try {
+      const result = await onRepairSharedStatus()
+      if (!mountedRef.current) return
+      setRepairResult(result)
+      await loadPairedAccounts()
+    } catch (error) {
+      if (!mountedRef.current) return
+      setRepairResult({
+        ok: false,
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
   return (
     <Modal
       opened={opened}
       onClose={handleClose}
-      title={`${botLabel} 故障排查`}
+      title={`${botLabel} 诊断`}
       size="lg"
     >
       <Stack gap="md">
-        <Alert color="blue" variant="light" title="当前检查目标">
-          <Text size="sm">Bot：{botLabel}</Text>
+        <Alert color="blue" variant="light" title="当前目标">
+          <Text size="sm">机器人：{botLabel}</Text>
           <Text size="sm">accountId：{accountId}</Text>
-          {agentId && <Text size="sm">Agent：{agentId}</Text>}
+          {agentId && <Text size="sm">代理：{agentId}</Text>}
         </Alert>
+
+        {sharedStatusAlert && (
+          <FeishuSharedStatusAlert
+            alert={sharedStatusAlert}
+            repairHint="可直接在这里修复共享飞书状态；修复并刷新后，再继续下面的诊断探测。"
+            repairing={repairingSharedStatus}
+            repairDisabled={listening || sending}
+            onRepair={onRepairSharedStatus ? () => void handleRepairSharedStatus() : null}
+          />
+        )}
+
+        {repairResult && (
+          <Alert
+            color={repairResult.ok ? 'green' : 'red'}
+            variant="light"
+            title={repairResult.ok ? '修复结果' : '修复失败'}
+          >
+            <Text size="sm">{repairResult.message}</Text>
+          </Alert>
+        )}
 
         <Card withBorder padding="md">
           <Stack gap="sm">
             <div>
-              <Text fw={600}>监听下一条消息</Text>
+              <Text fw={600}>监听下一条机器人入站活动</Text>
               <Text size="sm" c="dimmed">
-                点击开始后，请立刻在飞书里给这个 Bot 发送一条消息。Mclaw 会在当前机器监听该 Bot 的本地活动，
-                用来判断消息是否真的落到了这台机器上。
+                开始监听后，请立刻在飞书里给这个机器人发送一条消息。Mclaw 会监听当前机器上的本地活动，
+                用来确认事件是否真的落在这台机器上。
               </Text>
             </div>
 
             <Group justify="space-between" align="center">
               <Text size="xs" c="dimmed">监听窗口：60 秒</Text>
-              <Button onClick={() => void handleListen()} loading={listening} disabled={sending}>
-                监听下一条消息
+              <Button
+                onClick={() => void handleListen()}
+                loading={listening}
+                disabled={sending || probeBlockedBySharedStatus}
+              >
+                开始监听下一条消息
               </Button>
             </Group>
+
+            {probeBlockedBySharedStatus && (
+              <Alert color="yellow" variant="light" title="探测已阻塞">
+                <Text size="sm">请先解除共享飞书阻塞状态，再重新运行监听 / 发送探测。</Text>
+              </Alert>
+            )}
 
             {listening && (
               <Group gap="xs">
                 <Loader size="sm" />
-                <Text size="sm" c="dimmed">正在监听当前机器上的 Bot 本地活动，请在飞书中立即发送一条消息…</Text>
+                <Text size="sm" c="dimmed">
+                  正在监听这台机器上的本地机器人活动，现在请去飞书发送消息。
+                </Text>
               </Group>
             )}
 
@@ -260,14 +331,15 @@ export default function FeishuDiagnosticsModal({
         <Card withBorder padding="md">
           <Stack gap="sm">
             <div>
-              <Text fw={600}>发送定位消息</Text>
+              <Text fw={600}>发送定位诊断消息</Text>
               <Text size="sm" c="dimmed">
-                从当前这台机器的这个 Bot，主动给一个已配对用户发送定位消息，用来确认“到底是哪一台机器、哪一个 Bot 在发消息”。
+                让这个机器人向已配对用户发送一条消息，用来确认实际发出消息的是哪台机器、哪个机器人，以及
+                trace id。
               </Text>
             </div>
 
             {accountsError && (
-              <Alert color="red" variant="light" title="已配对用户读取失败">
+              <Alert color="red" variant="light" title="加载已配对账号失败">
                 <Text size="sm">{accountsError}</Text>
               </Alert>
             )}
@@ -275,31 +347,36 @@ export default function FeishuDiagnosticsModal({
             {loadingAccounts ? (
               <Group gap="xs">
                 <Loader size="sm" />
-                <Text size="sm" c="dimmed">正在读取已配对用户…</Text>
+                <Text size="sm" c="dimmed">正在加载已配对的飞书账号...</Text>
               </Group>
             ) : pairedAccountOptions.length > 0 ? (
               <>
                 <Select
-                  label="接收定位消息的已配对用户"
-                  placeholder="选择一个已配对用户"
+                  label="接收人"
+                  placeholder="选择一个已配对的飞书用户"
                   data={pairedAccountOptions}
                   value={selectedOpenId}
                   onChange={setSelectedOpenId}
+                  disabled={probeBlockedBySharedStatus || sending}
                   searchable
                   nothingFoundMessage="没有匹配的已配对用户"
                 />
                 <Group justify="space-between" align="center">
                   <Text size="xs" c="dimmed">
-                    定位消息会带上 Bot、accountId、agentId、机器名和 traceId。
+                    消息会包含机器人、accountId、agentId、机器标识和 trace id。
                   </Text>
-                  <Button onClick={() => void handleSend()} loading={sending} disabled={!selectedOpenId || listening}>
-                    发送定位消息
+                  <Button
+                    onClick={() => void handleSend()}
+                    loading={sending}
+                    disabled={!selectedOpenId || listening || probeBlockedBySharedStatus}
+                  >
+                    发送诊断消息
                   </Button>
                 </Group>
               </>
             ) : (
-              <Alert color="yellow" variant="light" title="还没有可发送对象">
-                <Text size="sm">当前 Bot 还没有已配对用户，暂时无法发送定位消息。</Text>
+              <Alert color="yellow" variant="light" title="暂无已配对用户">
+                <Text size="sm">这个机器人还没有已配对用户，因此暂时无法发送诊断消息。</Text>
               </Alert>
             )}
 

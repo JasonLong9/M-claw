@@ -29,7 +29,7 @@ import { shouldShowSkipButtonForFeishuPairing } from './channel-connect-skip'
 import {
   extractFeishuAsciiQr,
   extractFeishuExistingBotPromptKey,
-  extractFirstHttpUrl,
+  extractFeishuLiveQrUrl,
   FEISHU_OFFICIAL_GUIDE_URL,
 } from '../lib/feishu-installer'
 import { toUserFacingCliFailureMessage, toUserFacingUnknownErrorMessage } from '../lib/user-facing-cli-feedback'
@@ -48,12 +48,19 @@ export interface ChannelConnectNextPayload {
 
 export type ChannelConnectBindingStrategy = 'qr-binding' | 'cli-channels-add' | 'config-write'
 export type ManagedPluginInstallStrategy = 'reuse-installed-plugin' | 'install-plugin'
+type FeishuPathMode = 'create' | 'link'
+type FeishuLinkSourceMode = 'existing' | 'manual'
 type ManagedPluginPrepareResult = Awaited<ReturnType<typeof window.api.prepareManagedChannelPluginForSetup>>
 type ManagedPluginRepairResult = Awaited<ReturnType<typeof window.api.repairManagedChannelPlugin>>
 type FeishuOfficialCliStatusView = Awaited<ReturnType<typeof window.api.getFeishuOfficialCliStatus>>
+type FeishuOfficialCliSessionView = Awaited<ReturnType<typeof window.api.getFeishuOfficialCliSessionState>>
+type FeishuOfficialCliSessionMode = NonNullable<FeishuOfficialCliSessionView['mode']>
+type OAuthUrlOpenResult = Awaited<ReturnType<typeof window.api.openOAuthUrl>>
 type RepairIncompatiblePluginsOptions = Parameters<typeof window.api.repairIncompatiblePlugins>[0]
 type ManagedPluginInstallPreflightApi =
   Pick<typeof window.api, 'prepareManagedChannelPluginForSetup'>
+type FeishuRefreshResourcesApi =
+  Pick<typeof window.api, 'getFeishuInstallerState' | 'getFeishuOfficialCliSessionState'>
 type ChannelConnectGatewayReadyApi =
   Pick<typeof window.api, 'reloadGatewayAfterChannelChange'>
   & Partial<Pick<typeof window.api, 'repairManagedChannelPlugin' | 'getManagedChannelPluginStatus' | 'ensureGatewayRunning'>>
@@ -134,11 +141,1844 @@ function resolveFeishuOfficialCliAuthBadgeLabel(
   return '状态未知'
 }
 
+export function resolveFeishuOfficialCliSessionModeLabel(
+  mode: FeishuOfficialCliSessionMode | null | undefined
+): string {
+  if (mode === 'config-init-new') return '初始化配置'
+  if (mode === 'auth-login-recommend') return '浏览器登录'
+  if (mode === 'auth-login-no-wait') return '设备码登录'
+  return '空闲'
+}
+
+export function resolveFeishuOfficialCliSessionCommand(
+  mode: FeishuOfficialCliSessionMode | null | undefined
+): string {
+  if (mode === 'config-init-new') return 'lark-cli config init --new'
+  if (mode === 'auth-login-recommend') return 'lark-cli auth login --recommend'
+  if (mode === 'auth-login-no-wait') return 'lark-cli auth login --no-wait'
+  return ''
+}
+
+export function resolveFeishuOfficialCliSessionStartState(
+  mode: FeishuOfficialCliSessionMode | null | undefined
+): {
+  sessionId: string
+  mode: FeishuOfficialCliSessionMode | null
+  running: true
+  output: string
+  exitCode: null
+  canceled: false
+  input: string
+  latestAuthUrl: string
+  latestUserCode: string
+  notice: string
+} {
+  return {
+    sessionId: '',
+    mode: mode || null,
+    running: true,
+    output: '',
+    exitCode: null,
+    canceled: false,
+    input: '',
+    latestAuthUrl: '',
+    latestUserCode: '',
+    notice: resolveFeishuOfficialCliSessionLiveNotice({
+      mode: mode || null,
+      running: true,
+    }),
+  }
+}
+
+export function resolveFeishuInstallerSessionStartState(): {
+  sessionId: string
+  running: true
+  output: string
+  exitCode: null
+  canceled: false
+  input: string
+  notice: string
+} {
+  return {
+    sessionId: '',
+    running: true,
+    output: '',
+    exitCode: null,
+    canceled: false,
+    input: '',
+    notice: resolveFeishuInstallerSessionLiveNotice({
+      running: true,
+      hasLiveQr: false,
+      hasOutput: false,
+    }),
+  }
+}
+
+export function resolveFeishuChannelViewResetState(): {
+  botSetupMode: 'create'
+  linkSourceMode: 'existing'
+  createStartConfigSnapshot: null
+  officialPluginInstalled: false
+  officialPluginConfigured: false
+  officialPluginConfigChanged: false
+  officialPluginBundledPayloadAvailable: false
+  bots: Array<ReturnType<typeof listFeishuBots>[number]>
+  pairingStatusByBot: Record<string, { pairedCount: number; pairedUsers: string[] }>
+  selectedExistingBotAccountId: string
+  officialCliStatus: null
+  installerSessionId: string
+  installerRunning: false
+  installerOutput: string
+  installerExitCode: null
+  installerCanceled: false
+  installerBusy: false
+  installerInput: string
+  installerNotice: string
+  officialCliSessionId: string
+  officialCliSessionMode: null
+  officialCliSessionRunning: false
+  officialCliSessionOutput: string
+  officialCliSessionExitCode: null
+  officialCliSessionCanceled: false
+  officialCliSessionBusy: false
+  officialCliSessionInput: string
+  officialCliSessionLatestAuthUrl: string
+  officialCliSessionLatestUserCode: string
+  officialCliSessionNotice: string
+  preparingManualBinding: false
+  manualBindingPreparePhase: 'idle'
+  showInstallTutorial: false
+  finishingSetup: false
+  refreshingState: false
+} {
+  return {
+    botSetupMode: 'create',
+    linkSourceMode: 'existing',
+    createStartConfigSnapshot: null,
+    officialPluginInstalled: false,
+    officialPluginConfigured: false,
+    officialPluginConfigChanged: false,
+    officialPluginBundledPayloadAvailable: false,
+    bots: [],
+    pairingStatusByBot: {},
+    selectedExistingBotAccountId: '',
+    officialCliStatus: null,
+    installerSessionId: '',
+    installerRunning: false,
+    installerOutput: '',
+    installerExitCode: null,
+    installerCanceled: false,
+    installerBusy: false,
+    installerInput: '',
+    installerNotice: '',
+    officialCliSessionId: '',
+    officialCliSessionMode: null,
+    officialCliSessionRunning: false,
+    officialCliSessionOutput: '',
+    officialCliSessionExitCode: null,
+    officialCliSessionCanceled: false,
+    officialCliSessionBusy: false,
+    officialCliSessionInput: '',
+    officialCliSessionLatestAuthUrl: '',
+    officialCliSessionLatestUserCode: '',
+    officialCliSessionNotice: '',
+    preparingManualBinding: false,
+    manualBindingPreparePhase: 'idle',
+    showInstallTutorial: false,
+    finishingSetup: false,
+    refreshingState: false,
+  }
+}
+
+export async function loadFeishuRefreshResources<TSetupState>(params: {
+  api: FeishuRefreshResourcesApi
+  loadSetupState: () => Promise<TSetupState>
+  loadOfficialCliStatus: () => Promise<FeishuOfficialCliStatusView | null>
+}): Promise<{
+  setupState: TSetupState
+  installerSnapshot: Awaited<ReturnType<typeof window.api.getFeishuInstallerState>> | null
+  officialCliSessionSnapshot: FeishuOfficialCliSessionView | null
+  officialCliStatus: FeishuOfficialCliStatusView | null
+}> {
+  const [setupState, installerSnapshot, officialCliSessionSnapshot, officialCliStatus] = await Promise.all([
+    params.loadSetupState(),
+    params.api.getFeishuInstallerState().catch(() => null),
+    params.api.getFeishuOfficialCliSessionState().catch(() => null),
+    params.loadOfficialCliStatus().catch(() => null),
+  ])
+
+  return {
+    setupState,
+    installerSnapshot,
+    officialCliSessionSnapshot,
+    officialCliStatus,
+  }
+}
+
+export function resolveFeishuStopRequestFeedback(params: {
+  target: 'official-cli' | 'installer'
+  ok: boolean
+}): { notice: string; error: string } {
+  if (params.ok) {
+    return params.target === 'official-cli'
+      ? {
+          notice: 'Stopping the official guided session...',
+          error: '',
+        }
+      : {
+          notice: '已请求终止飞书官方安装器，正在停止...',
+          error: '',
+        }
+  }
+
+  return params.target === 'official-cli'
+    ? {
+        notice: '',
+        error: 'Failed to stop the official lark-cli guided session. Please retry.',
+      }
+    : {
+        notice: '',
+      error: '终止飞书官方安装器失败，请稍后重试。',
+      }
+}
+
+export function resolveFeishuStatusRefreshOptions(
+  preparingManualBinding: boolean
+): {
+  userInitiated: true
+  recoverManualBindingIfReady: boolean
+} {
+  return {
+    userInitiated: true,
+    recoverManualBindingIfReady: preparingManualBinding,
+  }
+}
+
+export function getFeishuSessionInputFailureMessage(params: {
+  target: 'official-cli' | 'installer'
+  detail?: string
+  error?: unknown
+}): string {
+  const fallback =
+    params.target === 'installer'
+      ? '写入飞书官方安装器失败'
+      : 'Failed to write to the official lark-cli guided session.'
+
+  if (typeof params.error !== 'undefined') {
+    return toUserFacingUnknownErrorMessage(params.error, fallback)
+  }
+
+  return toUserFacingCliFailureMessage({
+    stderr: params.detail,
+    fallback,
+  })
+}
+
+export function shouldResetFeishuSessionDraftOnSnapshot(params: {
+  currentSessionId?: string | null
+  nextSessionId?: string | null
+  active?: boolean | null
+}): boolean {
+  const currentSessionId = String(params.currentSessionId || '').trim()
+  const nextSessionId = String(params.nextSessionId || '').trim()
+
+  if (!params.active) return true
+  if (!nextSessionId) return true
+  return currentSessionId !== nextSessionId
+}
+
+export function resolveFeishuOfficialCliSessionStartPlan(params: {
+  requestedMode: FeishuOfficialCliSessionMode
+  currentMode?: FeishuOfficialCliSessionMode | null
+  hasActiveSession: boolean
+}): {
+  mode: FeishuOfficialCliSessionMode | null
+  shouldPrimeFreshStartState: boolean
+} {
+  if (params.hasActiveSession) {
+    return {
+      mode: params.currentMode || null,
+      shouldPrimeFreshStartState: false,
+    }
+  }
+
+  return {
+    mode: params.requestedMode,
+    shouldPrimeFreshStartState: true,
+  }
+}
+
+export function resolveFeishuInstallerStartPlan(params: {
+  requestedMode: 'create' | 'link'
+  currentMode: 'create' | 'link'
+  hasActiveSession: boolean
+}): {
+  mode: 'create' | 'link'
+  shouldPrimeFreshStartState: boolean
+  createSnapshotAction: 'capture' | 'clear' | 'preserve'
+} {
+  if (params.hasActiveSession) {
+    return {
+      mode: params.currentMode,
+      shouldPrimeFreshStartState: false,
+      createSnapshotAction: 'preserve',
+    }
+  }
+
+  return {
+    mode: params.requestedMode,
+    shouldPrimeFreshStartState: true,
+    createSnapshotAction: params.requestedMode === 'create' ? 'capture' : 'clear',
+  }
+}
+
+export function resolveFeishuSessionReuseNotice(params: {
+  target: 'official-cli' | 'installer'
+  requestedMode?: FeishuOfficialCliSessionMode | null
+  currentMode?: FeishuOfficialCliSessionMode | null
+}): string {
+  if (params.target === 'installer') {
+    return '飞书官方安装器已在运行中，Mclaw 已重新连接到当前安装会话，不会重复启动第二个安装器。'
+  }
+
+  const currentLabel = resolveFeishuOfficialCliSessionModeLabel(params.currentMode)
+  const requestedLabel = resolveFeishuOfficialCliSessionModeLabel(params.requestedMode)
+
+  if (
+    params.currentMode
+    && params.requestedMode
+    && params.currentMode !== params.requestedMode
+  ) {
+    return `An official ${currentLabel} session is already running. Mclaw reattached to it instead of starting a new ${requestedLabel} session.`
+  }
+
+  return `An official ${currentLabel} session is already running. Mclaw reattached to it instead of starting a second one.`
+}
+
+export function resolveFeishuInstallerSessionLiveNotice(params: {
+  running: boolean
+  hasLiveQr?: boolean
+  hasOutput?: boolean
+}): string {
+  if (!params.running) return ''
+
+  if (params.hasLiveQr) {
+    return '飞书官方安装器仍在运行，请扫描下方本次生成的二维码；机器人创建完成后再继续后续步骤。'
+  }
+
+  if (params.hasOutput) {
+    return '飞书官方安装器仍在运行，请查看下方实时输出；只有出现“本次安装器二维码”后再扫码。'
+  }
+
+  return '飞书官方安装器仍在运行，正在等待本次二维码生成。'
+}
+
+export function resolveFeishuInstallerSessionExitNotice(params: {
+  canceled: boolean
+  exitCode: number | null | undefined
+}): string {
+  if (params.canceled) {
+    return '飞书官方安装器已取消；如果还需要新的二维码，可随时重新启动。'
+  }
+
+  if ((params.exitCode ?? null) === 0) {
+    return '飞书官方安装器已完成，请查看下方刷新后的本地状态，并在机器人出现后继续。'
+  }
+
+  if (params.exitCode !== null && typeof params.exitCode !== 'undefined') {
+    return `飞书官方安装器已退出，退出码为 ${params.exitCode}；请先检查下方输出，再决定是否重试。`
+  }
+
+  return ''
+}
+
+export function resolveFeishuInstallerOutputState(output?: string): {
+  hasLiveQr: boolean
+  hasOutput: boolean
+} {
+  const normalizedOutput = String(output || '')
+  return {
+    hasLiveQr:
+      extractFeishuAsciiQr(normalizedOutput).length > 0
+      || Boolean(extractFeishuLiveQrUrl(normalizedOutput)),
+    hasOutput: Boolean(normalizedOutput.trim()),
+  }
+}
+
+export function resolveFeishuOfficialCliSessionExitNotice(params: {
+  mode: FeishuOfficialCliSessionMode | null | undefined
+  canceled: boolean
+  exitCode: number | null | undefined
+  authState: FeishuOfficialCliStatusView['authState'] | null | undefined
+}): string {
+  if (params.canceled) {
+    return '官方引导会话已取消；如需继续，可随时重新启动。'
+  }
+
+  if ((params.exitCode ?? null) === 0) {
+    if (
+      (params.mode === 'auth-login-recommend' || params.mode === 'auth-login-no-wait')
+      && params.authState === 'authenticated'
+    ) {
+      return '已确认飞书官方 CLI 登录完成；请继续下方托管的 `openclaw-lark` 运行时配置。'
+    }
+    if (params.mode === 'config-init-new') {
+      return '官方 config-init 已完成；请查看下方刷新的本地状态，再继续托管的 `openclaw-lark` 运行时路径。'
+    }
+    return '官方引导命令已结束，但后续状态还未确认；请查看刷新后的状态，必要时重试。'
+  }
+
+  if (params.exitCode !== null && typeof params.exitCode !== 'undefined') {
+    return `官方引导会话已退出，退出码为 ${params.exitCode}；重试前请先查看下方输出。`
+  }
+
+  return ''
+}
+
+export function resolveFeishuOfficialCliSessionSnapshotNotice(params: {
+  active: boolean
+  mode: FeishuOfficialCliSessionMode | null | undefined
+  latestAuthUrl?: string
+  latestUserCode?: string
+  canceled: boolean
+  exitCode: number | null | undefined
+  authState: FeishuOfficialCliStatusView['authState'] | null | undefined
+}): string {
+  if (params.active) {
+    return resolveFeishuOfficialCliSessionLiveNotice({
+      mode: params.mode,
+      running: true,
+      hasAuthUrl: Boolean(String(params.latestAuthUrl || '').trim()),
+      hasUserCode: Boolean(String(params.latestUserCode || '').trim()),
+    })
+  }
+
+  return resolveFeishuOfficialCliSessionExitNotice({
+    mode: params.mode,
+    canceled: params.canceled,
+    exitCode: params.exitCode,
+    authState: params.authState,
+  })
+}
+
+export function resolveFeishuOfficialCliSessionLiveNotice(params: {
+  mode: FeishuOfficialCliSessionMode | null | undefined
+  running: boolean
+  hasAuthUrl?: boolean
+  hasUserCode?: boolean
+}): string {
+  if (!params.running) return ''
+
+  if (params.mode === 'auth-login-no-wait') {
+    if (params.hasUserCode || params.hasAuthUrl) {
+      return '官方设备码登录仍在进行中；请使用下方的验证链接或设备码完成验证。'
+    }
+    return '官方设备码登录仍在进行中；如果浏览器没有自动打开，请使用下方的链接或设备码继续。'
+  }
+
+  if (params.mode === 'auth-login-recommend') {
+    if (params.hasAuthUrl) {
+      return '官方引导登录仍在进行中；如果浏览器没有自动打开，请使用下方的验证链接继续。'
+    }
+    return '官方引导登录仍在进行中；请先完成浏览器授权，随后 Mclaw 会自动重新检查 CLI 登录状态。'
+  }
+
+  if (params.mode === 'config-init-new') {
+    return '官方 config-init 仍在进行中；完成后 Mclaw 会自动刷新本地飞书配置状态。'
+  }
+
+  return '官方 lark-cli 引导会话仍在进行中；继续前请先查看下方实时输出。'
+}
+
+export function resolveFeishuOfficialCliGuidedFlowPurpose(params: {
+  authState: FeishuOfficialCliStatusView['authState'] | null | undefined
+  sessionMode: FeishuOfficialCliSessionMode | null | undefined
+  sessionRunning: boolean
+}): { label: string; detail: string } {
+  const modeLabel = resolveFeishuOfficialCliSessionModeLabel(params.sessionMode)
+  const authMode =
+    params.sessionMode === 'auth-login-recommend' || params.sessionMode === 'auth-login-no-wait'
+
+  if (params.sessionRunning) {
+    return {
+      label: '执行区',
+      detail: authMode
+        ? `${modeLabel}正在执行；请先在这里完成官方登录，再回到上方“下一步建议”。`
+        : `${modeLabel}正在执行；请先查看实时输出并完成这一步，再执行上方建议的后续动作。`,
+    }
+  }
+
+  if (params.authState === 'unauthenticated') {
+    return {
+      label: '执行区',
+      detail: '只有在上方“下一步建议”要求官方登录时，才在这里启动官方登录步骤。',
+    }
+  }
+
+  if (params.authState === 'authenticated') {
+    return {
+      label: '执行区',
+      detail: '这里只有在需要执行官方 CLI 动作时才使用，例如初始化官方配置或补做登录恢复；下一步以“下一步建议”为准。',
+    }
+  }
+
+  if (params.authState === 'error' || params.authState === 'unknown') {
+    return {
+      label: '执行区',
+      detail: '只有在上方“下一步建议”要求刷新或重试时，才在这里重新执行登录或初始化配置。',
+    }
+  }
+
+  return {
+    label: '执行区',
+    detail: '这里用于执行上方“下一步建议”当前推荐的官方 CLI 步骤。',
+  }
+}
+
+export function resolveFeishuOfficialCliSessionStatus(params: {
+  mode: FeishuOfficialCliSessionMode | null | undefined
+  running: boolean
+  exitCode: number | null | undefined
+  canceled: boolean
+  authState: FeishuOfficialCliStatusView['authState'] | null | undefined
+  hasAuthUrl?: boolean
+  hasUserCode?: boolean
+}): { color: string; label: string; detail: string } {
+  const modeLabel = resolveFeishuOfficialCliSessionModeLabel(params.mode)
+  const isAuthMode =
+    params.mode === 'auth-login-recommend' || params.mode === 'auth-login-no-wait'
+
+  if (params.running) {
+    if (params.mode === 'auth-login-no-wait' && params.hasUserCode) {
+      return {
+        color: 'blue',
+        label: '等待设备码验证',
+        detail: '设备码登录正在进行中；请使用下方显示的设备码完成官方验证后再返回。',
+      }
+    }
+    if (isAuthMode && params.hasAuthUrl) {
+      return {
+        color: 'blue',
+        label: '等待浏览器验证',
+        detail: `${modeLabel}正在运行；如果浏览器没有自动打开，请使用下方的链接或设备码继续。`,
+      }
+    }
+    return {
+      color: 'blue',
+      label: '运行中',
+      detail: `${modeLabel}正在 Mclaw 中运行；请查看下方实时输出，并在这里完成官方流程。`,
+    }
+  }
+
+  if (params.canceled) {
+    return {
+      color: 'gray',
+      label: '已取消',
+      detail: `${modeLabel}已在完成前取消；如需继续，请重新启动。`,
+    }
+  }
+
+  if (params.exitCode === 0) {
+    if (isAuthMode && params.authState === 'authenticated') {
+      return {
+        color: 'teal',
+        label: '登录已就绪',
+        detail: '官方 CLI 登录已完成，Mclaw 已检测到飞书 CLI 处于已登录状态；可以继续下方托管运行时配置。',
+      }
+    }
+    if (isAuthMode) {
+      return {
+        color: 'yellow',
+        label: '待刷新登录状态',
+        detail: '引导登录命令已结束，但 Mclaw 还未确认登录状态；如有需要，请刷新状态或重新执行登录。',
+      }
+    }
+    return {
+      color: 'teal',
+      label: '初始化已完成',
+      detail: '官方 config-init 已完成；请刷新本地状态，再继续托管的 `openclaw-lark` 运行时路径。',
+    }
+  }
+
+  if (params.exitCode !== null && params.exitCode !== undefined) {
+    return {
+      color: 'red',
+      label: `退出 ${params.exitCode}`,
+      detail: `${modeLabel}执行失败；重试前请先查看下方官方 CLI 输出。`,
+    }
+  }
+
+  return {
+    color: 'gray',
+    label: '未开始',
+    detail: '当你需要由 Mclaw 驱动浏览器或设备码登录时，可在这里启动官方引导 CLI 流程。',
+  }
+}
+
+export type FeishuOfficialOnboardingAction =
+  | 'refresh-status'
+  | 'start-auth-login-recommend'
+  | 'start-auth-login-no-wait'
+  | 'start-config-init-new'
+  | 'focus-guided-flow'
+  | 'open-auth-url'
+  | 'copy-device-code'
+  | 'finish-create'
+  | 'finish-link'
+  | 'start-create'
+  | 'start-link'
+  | 'switch-link-existing'
+  | 'switch-link-manual'
+  | 'focus-create'
+  | 'focus-link'
+
+export function resolveFeishuOfficialOnboardingActionLabel(
+  action: FeishuOfficialOnboardingAction
+): string {
+  if (action === 'refresh-status') return '刷新状态'
+  if (action === 'start-auth-login-recommend') return '启动引导登录'
+  if (action === 'start-auth-login-no-wait') return '使用设备码'
+  if (action === 'start-config-init-new') return '初始化官方配置'
+  if (action === 'focus-guided-flow') return '查看官方 CLI'
+  if (action === 'open-auth-url') return '打开验证页面'
+  if (action === 'copy-device-code') return '复制设备码'
+  if (action === 'finish-create') return '完成新建配置'
+  if (action === 'finish-link') return '完成关联配置'
+  if (action === 'start-create') return '新建机器人'
+  if (action === 'start-link') return '关联已有机器人'
+  if (action === 'switch-link-existing') return '复用已检测到机器人'
+  if (action === 'switch-link-manual') return '改用手动绑定'
+  if (action === 'focus-create') return '继续新建流程'
+  return '继续关联流程'
+}
+
+export type FeishuOfficialCliGuidedFlowAction =
+  | FeishuOfficialOnboardingAction
+  | 'stop-official-cli-session'
+
+export function resolveFeishuOfficialCliGuidedFlowActionLabel(
+  action: FeishuOfficialCliGuidedFlowAction
+): string {
+  if (action === 'stop-official-cli-session') return '停止会话'
+  return resolveFeishuOfficialOnboardingActionLabel(action)
+}
+
+export function resolveFeishuOfficialOnboardingSummary(params: {
+  setupMode: 'create' | 'link'
+  linkSourceMode: FeishuLinkSourceMode
+  botCount: number
+  selectedExistingBotName?: string
+  pluginInstalled: boolean
+  officialPluginConfigured: boolean
+  pluginConfigChanged?: boolean
+}): Array<{ label: string; value: string }> {
+  const currentTargetValue = resolveFeishuOfficialOnboardingCurrentTarget({
+    setupMode: params.setupMode,
+    linkSourceMode: params.linkSourceMode,
+    botCount: params.botCount,
+    selectedExistingBotName: params.selectedExistingBotName,
+  })
+  const runtimePluginValue = resolveFeishuOfficialOnboardingRuntimeSummary({
+    pluginInstalled: params.pluginInstalled,
+    officialPluginConfigured: params.officialPluginConfigured,
+    pluginConfigChanged: params.pluginConfigChanged,
+  })
+
+  if (params.setupMode === 'create') {
+    return [
+      { label: '路径', value: '新建机器人' },
+      {
+        label: '当前目标',
+        value: currentTargetValue,
+      },
+      { label: '运行时插件', value: runtimePluginValue },
+      { label: '完成后', value: '跳过配对并继续' },
+    ]
+  }
+
+  return [
+    { label: '路径', value: '关联已有机器人' },
+    {
+      label: '当前目标',
+      value: currentTargetValue,
+    },
+    { label: '运行时插件', value: runtimePluginValue },
+    { label: '完成后', value: '继续飞书配对' },
+  ]
+}
+
+export function resolveFeishuOfficialOnboardingCurrentTarget(params: {
+  setupMode: 'create' | 'link'
+  linkSourceMode: FeishuLinkSourceMode
+  botCount: number
+  selectedExistingBotName?: string
+}): string {
+  if (params.setupMode === 'create') {
+    if (params.botCount === 0) return '等待扫码新建'
+    return params.botCount === 1 ? '检测到 1 个机器人' : `检测到 ${params.botCount} 个机器人`
+  }
+
+  if (params.linkSourceMode === 'manual') {
+    return '手动填写 App ID / App Secret'
+  }
+
+  if (params.selectedExistingBotName) {
+    return `复用 ${params.selectedExistingBotName}`
+  }
+
+  if (params.botCount > 0) {
+    return '复用已检测到机器人'
+  }
+
+  return '暂无可复用机器人'
+}
+
+export function resolveFeishuPathNavigatorItems(
+  activeMode: FeishuPathMode
+): Array<{ mode: FeishuPathMode; label: string; active: boolean }> {
+  return resolveFeishuPathDescriptors().map((item) => ({
+    mode: item.mode,
+    label: item.navigatorLabel,
+    active: activeMode === item.mode,
+  }))
+}
+
+export function resolveFeishuPathDescriptors(): Array<{
+  mode: FeishuPathMode
+  overviewTitle: string
+  overviewDetail: string
+  cardTitle: string
+  cardDetail: string
+  navigatorLabel: string
+}> {
+  return [
+    {
+      mode: 'create',
+      overviewTitle: '路径 A：新建机器人',
+      overviewDetail: '普通用户优先路径：验证官方安装器、扫码创建、自动回填和新建完成后的收尾状态。',
+      cardTitle: '路径 A：新建机器人',
+      cardDetail: '默认推荐大多数用户走这条；扫码创建后由 Mclaw 自动回填并继续后续流程。',
+      navigatorLabel: '查看新建路径',
+    },
+    {
+      mode: 'link',
+      overviewTitle: '路径 B：关联已有机器人',
+      overviewDetail: '高级兜底路径：验证插件就绪检查、手填 App ID / App Secret、已有机器人绑定和后续配对流程。',
+      cardTitle: '路径 B：关联已有机器人',
+      cardDetail: '适合已经有飞书应用，或在扫码创建失败后回退到手动凭证绑定。',
+      navigatorLabel: '查看关联路径',
+    },
+  ]
+}
+
+export function resolveFeishuOfficialOnboardingRuntimeSummary(params: {
+  pluginInstalled: boolean
+  officialPluginConfigured: boolean
+  pluginConfigChanged?: boolean
+}): string {
+  if (params.pluginInstalled && params.officialPluginConfigured) {
+    return '磁盘中已就绪'
+  }
+
+  if (params.pluginInstalled && params.pluginConfigChanged) {
+    return '待同步配置后复用'
+  }
+
+  if (params.pluginInstalled) {
+    return '进入时校验配置'
+  }
+
+  return '首次使用时安装'
+}
+
+export function resolveFeishuOfficialOnboardingRuntimeDetail(params: {
+  pluginInstalled: boolean
+  officialPluginConfigured: boolean
+  pluginConfigChanged?: boolean
+  bundledPayloadAvailable?: boolean
+}): string {
+  if (params.pluginInstalled && params.officialPluginConfigured) {
+    return '托管的 `openclaw-lark` 运行时插件和共享配置都已就绪。'
+  }
+
+  if (params.pluginInstalled && params.pluginConfigChanged) {
+    return '托管的 `openclaw-lark` 运行时插件已在本地，但在手动绑定前 Mclaw 还需要先同步共享配置。'
+  }
+
+  if (params.pluginInstalled) {
+    return '托管的 `openclaw-lark` 运行时插件已在本地，进入该路径时 Mclaw 会再次检查共享配置。'
+  }
+
+  if (params.bundledPayloadAvailable) {
+    return '进入该路径时，Mclaw 会从打包产物内置内容安装 `openclaw-lark` 运行时插件。'
+  }
+
+  return '进入该路径时，Mclaw 会安装托管的 `openclaw-lark` 运行时插件。'
+}
+
+export function resolveFeishuOfficialOnboardingLinkPathDetail(params: {
+  linkSourceMode: FeishuLinkSourceMode
+  linkHasProgress: boolean
+  linkCanFinish: boolean
+  selectedExistingBotName?: string
+  selectedPathHasProgress?: boolean
+}): string {
+  const activePathHasProgress = params.selectedPathHasProgress ?? params.linkHasProgress
+
+  if (params.linkCanFinish && params.linkSourceMode === 'existing') {
+    return params.selectedExistingBotName
+      ? `已可以使用「${params.selectedExistingBotName}」完成关联。`
+      : '已可以使用当前选中的可复用机器人完成关联。'
+  }
+
+  if (params.linkCanFinish && params.linkSourceMode === 'manual') {
+    return '手动 App ID / App Secret 路径已可完成。'
+  }
+
+  if (params.linkSourceMode === 'manual') {
+    return activePathHasProgress
+      ? '手动 App ID / App Secret 路径已有进度。'
+      : '下一步请继续手动 App ID / App Secret 路径。'
+  }
+
+  if (activePathHasProgress) {
+    return '关联已有机器人路径已有进度。'
+  }
+
+  return '下一步请继续关联已有机器人路径。'
+}
+
+export function resolveFeishuLinkPathEntryStatus(params: {
+  officialPluginInstalled: boolean
+  officialPluginConfigured: boolean
+  officialPluginConfigChanged?: boolean
+}): { color: string; label: string; detail: string } {
+  if (params.officialPluginInstalled && params.officialPluginConfigured) {
+    return {
+      color: 'teal',
+      label: '关联路径就绪',
+      detail: '已检测到飞书官方插件和共享配置；点击“关联已有机器人”后可直接进入已有机器人选择或手动绑定。',
+    }
+  }
+
+  if (params.officialPluginInstalled && params.officialPluginConfigChanged) {
+    return {
+      color: 'blue',
+      label: '待同步插件配置',
+      detail: '已检测到飞书官方插件；点击“关联已有机器人”后会先补齐 Mclaw 需要的共享配置，然后进入手动绑定。',
+    }
+  }
+
+  if (params.officialPluginInstalled) {
+    return {
+      color: 'blue',
+      label: '待校验插件状态',
+      detail: '已检测到飞书官方插件；点击“关联已有机器人”后会先复查共享配置，再决定是否直接进入手动绑定。',
+    }
+  }
+
+  return {
+    color: 'gray',
+    label: '将自动安装插件',
+    detail: '尚未发现飞书官方插件；点击“关联已有机器人”后会先自动安装，再进入手动绑定。',
+  }
+}
+
+export function resolveFeishuExistingLinkNoBotActions(): {
+  primaryAction: FeishuOfficialOnboardingAction
+  secondaryAction: FeishuOfficialOnboardingAction
+} {
+  return {
+    primaryAction: 'switch-link-manual',
+    secondaryAction: 'start-create',
+  }
+}
+
+export function resolveFeishuExistingLinkNoBotStatus(params: {
+  officialPluginInstalled: boolean
+  officialPluginConfigured: boolean
+  officialPluginConfigChanged?: boolean
+}): { color: string; label: string; detail: string } {
+  const runtimeIntro = resolveFeishuLinkPathPanelIntro({
+    botCount: 0,
+    linkSourceMode: 'manual',
+    officialPluginInstalled: params.officialPluginInstalled,
+    officialPluginConfigured: params.officialPluginConfigured,
+    officialPluginConfigChanged: params.officialPluginConfigChanged,
+  })
+
+  return {
+    color: 'warning',
+    label: '暂无可复用机器人',
+    detail: `当前还没有检测到可复用机器人；如果你已经有 App ID / App Secret，建议切到手动绑定，否则先新建机器人。${runtimeIntro.detail}`,
+  }
+}
+
+export function shouldUseFeishuExistingLinkNoBotRecovery(params: {
+  setupMode: 'create' | 'link'
+  linkSourceMode: FeishuLinkSourceMode
+  botCount: number
+  linkCanFinish: boolean
+  preparingManualBinding: boolean
+  manualCredentialInput: boolean
+  manualCredentialsReady: boolean
+}): boolean {
+  return (
+    params.setupMode === 'link'
+    && params.linkSourceMode === 'existing'
+    && params.botCount === 0
+    && !params.linkCanFinish
+    && !params.preparingManualBinding
+    && !params.manualCredentialInput
+    && !params.manualCredentialsReady
+  )
+}
+
+function resolveFeishuExistingLinkNoBotNextStep(params: {
+  runtimeHint: string
+  cliOptional: boolean
+}): {
+  color: string
+  title: string
+  detail: string
+  primaryAction: FeishuOfficialOnboardingAction | null
+  secondaryAction: FeishuOfficialOnboardingAction | null
+} {
+  const missingBotActions = resolveFeishuExistingLinkNoBotActions()
+  const cliPrefix = params.cliOptional
+    ? '当前机器未安装飞书官方 CLI，但你仍然可以继续本地托管路径。'
+    : ''
+
+  return {
+    color: 'yellow',
+    title: '暂无可复用机器人',
+    detail: `${cliPrefix}${cliPrefix ? ' ' : ''}当前没有可复用的已检测机器人；如果你已有 App ID / App Secret，请切到手动绑定，否则先新建机器人。${params.runtimeHint ? ` ${params.runtimeHint}` : ''}`,
+    primaryAction: missingBotActions.primaryAction,
+    secondaryAction: missingBotActions.secondaryAction,
+  }
+}
+
+export function resolveFeishuLinkPathPanelIntro(params: {
+  botCount: number
+  linkSourceMode: FeishuLinkSourceMode
+  officialPluginInstalled: boolean
+  officialPluginConfigured: boolean
+  officialPluginConfigChanged?: boolean
+}): { color: string; label: string; detail: string } {
+  if (params.officialPluginInstalled && params.officialPluginConfigured) {
+    return params.botCount > 0 && params.linkSourceMode === 'existing'
+      ? {
+          color: 'teal',
+          label: '插件已就绪',
+          detail: '已确认飞书官方插件可用。你可以直接复用已检测到的机器人，也可以切到手动模式输入新的 App ID / App Secret。',
+        }
+      : {
+          color: 'teal',
+          label: '插件已就绪',
+          detail: '已确认飞书官方插件可用，现在可以手动填写已有机器人的 App ID / App Secret；完成机器人配置后，再继续输入飞书配对码。',
+        }
+  }
+
+  if (params.officialPluginInstalled && params.officialPluginConfigChanged) {
+    return params.botCount > 0 && params.linkSourceMode === 'existing'
+      ? {
+          color: 'blue',
+          label: '待同步配置',
+          detail: '已检测到飞书官方插件和机器人配置；继续关联路径时，Mclaw 会先补齐共享配置，再开放复用或手动绑定。',
+        }
+      : {
+          color: 'blue',
+          label: '待同步配置',
+          detail: '已检测到飞书官方插件；继续关联路径时，Mclaw 会先补齐共享配置，再开放手动绑定。',
+        }
+  }
+
+  if (params.officialPluginInstalled) {
+    return params.botCount > 0 && params.linkSourceMode === 'existing'
+      ? {
+          color: 'blue',
+          label: '待校验状态',
+          detail: '已检测到飞书官方插件；继续关联路径时，Mclaw 仍会先复查共享配置，再开放复用或手动绑定。',
+        }
+      : {
+          color: 'blue',
+          label: '待校验状态',
+          detail: '已检测到飞书官方插件；继续关联路径时，Mclaw 仍会先复查共享配置，再开放手动绑定。',
+        }
+  }
+
+  return params.botCount > 0 && params.linkSourceMode === 'existing'
+    ? {
+        color: 'gray',
+        label: '待安装插件',
+        detail: '已检测到飞书机器人配置，但官方插件尚未落盘；继续关联路径时，Mclaw 会先自动安装插件，再开放复用或手动绑定。',
+      }
+    : {
+        color: 'gray',
+        label: '待安装插件',
+        detail: '尚未发现飞书官方插件；继续关联路径时，Mclaw 会先自动安装，再开放手动绑定。',
+      }
+}
+
+export function resolveFeishuCreatePathStatus(params: {
+  finishingSetup: boolean
+  botCount: number
+  installerRunning: boolean
+  installerOutput?: string
+}): { color: string; label: string; detail: string } {
+  if (params.finishingSetup) {
+    return {
+      color: 'blue',
+      label: '收尾中',
+      detail: '正在把新建机器人的结果写回 Mclaw。',
+    }
+  }
+
+  if (params.botCount > 0) {
+    return {
+      color: 'success',
+      label: '已检测到机器人',
+      detail: '已经发现可用的飞书机器人，当前可以点击“完成机器人配置”。',
+    }
+  }
+
+  if (params.installerRunning) {
+    return {
+      color: 'warning',
+      label: '创建流程进行中',
+      detail: '官方安装器正在运行，请继续完成扫码、命名或确认步骤。',
+    }
+  }
+
+  if (String(params.installerOutput || '').trim()) {
+    return {
+      color: 'blue',
+      label: '等待确认结果',
+      detail: '已经有安装器输出，请结合日志和刷新状态判断是否已创建完成。',
+    }
+  }
+
+  return {
+    color: 'gray',
+    label: '未开始',
+    detail: '点击“新建机器人”后开始官方安装器创建流程。',
+  }
+}
+
+export function resolveFeishuLinkPathStatus(params: {
+  finishingSetup: boolean
+  preparingManualBinding: boolean
+  manualBindingPreparePhase?: FeishuManualBindingPreparePhase
+  linkSourceMode: FeishuLinkSourceMode
+  selectedExistingBotName?: string
+  manualCredentialsReady: boolean
+  manualCredentialInput: boolean
+  botCount: number
+  officialPluginInstalled: boolean
+  officialPluginConfigured: boolean
+  officialPluginConfigChanged?: boolean
+}): { color: string; label: string; detail: string } {
+  if (params.finishingSetup) {
+    return {
+      color: 'blue',
+      label: '绑定收尾中',
+      detail: '正在把已有机器人的配置写回 Mclaw。',
+    }
+  }
+
+  if (params.preparingManualBinding) {
+    return resolveFeishuManualBindingPreparationStatus(params.manualBindingPreparePhase || 'idle')
+  }
+
+  if (params.linkSourceMode === 'existing' && params.botCount === 0) {
+    return resolveFeishuExistingLinkNoBotStatus({
+      officialPluginInstalled: params.officialPluginInstalled,
+      officialPluginConfigured: params.officialPluginConfigured,
+      officialPluginConfigChanged: params.officialPluginConfigChanged,
+    })
+  }
+
+  if (params.linkSourceMode === 'existing' && params.botCount > 0) {
+    return {
+      color: 'success',
+      label: '将复用现有机器人',
+      detail: params.selectedExistingBotName
+        ? `当前会直接复用「${params.selectedExistingBotName}」完成绑定。`
+        : '当前会直接复用已检测到的机器人完成绑定。',
+    }
+  }
+
+  if (params.linkSourceMode === 'manual' && params.manualCredentialsReady) {
+    return {
+      color: 'success',
+      label: '可直接绑定',
+      detail: 'App ID / App Secret 已满足要求，可以点击“完成机器人配置”。',
+    }
+  }
+
+  if (params.linkSourceMode === 'manual' && params.manualCredentialInput) {
+    return {
+      color: 'blue',
+      label: '待补全字段',
+      detail:
+        params.botCount > 0
+          ? '已经开始填写已有机器人参数；如需回退，也可以直接切回复用已检测到的机器人。'
+          : '已经开始填写已有机器人参数，请先补齐必填字段。',
+    }
+  }
+
+  if (params.linkSourceMode === 'manual') {
+    return {
+      color: 'gray',
+      label: params.botCount > 0 ? '手动模式' : '待输入凭证',
+      detail:
+        params.botCount > 0
+          ? '当前处于手动绑定模式；如果不想继续填凭证，也可以切回复用已检测到的机器人。'
+          : '当前处于手动绑定模式，请填写 App ID / App Secret。',
+    }
+  }
+
+  return resolveFeishuLinkPathEntryStatus({
+    officialPluginInstalled: params.officialPluginInstalled,
+    officialPluginConfigured: params.officialPluginConfigured,
+    officialPluginConfigChanged: params.officialPluginConfigChanged,
+  })
+}
+
+export function resolveFeishuCreatePathCardActions(params: {
+  finishingSetup: boolean
+  createCanFinish: boolean
+  installerRunning: boolean
+  installerOutput?: string
+}): {
+  primaryAction: FeishuOfficialOnboardingAction | null
+  secondaryAction: FeishuOfficialOnboardingAction | null
+} {
+  if (params.finishingSetup) {
+    return {
+      primaryAction: null,
+      secondaryAction: null,
+    }
+  }
+
+  if (params.createCanFinish) {
+    return {
+      primaryAction: 'finish-create',
+      secondaryAction: 'focus-create',
+    }
+  }
+
+  if (params.installerRunning || String(params.installerOutput || '').trim()) {
+    return {
+      primaryAction: 'focus-create',
+      secondaryAction: 'refresh-status',
+    }
+  }
+
+  return {
+    primaryAction: 'start-create',
+    secondaryAction: null,
+  }
+}
+
+export function resolveFeishuLinkPathCardActions(params: {
+  finishingSetup: boolean
+  preparingManualBinding: boolean
+  linkCanFinish: boolean
+  linkSourceMode: FeishuLinkSourceMode
+  botCount: number
+  manualCredentialInput: boolean
+}): {
+  primaryAction: FeishuOfficialOnboardingAction | null
+  secondaryAction: FeishuOfficialOnboardingAction | null
+} {
+  if (params.finishingSetup) {
+    return {
+      primaryAction: null,
+      secondaryAction: null,
+    }
+  }
+
+  if (params.linkCanFinish) {
+    return {
+      primaryAction: 'finish-link',
+      secondaryAction: 'focus-link',
+    }
+  }
+
+  if (params.preparingManualBinding) {
+    return {
+      primaryAction: 'focus-link',
+      secondaryAction: null,
+    }
+  }
+
+  if (params.linkSourceMode === 'existing') {
+    if (params.botCount > 0) {
+      return {
+        primaryAction: 'focus-link',
+        secondaryAction: null,
+      }
+    }
+
+    return resolveFeishuExistingLinkNoBotActions()
+  }
+
+  if (params.botCount > 0 && !params.manualCredentialInput) {
+    return {
+      primaryAction: 'switch-link-existing',
+      secondaryAction: 'focus-link',
+    }
+  }
+
+  if (params.manualCredentialInput) {
+    return {
+      primaryAction: 'focus-link',
+      secondaryAction: params.botCount > 0 ? 'switch-link-existing' : null,
+    }
+  }
+
+  return {
+    primaryAction: 'focus-link',
+    secondaryAction: params.botCount > 0 ? 'switch-link-existing' : null,
+  }
+}
+
+export function resolveFeishuOfficialOnboardingBlockers(params: {
+  cliAvailable: boolean | null | undefined
+  authState: FeishuOfficialCliStatusView['authState'] | null | undefined
+  sessionMode: FeishuOfficialCliSessionMode | null | undefined
+  sessionRunning: boolean
+  hasAuthUrl?: boolean
+  hasUserCode?: boolean
+  clipboardAvailable?: boolean
+  setupMode: 'create' | 'link'
+  botCount: number
+  installerRunning: boolean
+  installerOutput?: string
+  preparingManualBinding: boolean
+  manualBindingPreparePhase?: FeishuManualBindingPreparePhase
+  manualCredentialInput: boolean
+  manualCredentialsReady: boolean
+  createCanFinish: boolean
+  linkCanFinish: boolean
+  linkSourceMode: FeishuLinkSourceMode
+}): Array<{
+  label: string
+  detail: string
+  primaryAction: FeishuOfficialOnboardingAction | null
+  secondaryAction: FeishuOfficialOnboardingAction | null
+}> {
+  const authMode =
+    params.sessionMode === 'auth-login-recommend' || params.sessionMode === 'auth-login-no-wait'
+
+  if (params.sessionRunning) {
+    if (authMode && params.hasUserCode) {
+      if (params.clipboardAvailable === false && params.hasAuthUrl) {
+        return [
+          {
+            label: '设备码登录',
+            detail: '设备码登录仍在等待验证；请打开官方验证页面，使用下方当前设备码完成验证后再回来。',
+            primaryAction: 'open-auth-url',
+            secondaryAction: 'focus-guided-flow',
+          },
+        ]
+      }
+
+      if (params.clipboardAvailable === false) {
+        return [
+          {
+            label: '设备码登录',
+            detail: '设备码登录仍在等待验证；请使用下方当前设备码完成官方确认后再回来。',
+            primaryAction: 'focus-guided-flow',
+            secondaryAction: null,
+          },
+        ]
+      }
+
+      return [
+        {
+          label: '设备码登录',
+          detail: '设备码登录仍在等待验证；请复制当前设备码，完成官方确认后再回来。',
+          primaryAction: 'copy-device-code',
+          secondaryAction: 'focus-guided-flow',
+        },
+      ]
+    }
+
+    if (authMode && params.hasAuthUrl) {
+      return [
+        {
+          label: '官方登录',
+          detail: '当前引导登录会话仍在等待浏览器或设备码确认。',
+          primaryAction: 'open-auth-url',
+          secondaryAction: 'focus-guided-flow',
+        },
+      ]
+    }
+
+    return [
+      {
+        label: '官方 CLI 会话',
+        detail: `${resolveFeishuOfficialCliSessionModeLabel(params.sessionMode)}仍在 Mclaw 中运行。`,
+        primaryAction: 'focus-guided-flow',
+        secondaryAction: null,
+      },
+    ]
+  }
+
+  if (params.cliAvailable && params.authState === 'unauthenticated') {
+    return [
+      {
+        label: '官方登录',
+        detail: '请先完成官方 `lark-cli` 登录，托管运行时路径之后才能进入可完成状态。',
+        primaryAction: 'start-auth-login-recommend',
+        secondaryAction: 'start-auth-login-no-wait',
+      },
+    ]
+  }
+
+  if (params.cliAvailable && (params.authState === 'error' || params.authState === 'unknown')) {
+    return [
+      {
+        label: '官方 CLI 状态',
+        detail: '请刷新状态或重新执行引导登录，让 Mclaw 重新确认当前 `lark-cli` 状态。',
+        primaryAction: 'refresh-status',
+        secondaryAction: 'start-auth-login-recommend',
+      },
+    ]
+  }
+
+  if (params.setupMode === 'create') {
+    if (params.createCanFinish) return []
+
+    if (params.manualCredentialInput && !params.manualCredentialsReady) {
+        return [
+          {
+            label: '凭证',
+            detail: '已经开始填写 App ID / App Secret，但在两个必填字段补齐前，新建路径还不能完成。',
+            primaryAction: 'focus-create',
+            secondaryAction: null,
+          },
+      ]
+    }
+
+    if (params.installerRunning) {
+      return [
+        {
+          label: '新建流程',
+          detail: '托管新建流程仍在进行中，Mclaw 还没有恢复出可直接完成的机器人配置。',
+          primaryAction: 'focus-create',
+          secondaryAction: null,
+        },
+      ]
+    }
+
+    if (String(params.installerOutput || '').trim()) {
+      return [
+        {
+          label: '新建机器人',
+          detail: '新建流程已经有输出，但 Mclaw 还没有从中恢复出可复用的机器人。',
+          primaryAction: 'focus-create',
+          secondaryAction: 'refresh-status',
+        },
+      ]
+    }
+
+    return [
+      {
+        label: '新建机器人',
+        detail: '目前还没有检测到新建机器人；请启动或继续新建流程，直到 Mclaw 成功恢复机器人。',
+        primaryAction: 'start-create',
+        secondaryAction: null,
+      },
+    ]
+  }
+
+  if (params.linkCanFinish) return []
+
+  if (params.linkSourceMode === 'existing') {
+    if (params.botCount > 0) {
+      return [
+        {
+          label: '可复用机器人',
+          detail: '已经检测到机器人，但当前关联状态还不能直接完成；请刷新本地状态后再试。',
+          primaryAction: 'focus-link',
+          secondaryAction: 'refresh-status',
+        },
+      ]
+    }
+
+    const missingBotActions = resolveFeishuExistingLinkNoBotActions()
+    return [
+      {
+        label: '可复用机器人',
+        detail: '当前还没有可复用的已检测机器人；如果你已有凭证，请切到手动绑定，否则先新建机器人。',
+        primaryAction: missingBotActions.primaryAction,
+        secondaryAction: missingBotActions.secondaryAction,
+      },
+    ]
+  }
+
+  if (params.preparingManualBinding) {
+    const preparationStatus = resolveFeishuManualBindingPreparationStatus(
+      params.manualBindingPreparePhase || 'idle'
+    )
+    return [
+      {
+        label: preparationStatus.label,
+        detail: preparationStatus.detail,
+        primaryAction: 'focus-link',
+        secondaryAction: null,
+      },
+    ]
+  }
+
+  if (params.manualCredentialInput && !params.manualCredentialsReady) {
+    return [
+      {
+        label: '凭证',
+        detail: '已经开始填写 App ID / App Secret，但在两个字段都补齐前，手动关联模式还不能完成。',
+        primaryAction: 'focus-link',
+        secondaryAction: params.botCount > 0 ? 'switch-link-existing' : null,
+      },
+    ]
+  }
+
+  return [
+    {
+      label: '凭证',
+      detail: '当前已切到手动关联模式，但还没有填写 App ID / App Secret。',
+      primaryAction: params.botCount > 0 ? 'switch-link-existing' : 'focus-link',
+      secondaryAction: params.botCount > 0 ? 'focus-link' : null,
+    },
+  ]
+}
+
+export function resolveFeishuOfficialOnboardingLiveAssist(params: {
+  sessionMode: FeishuOfficialCliSessionMode | null | undefined
+  sessionRunning: boolean
+  latestAuthUrl?: string
+  latestUserCode?: string
+  clipboardAvailable?: boolean
+}): Array<{
+  label: string
+  detail: string
+  value: string
+  primaryAction: FeishuOfficialOnboardingAction | null
+  secondaryAction: FeishuOfficialOnboardingAction | null
+  copyValue?: string
+  copyLabel?: string
+}> {
+  const authMode =
+    params.sessionMode === 'auth-login-recommend' || params.sessionMode === 'auth-login-no-wait'
+  if (!params.sessionRunning || !authMode) return []
+
+  const items: Array<{
+    label: string
+    detail: string
+    value: string
+    primaryAction: FeishuOfficialOnboardingAction | null
+    secondaryAction: FeishuOfficialOnboardingAction | null
+    copyValue?: string
+    copyLabel?: string
+  }> = []
+
+  const latestAuthUrl = String(params.latestAuthUrl || '').trim()
+  if (latestAuthUrl) {
+    items.push({
+      label: '验证链接',
+      detail: '如果官方浏览器步骤没有自动打开，请使用这个链接继续。',
+      value: latestAuthUrl,
+      primaryAction: 'open-auth-url',
+      secondaryAction: 'focus-guided-flow',
+      copyValue: params.clipboardAvailable === false ? undefined : latestAuthUrl,
+      copyLabel: params.clipboardAvailable === false ? undefined : '复制链接',
+    })
+  }
+
+  const latestUserCode = String(params.latestUserCode || '').trim()
+  if (latestUserCode) {
+    items.push({
+      label: '设备码',
+      detail: '请在设备码流程展示的官方验证页面中使用这个设备码。',
+      value: latestUserCode,
+      primaryAction: null,
+      secondaryAction: 'focus-guided-flow',
+      copyValue: params.clipboardAvailable === false ? undefined : latestUserCode,
+      copyLabel: params.clipboardAvailable === false ? undefined : '复制设备码',
+    })
+  }
+
+  return items
+}
+
+export function resolveFeishuOfficialCliGuidedFlowActions(params: {
+  authState: FeishuOfficialCliStatusView['authState'] | null | undefined
+  sessionMode: FeishuOfficialCliSessionMode | null | undefined
+  sessionRunning: boolean
+  sessionExitCode: number | null | undefined
+  sessionCanceled: boolean
+}): FeishuOfficialCliGuidedFlowAction[] {
+  if (params.sessionRunning) {
+    return ['stop-official-cli-session']
+  }
+
+  const configInitFinished =
+    params.sessionMode === 'config-init-new'
+    && !params.sessionCanceled
+    && params.sessionExitCode === 0
+
+  if (params.authState === 'unauthenticated') {
+    return ['start-auth-login-recommend', 'start-auth-login-no-wait']
+  }
+
+  if (params.authState === 'error' || params.authState === 'unknown') {
+    return ['refresh-status', 'start-auth-login-recommend']
+  }
+
+  if (params.authState === 'authenticated') {
+    return configInitFinished
+      ? ['refresh-status']
+      : ['start-config-init-new', 'refresh-status']
+  }
+
+  return ['refresh-status']
+}
+
+function resolveFeishuOfficialOnboardingRuntimeAction(params: {
+  setupMode: 'create' | 'link'
+  createHasProgress: boolean
+  linkHasProgress: boolean
+  createCanFinish: boolean
+  linkCanFinish: boolean
+}): FeishuOfficialOnboardingAction {
+  if (params.setupMode === 'create') {
+    if (params.createCanFinish) return 'finish-create'
+    return params.createHasProgress ? 'focus-create' : 'start-create'
+  }
+  if (params.linkCanFinish) return 'finish-link'
+  return params.linkHasProgress ? 'focus-link' : 'start-link'
+}
+
+function buildFeishuOfficialOnboardingRuntimeDetail(params: {
+  setupMode: 'create' | 'link'
+  createHasProgress: boolean
+  linkHasProgress: boolean
+  selectedLinkPathHasProgress: boolean
+  createCanFinish: boolean
+  linkCanFinish: boolean
+  linkSourceMode: FeishuLinkSourceMode
+  pluginInstalled: boolean
+  officialPluginConfigured: boolean
+  pluginConfigChanged?: boolean
+  bundledPayloadAvailable?: boolean
+  selectedExistingBotName?: string
+}): string {
+  const runtimeHint = resolveFeishuOfficialOnboardingRuntimeDetail({
+    pluginInstalled: params.pluginInstalled,
+    officialPluginConfigured: params.officialPluginConfigured,
+    pluginConfigChanged: params.pluginConfigChanged,
+    bundledPayloadAvailable: params.bundledPayloadAvailable,
+  })
+
+  if (params.setupMode === 'create') {
+    if (params.createCanFinish) {
+      return `托管新建机器人路径已可完成。${runtimeHint}`
+    }
+    if (params.createHasProgress) {
+      return `托管新建机器人路径已有进度。${runtimeHint}`
+    }
+    return `下一步请继续托管新建机器人路径。${runtimeHint}`
+  }
+
+  return `${resolveFeishuOfficialOnboardingLinkPathDetail({
+    linkSourceMode: params.linkSourceMode,
+    linkHasProgress: params.linkHasProgress,
+    selectedPathHasProgress: params.selectedLinkPathHasProgress,
+    linkCanFinish: params.linkCanFinish,
+    selectedExistingBotName: params.selectedExistingBotName,
+  })} ${runtimeHint}`
+}
+
+export function resolveFeishuOfficialOnboardingNextStep(params: {
+  cliAvailable: boolean | null | undefined
+  authState: FeishuOfficialCliStatusView['authState'] | null | undefined
+  sessionMode: FeishuOfficialCliSessionMode | null | undefined
+  sessionRunning: boolean
+  sessionExitCode: number | null | undefined
+  sessionCanceled: boolean
+  hasAuthUrl?: boolean
+  hasUserCode?: boolean
+  setupMode: 'create' | 'link'
+  pluginInstalled: boolean
+  officialPluginConfigured: boolean
+  pluginConfigChanged?: boolean
+  bundledPayloadAvailable?: boolean
+  botCount: number
+  installerRunning: boolean
+  installerOutput?: string
+  preparingManualBinding: boolean
+  manualCredentialInput: boolean
+  manualCredentialsReady: boolean
+  createCanFinish: boolean
+  linkCanFinish: boolean
+  linkSourceMode: FeishuLinkSourceMode
+  selectedExistingBotName?: string
+}): {
+  color: string
+  title: string
+  detail: string
+  primaryAction: FeishuOfficialOnboardingAction | null
+  secondaryAction: FeishuOfficialOnboardingAction | null
+} {
+  const createHasProgress =
+    params.botCount > 0 || params.installerRunning || Boolean(String(params.installerOutput || '').trim())
+  const linkHasProgress =
+    params.botCount > 0 || params.preparingManualBinding || params.manualCredentialInput || params.manualCredentialsReady
+  const selectedLinkPathHasProgress =
+    params.linkSourceMode === 'manual'
+      ? params.preparingManualBinding || params.manualCredentialInput || params.manualCredentialsReady
+      : linkHasProgress
+  const runtimeAction = resolveFeishuOfficialOnboardingRuntimeAction({
+    setupMode: params.setupMode,
+    createHasProgress,
+    linkHasProgress,
+    createCanFinish: params.createCanFinish,
+    linkCanFinish: params.linkCanFinish,
+  })
+  const runtimeDetail = buildFeishuOfficialOnboardingRuntimeDetail({
+    setupMode: params.setupMode,
+    createHasProgress,
+    linkHasProgress,
+    selectedLinkPathHasProgress,
+    createCanFinish: params.createCanFinish,
+    linkCanFinish: params.linkCanFinish,
+    linkSourceMode: params.linkSourceMode,
+    pluginInstalled: params.pluginInstalled,
+    officialPluginConfigured: params.officialPluginConfigured,
+    pluginConfigChanged: params.pluginConfigChanged,
+    bundledPayloadAvailable: params.bundledPayloadAvailable,
+    selectedExistingBotName: params.selectedExistingBotName,
+  })
+  const runtimeHint = resolveFeishuOfficialOnboardingRuntimeDetail({
+    pluginInstalled: params.pluginInstalled,
+    officialPluginConfigured: params.officialPluginConfigured,
+    pluginConfigChanged: params.pluginConfigChanged,
+    bundledPayloadAvailable: params.bundledPayloadAvailable,
+  })
+  const shouldRecoverExistingLinkNoBot = shouldUseFeishuExistingLinkNoBotRecovery({
+    setupMode: params.setupMode,
+    linkSourceMode: params.linkSourceMode,
+    botCount: params.botCount,
+    linkCanFinish: params.linkCanFinish,
+    preparingManualBinding: params.preparingManualBinding,
+    manualCredentialInput: params.manualCredentialInput,
+    manualCredentialsReady: params.manualCredentialsReady,
+  })
+  const authMode =
+    params.sessionMode === 'auth-login-recommend' || params.sessionMode === 'auth-login-no-wait'
+  const configInitFinished =
+    params.sessionMode === 'config-init-new'
+    && !params.sessionRunning
+    && !params.sessionCanceled
+    && params.sessionExitCode === 0
+
+  if (params.sessionRunning) {
+    if (authMode && params.hasAuthUrl) {
+      return {
+        color: 'blue',
+        title: '完成浏览器验证',
+        detail: '引导登录会话仍在进行中；请先完成下方展示的浏览器或设备码验证，再进入下一步。',
+        primaryAction: null,
+        secondaryAction: null,
+      }
+    }
+
+    if (authMode && params.hasUserCode) {
+      return {
+        color: 'blue',
+        title: '完成设备码验证',
+        detail: '设备码登录会话仍在进行中；请先完成下方展示的验证步骤，再进入下一步。',
+        primaryAction: null,
+        secondaryAction: null,
+      }
+    }
+
+    return {
+      color: 'blue',
+      title: '继续当前会话',
+      detail: `${resolveFeishuOfficialCliSessionModeLabel(params.sessionMode)}仍在 Mclaw 中运行；请先完成这个官方 CLI 步骤，再执行这里建议的后续动作。`,
+      primaryAction: null,
+      secondaryAction: null,
+    }
+  }
+
+  if (!params.cliAvailable) {
+    if (shouldRecoverExistingLinkNoBot) {
+      return resolveFeishuExistingLinkNoBotNextStep({
+        runtimeHint,
+        cliOptional: true,
+      })
+    }
+
+    return {
+      color: 'gray',
+      title: 'CLI 可选',
+      detail: `当前机器未安装飞书官方 CLI，但你仍然可以继续下方托管运行时路径。${runtimeDetail}`,
+      primaryAction: runtimeAction,
+      secondaryAction: null,
+    }
+  }
+
+  if (params.authState === 'unauthenticated') {
+    return {
+      color: 'blue',
+      title: '先完成官方登录',
+      detail: '请先完成飞书官方登录，这样 Mclaw 才能在后续步骤里复用同一个已登录环境。',
+      primaryAction: 'start-auth-login-recommend',
+      secondaryAction: 'start-auth-login-no-wait',
+    }
+  }
+
+  if (params.authState === 'error') {
+    return {
+      color: 'red',
+      title: '重新检查登录状态',
+      detail: 'Mclaw 已找到 `lark-cli`，但读取当前登录状态失败；请先刷新一次，如仍失败，再从此页重新执行引导登录。',
+      primaryAction: 'refresh-status',
+      secondaryAction: 'start-auth-login-recommend',
+    }
+  }
+
+  if (params.authState === 'unknown') {
+    return {
+      color: 'yellow',
+      title: '确认官方登录状态',
+      detail: 'Mclaw 目前还不能可靠判断当前 `lark-cli` 登录状态；请刷新状态或重新执行引导登录，让下一步判断变得确定。',
+      primaryAction: 'refresh-status',
+      secondaryAction: 'start-auth-login-recommend',
+    }
+  }
+
+  if (params.authState === 'authenticated') {
+    if (shouldRecoverExistingLinkNoBot) {
+      return resolveFeishuExistingLinkNoBotNextStep({
+        runtimeHint,
+        cliOptional: false,
+      })
+    }
+
+    if (configInitFinished) {
+      return {
+        color: 'teal',
+        title: runtimeAction === 'finish-create' || runtimeAction === 'finish-link'
+          ? '可以完成配置'
+          : '继续运行时配置',
+        detail: `官方 CLI 登录和 config-init 看起来都已完成。${runtimeDetail}`,
+        primaryAction: runtimeAction,
+        secondaryAction:
+          runtimeAction === 'finish-create'
+            ? 'focus-create'
+            : runtimeAction === 'finish-link'
+              ? 'focus-link'
+              : null,
+      }
+    }
+
+    return {
+      color: 'teal',
+      title:
+        runtimeAction === 'finish-create' || runtimeAction === 'finish-link'
+          ? '登录已就绪，可完成配置'
+          : '登录已就绪',
+      detail:
+        runtimeAction === 'finish-create' || runtimeAction === 'finish-link'
+          ? `官方 CLI 登录已就绪。${runtimeDetail} 你现在可以完成托管配置；如果仍想补做官方初始化，“初始化官方配置”仍然是可选项。`
+          : `官方 CLI 登录已就绪。${runtimeDetail} 如果你仍想补做官方应用初始化，可以在继续前执行“初始化官方配置”。`,
+      primaryAction: runtimeAction,
+      secondaryAction:
+        runtimeAction === 'finish-create'
+          ? 'focus-create'
+          : runtimeAction === 'finish-link'
+            ? 'focus-link'
+            : 'start-config-init-new',
+    }
+  }
+
+  return {
+    color: 'gray',
+    title: '刷新状态',
+    detail: '请刷新官方 CLI 状态，或重新执行引导登录，以重新建立清晰可判断的下一步。',
+    primaryAction: 'refresh-status',
+    secondaryAction: 'start-auth-login-recommend',
+  }
+}
+
 function hasVerifiedManagedPluginInstallAndRegistration(
   status: ManagedChannelPluginStatusView
 ): boolean {
   return getManagedPluginInstalledOnDiskFromStatus(status)
-    && status.stages.some((stage) => stage.id === 'registered' && stage.state === 'verified')
+    && getManagedPluginStageState(status, 'registered') === 'verified'
+}
+
+function getManagedPluginStageState(
+  status: ManagedChannelPluginStatusView,
+  stageId: ManagedChannelPluginStatusView['stages'][number]['id']
+): ManagedChannelPluginStatusView['stages'][number]['state'] | undefined {
+  return status.stages.find((stage) => stage.id === stageId)?.state
+}
+
+function hasBlockingManagedChannelReadyState(
+  status: ManagedChannelPluginStatusView
+): boolean {
+  return getManagedPluginStageState(status, 'ready') === 'missing'
+}
+
+function canProceedWithPendingFeishuManagedReadyState(
+  channelId: string,
+  status: ManagedChannelPluginStatusView,
+  options?: { allowPendingManagedReady?: boolean }
+): boolean {
+  if (!options?.allowPendingManagedReady) return false
+  if (channelId !== 'feishu') return false
+
+  return hasVerifiedManagedPluginInstallAndRegistration(status)
+    && getManagedPluginStageState(status, 'loaded') !== 'missing'
+}
+
+async function confirmManagedChannelStatusAfterGatewayReady(
+  api: Pick<ChannelConnectGatewayReadyApi, 'getManagedChannelPluginStatus'>,
+  channelId: string,
+  options?: { requireStatus?: boolean; allowPendingManagedReady?: boolean }
+): Promise<{ ok: boolean; message?: string }> {
+  if (!api.getManagedChannelPluginStatus) return { ok: true }
+
+  const status = await api.getManagedChannelPluginStatus(channelId).catch(() => null)
+  if (!status) {
+    return options?.requireStatus
+      ? { ok: false, message: 'Gateway 启动失败' }
+      : { ok: true }
+  }
+
+  if (!hasVerifiedManagedPluginInstallAndRegistration(status)) {
+    return {
+      ok: false,
+      message: status.summary || 'Gateway 启动失败',
+    }
+  }
+
+  if (hasBlockingManagedChannelReadyState(status)) {
+    if (canProceedWithPendingFeishuManagedReadyState(channelId, status, options)) {
+      return { ok: true }
+    }
+    return {
+      ok: false,
+      message: status.summary || '渠道运行态尚未就绪',
+    }
+  }
+
+  return { ok: true }
 }
 
 function isRepairableChannelConnectGatewayStateCode(stateCode: unknown): boolean {
@@ -166,6 +2006,19 @@ function getGatewayReadyFailureMessage(
   return toUserFacingCliFailureMessage({
     stderr: fallbackMessage,
     fallback,
+  })
+}
+
+const FEISHU_OFFICIAL_AUTH_URL_OPEN_FAILURE_FALLBACK =
+  '打开飞书官方验证页面失败；请使用下方显示的验证链接继续手动完成。'
+
+export function getFeishuOfficialAuthUrlOpenFailureMessage(
+  result: Pick<OAuthUrlOpenResult, 'stderr' | 'stdout'>
+): string {
+  return toUserFacingCliFailureMessage({
+    stderr: result.stderr,
+    stdout: result.stdout,
+    fallback: FEISHU_OFFICIAL_AUTH_URL_OPEN_FAILURE_FALLBACK,
   })
 }
 
@@ -518,8 +2371,37 @@ export function canFinishFeishuCreateMode(
   return hasExistingBotConfig || manualCredentialsReady
 }
 
+export function canFinishFeishuLinkMode(
+  finishStrategy: 'manual' | 'existing' | 'invalid-manual' | 'none'
+): boolean {
+  return finishStrategy === 'manual' || finishStrategy === 'existing'
+}
+
+export function shouldSkipFeishuPairingAfterSetup(
+  _setupMode: FeishuPathMode
+): boolean {
+  return false
+}
+
 export function hasFeishuManualCredentialInput(formData: Record<string, string>): boolean {
   return Boolean(String(formData.appId || '').trim() || String(formData.appSecret || '').trim())
+}
+
+export function resolveFeishuLinkModeFinishStrategy(
+  sourceMode: 'existing' | 'manual',
+  existingBotCount: number,
+  hasManualCredentialInput: boolean,
+  manualCredentialsReady: boolean
+): 'manual' | 'existing' | 'invalid-manual' | 'none' {
+  if (sourceMode === 'existing') {
+    return existingBotCount > 0 ? 'existing' : 'none'
+  }
+
+  if (hasManualCredentialInput) {
+    return manualCredentialsReady ? 'manual' : 'invalid-manual'
+  }
+
+  return 'none'
 }
 
 export function resolveFeishuCreateModeFinishStrategy(
@@ -536,6 +2418,47 @@ export function resolveFeishuCreateModeFinishStrategy(
   }
 
   return 'none'
+}
+
+export function resolveFeishuPreparedLinkSourceMode(
+  existingBotCount: number
+): FeishuLinkSourceMode {
+  return existingBotCount > 0 ? 'existing' : 'manual'
+}
+
+export function resolveFeishuPreparedLinkNotice(params: {
+  prefix: string
+  existingBotCount: number
+}): string {
+  return params.existingBotCount > 0
+    ? `${params.prefix}现在可以继续关联已有机器人；你可以直接复用已检测到的机器人，也可以切到手动模式输入 App ID / App Secret；完成机器人配置后，再继续输入飞书配对码。`
+    : `${params.prefix}现在可以手动填写已有机器人的 App ID / App Secret；完成机器人配置后，再继续输入飞书配对码。`
+}
+
+export function resolveFeishuPreparedLinkRecovery(params: {
+  normalizedConfig?: Record<string, any> | null
+  fallbackExistingBotCount?: number
+  prefix: string
+}): {
+  existingBotCount: number
+  sourceMode: FeishuLinkSourceMode
+  notice: string
+  createStartConfigSnapshot: null
+} {
+  const fallbackExistingBotCount = Math.max(0, Number(params.fallbackExistingBotCount || 0))
+  const existingBotCount = params.normalizedConfig
+    ? listFeishuBots(params.normalizedConfig).length
+    : fallbackExistingBotCount
+
+  return {
+    existingBotCount,
+    sourceMode: resolveFeishuPreparedLinkSourceMode(existingBotCount),
+    notice: resolveFeishuPreparedLinkNotice({
+      prefix: params.prefix,
+      existingBotCount,
+    }),
+    createStartConfigSnapshot: null,
+  }
 }
 
 export function shouldValidateFeishuManualCredentials(
@@ -667,6 +2590,66 @@ export function resolveFeishuManualBindingPreparationCopy(
   }
 }
 
+export function resolveFeishuManualBindingPreparationStatus(
+  phase: FeishuManualBindingPreparePhase
+): { color: string; label: string; detail: string } {
+  const copy = resolveFeishuManualBindingPreparationCopy(phase)
+  const detail = [copy.description, copy.hint].filter(Boolean).join(' ')
+
+  if (phase === 'checking') {
+    return {
+      color: 'warning',
+      label: '检查插件中',
+      detail,
+    }
+  }
+
+  if (phase === 'syncing') {
+    return {
+      color: 'warning',
+      label: '同步配置中',
+      detail,
+    }
+  }
+
+  if (phase === 'installing') {
+    return {
+      color: 'warning',
+      label: '安装插件中',
+      detail,
+    }
+  }
+
+  if (phase === 'verifying') {
+    return {
+      color: 'blue',
+      label: '验证状态中',
+      detail,
+    }
+  }
+
+  return {
+    color: 'warning',
+    label: '准备中',
+    detail,
+  }
+}
+
+export function resolveSelectedFeishuExistingBotAccountId(
+  bots: Array<{ accountId: string }>,
+  selectedAccountId?: string | null
+): string {
+  const normalizedSelectedAccountId = String(selectedAccountId || '').trim()
+  if (
+    normalizedSelectedAccountId
+    && bots.some((bot) => bot.accountId === normalizedSelectedAccountId)
+  ) {
+    return normalizedSelectedAccountId
+  }
+
+  return String(bots[0]?.accountId || '').trim()
+}
+
 function wrapFeishuConfigSnapshot(
   feishuConfigSnapshot: Record<string, any> | null | undefined
 ): Record<string, any> | null {
@@ -727,7 +2710,7 @@ export function resolveFeishuPairingTarget(params: {
 export async function ensureGatewayReadyForChannelConnect(
   api: ChannelConnectGatewayReadyApi,
   appendLog: (message: string) => void,
-  options?: { channelId?: string }
+  options?: { channelId?: string; allowPendingManagedReady?: boolean }
 ): Promise<{ ok: boolean; message?: string }> {
   const result = await api.reloadGatewayAfterChannelChange()
   const running = 'running' in result && result.running === true
@@ -779,12 +2762,13 @@ export async function ensureGatewayReadyForChannelConnect(
         appendLog(`⚠️ Gateway 端口已自动切换到 ${ensureResult.effectivePort}，程序会继续使用新端口。\n\n`)
       }
 
-      const status = await api.getManagedChannelPluginStatus(managedChannel.channelId).catch(() => null)
-      if (!status || !hasVerifiedManagedPluginInstallAndRegistration(status)) {
-        return {
-          ok: false,
-          message: status?.summary || 'Gateway 启动失败',
-        }
+      const statusCheck = await confirmManagedChannelStatusAfterGatewayReady(
+        api,
+        managedChannel.channelId,
+        { requireStatus: true }
+      )
+      if (!statusCheck.ok) {
+        return statusCheck
       }
 
       return { ok: true }
@@ -803,6 +2787,17 @@ export async function ensureGatewayReadyForChannelConnect(
     typeof result.effectivePort === 'number'
   ) {
     appendLog(`⚠️ Gateway 端口已自动切换到 ${result.effectivePort}，程序会继续使用新端口。\n\n`)
+  }
+
+  const managedChannelId = String(options?.channelId || '').trim()
+  if (managedChannelId) {
+    const statusCheck = await confirmManagedChannelStatusAfterGatewayReady(
+      api,
+      managedChannelId
+    )
+    if (!statusCheck.ok) {
+      return statusCheck
+    }
   }
 
   return { ok: true }
@@ -841,7 +2836,24 @@ export default function ChannelConnect({
   const [pairingStatusByBot, setPairingStatusByBot] = useState<Record<string, { pairedCount: number; pairedUsers: string[] }>>({})
   const [feishuBotSetupMode, setFeishuBotSetupMode] = useState<'create' | 'link'>('create')
   const [feishuOfficialPluginInstalled, setFeishuOfficialPluginInstalled] = useState(false)
+  const [feishuOfficialPluginConfigured, setFeishuOfficialPluginConfigured] = useState(false)
+  const [feishuOfficialPluginConfigChanged, setFeishuOfficialPluginConfigChanged] = useState(false)
+  const [feishuOfficialPluginBundledPayloadAvailable, setFeishuOfficialPluginBundledPayloadAvailable] = useState(false)
+  const [feishuLinkSourceMode, setFeishuLinkSourceMode] = useState<FeishuLinkSourceMode>('existing')
+  const [selectedFeishuExistingBotAccountId, setSelectedFeishuExistingBotAccountId] = useState('')
   const [feishuOfficialCliStatus, setFeishuOfficialCliStatus] = useState<FeishuOfficialCliStatusView | null>(null)
+  const [showFeishuOfficialCliAdvanced, setShowFeishuOfficialCliAdvanced] = useState(false)
+  const [feishuOfficialCliSessionId, setFeishuOfficialCliSessionId] = useState('')
+  const [feishuOfficialCliSessionMode, setFeishuOfficialCliSessionMode] = useState<FeishuOfficialCliSessionMode | null>(null)
+  const [feishuOfficialCliSessionRunning, setFeishuOfficialCliSessionRunning] = useState(false)
+  const [feishuOfficialCliSessionOutput, setFeishuOfficialCliSessionOutput] = useState('')
+  const [feishuOfficialCliSessionExitCode, setFeishuOfficialCliSessionExitCode] = useState<number | null>(null)
+  const [feishuOfficialCliSessionCanceled, setFeishuOfficialCliSessionCanceled] = useState(false)
+  const [feishuOfficialCliSessionBusy, setFeishuOfficialCliSessionBusy] = useState(false)
+  const [feishuOfficialCliSessionInput, setFeishuOfficialCliSessionInput] = useState('')
+  const [feishuOfficialCliSessionLatestAuthUrl, setFeishuOfficialCliSessionLatestAuthUrl] = useState('')
+  const [feishuOfficialCliSessionLatestUserCode, setFeishuOfficialCliSessionLatestUserCode] = useState('')
+  const [feishuOfficialCliSessionNotice, setFeishuOfficialCliSessionNotice] = useState('')
   const [feishuInstallerSessionId, setFeishuInstallerSessionId] = useState('')
   const [feishuInstallerRunning, setFeishuInstallerRunning] = useState(false)
   const [feishuInstallerOutput, setFeishuInstallerOutput] = useState('')
@@ -872,6 +2884,7 @@ export default function ChannelConnect({
   const qrTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const qrResolveRef = useRef<((result: { botId: string; secret: string } | null) => void) | null>(null)
   const feishuInstallerPromptAutoReplyKeyRef = useRef('')
+  const feishuInstallerOutputRef = useRef('')
   const feishuCreateStartConfigSnapshotRef = useRef<Record<string, any> | null>(null)
   const feishuManualBindingRequestVersionRef = useRef(0)
 
@@ -896,6 +2909,23 @@ export default function ChannelConnect({
       }),
     [feishuBots, pairingStatusByBot]
   )
+  const resolvedSelectedFeishuExistingBotAccountId = useMemo(
+    () => resolveSelectedFeishuExistingBotAccountId(feishuBotsOrdered, selectedFeishuExistingBotAccountId),
+    [feishuBotsOrdered, selectedFeishuExistingBotAccountId]
+  )
+  const selectedFeishuExistingBot = useMemo(
+    () => feishuBotsOrdered.find((bot) => bot.accountId === resolvedSelectedFeishuExistingBotAccountId) || null,
+    [feishuBotsOrdered, resolvedSelectedFeishuExistingBotAccountId]
+  )
+  const selectedFeishuExistingBotMeta = useMemo(() => {
+    if (!selectedFeishuExistingBot) return ''
+    const pairedCount = pairingStatusByBot[selectedFeishuExistingBot.accountId]?.pairedCount || 0
+    return [
+      selectedFeishuExistingBot.accountId,
+      selectedFeishuExistingBot.isDefault ? 'default' : '',
+      pairedCount > 0 ? `${pairedCount} paired` : '',
+    ].filter(Boolean).join(' · ')
+  }, [pairingStatusByBot, selectedFeishuExistingBot])
   const feishuInstallerAsciiQr = useMemo(
     () => extractFeishuAsciiQr(feishuInstallerOutput),
     [feishuInstallerOutput]
@@ -909,11 +2939,9 @@ export default function ChannelConnect({
     [feishuManualBindingPreparePhase]
   )
   const feishuInstallerQrUrl = useMemo(
-    () => extractFirstHttpUrl(feishuInstallerOutput) || FEISHU_OFFICIAL_GUIDE_URL,
+    () => extractFeishuLiveQrUrl(feishuInstallerOutput),
     [feishuInstallerOutput]
   )
-  const feishuInstallerHasLiveQr =
-    feishuInstallerAsciiQr.length > 0 || feishuInstallerQrUrl !== FEISHU_OFFICIAL_GUIDE_URL
   const feishuManualCredentialsReady =
     selectedChannel?.id === 'feishu' &&
     feishuBotSetupMode === 'link' &&
@@ -927,43 +2955,234 @@ export default function ChannelConnect({
     Boolean(feishuHasManualCredentialInput),
     Boolean(feishuManualCredentialsReady)
   )
+  const feishuLinkModeFinishStrategy = resolveFeishuLinkModeFinishStrategy(
+    feishuLinkSourceMode,
+    feishuBotsOrdered.length,
+    Boolean(feishuHasManualCredentialInput),
+    Boolean(feishuManualCredentialsReady)
+  )
   const feishuCreateModeCanFinish = canFinishFeishuCreateMode(
     feishuBotsOrdered.length > 0,
     Boolean(feishuManualCredentialsReady)
+  )
+  const feishuLinkModeCanFinish = canFinishFeishuLinkMode(
+    feishuLinkModeFinishStrategy
   )
   const showInlineFeishuManualError =
     status === 'form' &&
     selectedChannel?.id === 'feishu' &&
     feishuBotSetupMode === 'link' &&
+    feishuLinkSourceMode === 'manual' &&
     Boolean(error)
-  const feishuCreatePathStatus = finishingFeishuSetup
-    ? { color: 'blue' as const, label: '收尾中', detail: '正在把新建机器人的结果写回 Mclaw。' }
-    : feishuBotsOrdered.length > 0
-      ? { color: 'success' as const, label: '已检测到机器人', detail: '已经发现可用的飞书机器人，当前可以点击“完成机器人配置”。' }
-      : feishuInstallerRunning
-        ? { color: 'warning' as const, label: '创建流程进行中', detail: '官方安装器正在运行，请继续完成扫码、命名或确认步骤。' }
-        : feishuInstallerOutput.trim()
-          ? { color: 'blue' as const, label: '等待确认结果', detail: '已经有安装器输出，请结合日志和刷新状态判断是否已创建完成。' }
-          : { color: 'gray' as const, label: '未开始', detail: '点击“新建机器人”后开始官方安装器创建流程。' }
-  const feishuLinkPathStatus = finishingFeishuSetup
-    ? { color: 'blue' as const, label: '绑定收尾中', detail: '正在把已有机器人的配置写回 Mclaw。' }
-    : preparingFeishuManualBinding
-      ? { color: 'warning' as const, label: '准备中', detail: '正在检查或补齐官方插件，准备进入手动绑定。' }
-      : feishuManualCredentialsReady
-        ? { color: 'success' as const, label: '可直接绑定', detail: 'App ID / App Secret 已满足要求，可以点击“完成机器人配置”。' }
-        : feishuHasManualCredentialInput
-          ? { color: 'blue' as const, label: '待补全字段', detail: '已经开始填写已有机器人参数，请先补齐必填字段。' }
-          : { color: 'gray' as const, label: '未开始', detail: '点击“关联已有机器人”后，Mclaw 会先检查插件，再开放手动绑定。' }
+  const feishuCreatePathStatus = resolveFeishuCreatePathStatus({
+    finishingSetup: finishingFeishuSetup,
+    botCount: feishuBotsOrdered.length,
+    installerRunning: feishuInstallerRunning,
+    installerOutput: feishuInstallerOutput,
+  })
+  const feishuLinkPathStatus = resolveFeishuLinkPathStatus({
+    finishingSetup: finishingFeishuSetup,
+    preparingManualBinding: preparingFeishuManualBinding,
+    manualBindingPreparePhase: feishuManualBindingPreparePhase,
+    linkSourceMode: feishuLinkSourceMode,
+    selectedExistingBotName: selectedFeishuExistingBot?.name,
+    manualCredentialsReady: Boolean(feishuManualCredentialsReady),
+    manualCredentialInput: Boolean(feishuHasManualCredentialInput),
+    botCount: feishuBotsOrdered.length,
+    officialPluginInstalled: feishuOfficialPluginInstalled,
+    officialPluginConfigured: feishuOfficialPluginConfigured,
+    officialPluginConfigChanged: feishuOfficialPluginConfigChanged,
+  })
+  const feishuLinkPathPanelIntro = resolveFeishuLinkPathPanelIntro({
+    botCount: feishuBotsOrdered.length,
+    linkSourceMode: feishuLinkSourceMode,
+    officialPluginInstalled: feishuOfficialPluginInstalled,
+    officialPluginConfigured: feishuOfficialPluginConfigured,
+    officialPluginConfigChanged: feishuOfficialPluginConfigChanged,
+  })
+  const feishuCreatePathCardActions = resolveFeishuCreatePathCardActions({
+    finishingSetup: finishingFeishuSetup,
+    createCanFinish: feishuCreateModeCanFinish && feishuCreateModeFinishStrategy !== 'invalid-manual',
+    installerRunning: feishuInstallerRunning,
+    installerOutput: feishuInstallerOutput,
+  })
+  const feishuLinkPathCardActions = resolveFeishuLinkPathCardActions({
+    finishingSetup: finishingFeishuSetup,
+    preparingManualBinding: preparingFeishuManualBinding,
+    linkCanFinish: feishuLinkModeCanFinish,
+    linkSourceMode: feishuLinkSourceMode,
+    botCount: feishuBotsOrdered.length,
+    manualCredentialInput: Boolean(feishuHasManualCredentialInput),
+  })
+  const feishuPathDescriptors = resolveFeishuPathDescriptors()
+  const feishuCreatePathDescriptor =
+    feishuPathDescriptors.find((item) => item.mode === 'create') || feishuPathDescriptors[0]
+  const feishuLinkPathDescriptor =
+    feishuPathDescriptors.find((item) => item.mode === 'link') || feishuPathDescriptors[1]
+  const feishuPathNavigatorItems = resolveFeishuPathNavigatorItems(feishuBotSetupMode)
+  const feishuOfficialCliSessionStatus = resolveFeishuOfficialCliSessionStatus({
+    mode: feishuOfficialCliSessionMode,
+    running: feishuOfficialCliSessionRunning,
+    exitCode: feishuOfficialCliSessionExitCode,
+    canceled: feishuOfficialCliSessionCanceled,
+    authState: feishuOfficialCliStatus?.authState,
+    hasAuthUrl: Boolean(feishuOfficialCliSessionLatestAuthUrl),
+    hasUserCode: Boolean(feishuOfficialCliSessionLatestUserCode),
+  })
+  const feishuOfficialCliNextStep = resolveFeishuOfficialOnboardingNextStep({
+    cliAvailable: feishuOfficialCliStatus?.available,
+    authState: feishuOfficialCliStatus?.authState,
+    sessionMode: feishuOfficialCliSessionMode,
+    sessionRunning: feishuOfficialCliSessionRunning,
+    sessionExitCode: feishuOfficialCliSessionExitCode,
+    sessionCanceled: feishuOfficialCliSessionCanceled,
+    hasAuthUrl: Boolean(feishuOfficialCliSessionLatestAuthUrl),
+    hasUserCode: Boolean(feishuOfficialCliSessionLatestUserCode),
+    setupMode: feishuBotSetupMode,
+    pluginInstalled: feishuOfficialPluginInstalled,
+    officialPluginConfigured: feishuOfficialPluginConfigured,
+    pluginConfigChanged: feishuOfficialPluginConfigChanged,
+    bundledPayloadAvailable: feishuOfficialPluginBundledPayloadAvailable,
+    botCount: feishuBotsOrdered.length,
+    installerRunning: feishuInstallerRunning,
+    installerOutput: feishuInstallerOutput,
+    preparingManualBinding: preparingFeishuManualBinding,
+    manualCredentialInput: Boolean(feishuHasManualCredentialInput),
+    manualCredentialsReady: Boolean(feishuManualCredentialsReady),
+    createCanFinish: feishuCreateModeCanFinish && feishuCreateModeFinishStrategy !== 'invalid-manual',
+    linkCanFinish: feishuLinkModeCanFinish,
+    linkSourceMode: feishuLinkSourceMode,
+    selectedExistingBotName: selectedFeishuExistingBot?.name,
+  })
+  const feishuOfficialCliNextStepSummary = resolveFeishuOfficialOnboardingSummary({
+    setupMode: feishuBotSetupMode,
+    linkSourceMode: feishuLinkSourceMode,
+    botCount: feishuBotsOrdered.length,
+    selectedExistingBotName: selectedFeishuExistingBot?.name,
+    pluginInstalled: feishuOfficialPluginInstalled,
+    officialPluginConfigured: feishuOfficialPluginConfigured,
+    pluginConfigChanged: feishuOfficialPluginConfigChanged,
+  })
+  const feishuOfficialCliClipboardAvailable =
+    typeof navigator !== 'undefined' && typeof navigator.clipboard?.writeText === 'function'
+  const feishuOfficialCliNextStepBlockers = resolveFeishuOfficialOnboardingBlockers({
+    cliAvailable: feishuOfficialCliStatus?.available,
+    authState: feishuOfficialCliStatus?.authState,
+    sessionMode: feishuOfficialCliSessionMode,
+    sessionRunning: feishuOfficialCliSessionRunning,
+    hasAuthUrl: Boolean(feishuOfficialCliSessionLatestAuthUrl),
+    hasUserCode: Boolean(feishuOfficialCliSessionLatestUserCode),
+    clipboardAvailable: feishuOfficialCliClipboardAvailable,
+    setupMode: feishuBotSetupMode,
+    botCount: feishuBotsOrdered.length,
+    installerRunning: feishuInstallerRunning,
+    installerOutput: feishuInstallerOutput,
+    preparingManualBinding: preparingFeishuManualBinding,
+    manualBindingPreparePhase: feishuManualBindingPreparePhase,
+    manualCredentialInput: Boolean(feishuHasManualCredentialInput),
+    manualCredentialsReady: Boolean(feishuManualCredentialsReady),
+    createCanFinish: feishuCreateModeCanFinish && feishuCreateModeFinishStrategy !== 'invalid-manual',
+    linkCanFinish: feishuLinkModeCanFinish,
+    linkSourceMode: feishuLinkSourceMode,
+  })
+  const feishuOfficialCliLiveAssist = resolveFeishuOfficialOnboardingLiveAssist({
+    sessionMode: feishuOfficialCliSessionMode,
+    sessionRunning: feishuOfficialCliSessionRunning,
+    latestAuthUrl: feishuOfficialCliSessionLatestAuthUrl,
+    latestUserCode: feishuOfficialCliSessionLatestUserCode,
+    clipboardAvailable: feishuOfficialCliClipboardAvailable,
+  })
+  const feishuOfficialCliGuidedFlowActions = resolveFeishuOfficialCliGuidedFlowActions({
+    authState: feishuOfficialCliStatus?.authState,
+    sessionMode: feishuOfficialCliSessionMode,
+    sessionRunning: feishuOfficialCliSessionRunning,
+    sessionExitCode: feishuOfficialCliSessionExitCode,
+    sessionCanceled: feishuOfficialCliSessionCanceled,
+  })
+  const feishuOfficialCliGuidedFlowPurpose = resolveFeishuOfficialCliGuidedFlowPurpose({
+    authState: feishuOfficialCliStatus?.authState,
+    sessionMode: feishuOfficialCliSessionMode,
+    sessionRunning: feishuOfficialCliSessionRunning,
+  })
+
+  useEffect(() => {
+    if (!feishuOfficialCliStatus?.available) {
+      setShowFeishuOfficialCliAdvanced(false)
+    }
+  }, [feishuOfficialCliStatus?.available])
 
   const applyFeishuInstallerSnapshot = useCallback(
     (snapshot: Awaited<ReturnType<typeof window.api.getFeishuInstallerState>>) => {
-      setFeishuInstallerSessionId(snapshot.sessionId || '')
+      const output = String(snapshot.output || '')
+      const outputState = resolveFeishuInstallerOutputState(output)
+      const nextSessionId = snapshot.sessionId || ''
+      const shouldResetEphemeralState = shouldResetFeishuSessionDraftOnSnapshot({
+        currentSessionId: feishuInstallerSessionId,
+        nextSessionId,
+        active: snapshot.active,
+      })
+      feishuInstallerOutputRef.current = output
+      setFeishuInstallerSessionId(nextSessionId)
       setFeishuInstallerRunning(snapshot.active)
-      setFeishuInstallerOutput(snapshot.output || '')
+      setFeishuInstallerOutput(output)
       setFeishuInstallerExitCode(snapshot.code ?? null)
       setFeishuInstallerCanceled(Boolean(snapshot.canceled))
+      if (shouldResetEphemeralState) {
+        feishuInstallerPromptAutoReplyKeyRef.current = ''
+        setFeishuInstallerInput('')
+      }
+      setFeishuInstallerNotice(
+        snapshot.active
+          ? resolveFeishuInstallerSessionLiveNotice({
+              running: true,
+              hasLiveQr: outputState.hasLiveQr,
+              hasOutput: outputState.hasOutput,
+            })
+          : resolveFeishuInstallerSessionExitNotice({
+              canceled: Boolean(snapshot.canceled),
+              exitCode: snapshot.code ?? null,
+            })
+      )
     },
-    []
+    [feishuInstallerSessionId]
+  )
+
+  const applyFeishuOfficialCliSessionSnapshot = useCallback(
+    (
+      snapshot: FeishuOfficialCliSessionView,
+      authStateOverride?: FeishuOfficialCliStatusView['authState'] | null
+    ) => {
+      const latestAuthUrl = String(snapshot.latestAuthUrl || '').trim()
+      const latestUserCode = String(snapshot.latestUserCode || '').trim()
+      const nextSessionId = snapshot.sessionId || ''
+      setFeishuOfficialCliSessionId(nextSessionId)
+      setFeishuOfficialCliSessionMode(snapshot.mode || null)
+      setFeishuOfficialCliSessionRunning(snapshot.active)
+      setFeishuOfficialCliSessionOutput(snapshot.output || '')
+      setFeishuOfficialCliSessionExitCode(snapshot.code ?? null)
+      setFeishuOfficialCliSessionCanceled(Boolean(snapshot.canceled))
+      if (shouldResetFeishuSessionDraftOnSnapshot({
+        currentSessionId: feishuOfficialCliSessionId,
+        nextSessionId,
+        active: snapshot.active,
+      })) {
+        setFeishuOfficialCliSessionInput('')
+      }
+      setFeishuOfficialCliSessionLatestAuthUrl(latestAuthUrl)
+      setFeishuOfficialCliSessionLatestUserCode(latestUserCode)
+      setFeishuOfficialCliSessionNotice(
+        resolveFeishuOfficialCliSessionSnapshotNotice({
+          active: Boolean(snapshot.active),
+          mode: snapshot.mode || null,
+          latestAuthUrl,
+          latestUserCode,
+          canceled: Boolean(snapshot.canceled),
+          exitCode: snapshot.code ?? null,
+          authState: authStateOverride ?? feishuOfficialCliStatus?.authState,
+        })
+      )
+    },
+    [feishuOfficialCliSessionId, feishuOfficialCliStatus?.authState]
   )
 
   const applyWeixinInstallerSnapshot = useCallback(
@@ -996,6 +3215,9 @@ export default function ChannelConnect({
     const normalizedConfig = pluginState.normalizedConfig
     const bots = listFeishuBots(normalizedConfig)
     setFeishuOfficialPluginInstalled(pluginState.installedOnDisk)
+    setFeishuOfficialPluginConfigured(pluginState.officialPluginConfigured)
+    setFeishuOfficialPluginConfigChanged(pluginState.configChanged)
+    setFeishuOfficialPluginBundledPayloadAvailable(pluginState.bundledPayloadAvailable)
     setFeishuBots(bots)
 
     if (bots.length === 0) {
@@ -1027,29 +3249,45 @@ export default function ChannelConnect({
     }) => {
       setRefreshingFeishuState(true)
       try {
-        const [setupState, installerSnapshot] = await Promise.all([
-          loadFeishuSetupState({ syncConfig: true }),
-          window.api.getFeishuInstallerState().catch(() => null),
-          loadFeishuOfficialCliStatus().catch(() => null),
-        ])
+        const {
+          setupState,
+          installerSnapshot,
+          officialCliSessionSnapshot,
+          officialCliStatus,
+        } = await loadFeishuRefreshResources({
+          api: window.api,
+          loadSetupState: () => loadFeishuSetupState({ syncConfig: true }),
+          loadOfficialCliStatus: () => loadFeishuOfficialCliStatus(),
+        })
 
         if (installerSnapshot) {
           applyFeishuInstallerSnapshot(installerSnapshot)
+        }
+        if (officialCliSessionSnapshot) {
+          applyFeishuOfficialCliSessionSnapshot(
+            officialCliSessionSnapshot,
+            officialCliStatus?.authState
+          )
         }
 
         if (
           options?.recoverManualBindingIfReady &&
           isFeishuManualBindingReady(setupState.pluginState)
         ) {
+          const preparedLinkRecovery = resolveFeishuPreparedLinkRecovery({
+            normalizedConfig: setupState.pluginState.normalizedConfig,
+            fallbackExistingBotCount: feishuBotsOrdered.length,
+            prefix: '已刷新到最新状态，飞书官方插件已就绪，',
+          })
           invalidateFeishuManualBindingRequest()
           setPreparingFeishuManualBinding(false)
           setFeishuManualBindingPreparePhase('idle')
+          feishuCreateStartConfigSnapshotRef.current = preparedLinkRecovery.createStartConfigSnapshot
           setFeishuBotSetupMode('link')
+          setFeishuLinkSourceMode(preparedLinkRecovery.sourceMode)
           setError('')
           setShowFieldErrors(false)
-          setFeishuInstallerNotice(
-            '已刷新到最新状态，飞书官方插件已就绪，现在可以手动绑定已有机器人；完成机器人配置后，再继续输入飞书配对码。'
-          )
+          setFeishuInstallerNotice(preparedLinkRecovery.notice)
           void cancelBackgroundFeishuPluginInstall()
           return true
         }
@@ -1064,6 +3302,7 @@ export default function ChannelConnect({
         if (options?.userInitiated) {
           if (recoveryTarget === 'recover-create') {
             void stopBackgroundFeishuInstaller()
+            setError('')
             setFeishuInstallerNotice(
               '已刷新到最新配置，检测到飞书机器人信息，Mclaw 会停止后台安装器；现在可以直接点击“完成机器人配置”，随后继续输入飞书配对码。'
             )
@@ -1088,6 +3327,7 @@ export default function ChannelConnect({
     },
     [
       applyFeishuInstallerSnapshot,
+      applyFeishuOfficialCliSessionSnapshot,
       feishuBotSetupMode,
       invalidateFeishuManualBindingRequest,
       loadFeishuSetupState,
@@ -1158,19 +3398,27 @@ export default function ChannelConnect({
 
       if (result.value.recoveryTarget === 'recover-manual') {
         if (feishuManualBindingRequestVersionRef.current !== manualBindingRequestVersion) return
+        const preparedLinkRecovery = resolveFeishuPreparedLinkRecovery({
+          normalizedConfig: result.value.setupState.pluginState.normalizedConfig,
+          fallbackExistingBotCount: feishuBotsOrdered.length,
+          prefix: '已自动检测到飞书官方插件已就绪，',
+        })
         invalidateFeishuManualBindingRequest()
         setPreparingFeishuManualBinding(false)
         setFeishuManualBindingPreparePhase('idle')
+        feishuCreateStartConfigSnapshotRef.current = preparedLinkRecovery.createStartConfigSnapshot
         setFeishuBotSetupMode('link')
+        setFeishuLinkSourceMode(preparedLinkRecovery.sourceMode)
         setError('')
         setShowFieldErrors(false)
-        setFeishuInstallerNotice('已自动检测到飞书官方插件已就绪，现在可以手动绑定已有机器人；完成机器人配置后，再继续输入飞书配对码。')
+        setFeishuInstallerNotice(preparedLinkRecovery.notice)
         void cancelBackgroundFeishuPluginInstall()
         return
       }
 
       if (result.value.recoveryTarget === 'recover-create') {
         void stopBackgroundFeishuInstaller()
+        setError('')
         setFeishuInstallerNotice(
           '已自动检测到飞书机器人配置，Mclaw 会停止后台安装器；现在可以直接点击“完成机器人配置”，随后继续输入飞书配对码。'
         )
@@ -1213,18 +3461,144 @@ export default function ChannelConnect({
   }, [refreshFeishuBotsFromConfig])
 
   useEffect(() => {
-    const unsubscribe = window.api.onFeishuInstallerEvent((payload) => {
+    const nextSelectedAccountId = resolveSelectedFeishuExistingBotAccountId(
+      feishuBotsOrdered,
+      selectedFeishuExistingBotAccountId
+    )
+    if (nextSelectedAccountId !== selectedFeishuExistingBotAccountId) {
+      setSelectedFeishuExistingBotAccountId(nextSelectedAccountId)
+    }
+  }, [feishuBotsOrdered, selectedFeishuExistingBotAccountId])
+
+  useEffect(() => {
+    if (selectedChannel?.id !== 'feishu' || feishuBotSetupMode !== 'link') return
+    if (feishuBotsOrdered.length === 0 && feishuLinkSourceMode !== 'manual') {
+      setFeishuLinkSourceMode('manual')
+    }
+  }, [feishuBotSetupMode, feishuBotsOrdered.length, feishuLinkSourceMode, selectedChannel?.id])
+
+  useEffect(() => {
+    const unsubscribe = window.api.onFeishuOfficialCliSessionEvent((payload) => {
       if (payload.type === 'started') {
-        feishuInstallerPromptAutoReplyKeyRef.current = ''
-        setFeishuInstallerSessionId(payload.sessionId || '')
-        setFeishuInstallerRunning(true)
-        setFeishuInstallerExitCode(null)
-        setFeishuInstallerCanceled(false)
+        const nextState = resolveFeishuOfficialCliSessionStartState(
+          (payload.mode as FeishuOfficialCliSessionMode | null) || null
+        )
+        setFeishuOfficialCliSessionId(payload.sessionId || nextState.sessionId)
+        setFeishuOfficialCliSessionMode(nextState.mode)
+        setFeishuOfficialCliSessionRunning(nextState.running)
+        setFeishuOfficialCliSessionOutput(nextState.output)
+        setFeishuOfficialCliSessionExitCode(nextState.exitCode)
+        setFeishuOfficialCliSessionCanceled(nextState.canceled)
+        setFeishuOfficialCliSessionInput(nextState.input)
+        setFeishuOfficialCliSessionLatestAuthUrl(nextState.latestAuthUrl)
+        setFeishuOfficialCliSessionLatestUserCode(nextState.latestUserCode)
+        setFeishuOfficialCliSessionNotice(nextState.notice)
         return
       }
 
       if (payload.type === 'output') {
-        setFeishuInstallerOutput((current) => current + String(payload.chunk || ''))
+        setFeishuOfficialCliSessionOutput((current) => current + String(payload.chunk || ''))
+        return
+      }
+
+      if (payload.type === 'challenge') {
+        const latestAuthUrl = String(payload.latestAuthUrl || '').trim()
+        const latestUserCode = String(payload.latestUserCode || '').trim()
+        const sessionMode = (payload.mode as FeishuOfficialCliSessionMode | null) || feishuOfficialCliSessionMode
+        setFeishuOfficialCliSessionLatestAuthUrl(latestAuthUrl)
+        setFeishuOfficialCliSessionLatestUserCode(latestUserCode)
+        setFeishuOfficialCliSessionNotice(
+          resolveFeishuOfficialCliSessionLiveNotice({
+            mode: sessionMode,
+            running: true,
+            hasAuthUrl: Boolean(latestAuthUrl),
+            hasUserCode: Boolean(latestUserCode),
+          })
+        )
+        return
+      }
+
+      if (payload.type === 'exit') {
+        setFeishuOfficialCliSessionRunning(false)
+        setFeishuOfficialCliSessionExitCode(payload.code ?? null)
+        setFeishuOfficialCliSessionCanceled(Boolean(payload.canceled))
+        setFeishuOfficialCliSessionLatestAuthUrl(String(payload.latestAuthUrl || '').trim())
+        setFeishuOfficialCliSessionLatestUserCode(String(payload.latestUserCode || '').trim())
+        void (async () => {
+          const refreshedStatus = await loadFeishuOfficialCliStatus().catch(() => null)
+          await refreshFeishuSetupState().catch(() => {
+            // Best effort only; the official CLI flow should not fail the page refresh path.
+          })
+
+          setFeishuOfficialCliSessionNotice(
+            resolveFeishuOfficialCliSessionExitNotice({
+              mode: (payload.mode as FeishuOfficialCliSessionMode | null) || null,
+              canceled: Boolean(payload.canceled),
+              exitCode: payload.code ?? null,
+              authState: refreshedStatus?.authState,
+            })
+          )
+        })()
+      }
+    })
+
+    return unsubscribe
+  }, [feishuOfficialCliSessionMode, loadFeishuOfficialCliStatus, refreshFeishuSetupState])
+
+  useEffect(() => {
+    if (feishuOfficialCliSessionRunning) return
+    if (
+      !feishuOfficialCliSessionCanceled
+      && feishuOfficialCliSessionExitCode === null
+      && !feishuOfficialCliSessionMode
+    ) {
+      return
+    }
+
+    setFeishuOfficialCliSessionNotice(
+      resolveFeishuOfficialCliSessionExitNotice({
+        mode: feishuOfficialCliSessionMode,
+        canceled: feishuOfficialCliSessionCanceled,
+        exitCode: feishuOfficialCliSessionExitCode,
+        authState: feishuOfficialCliStatus?.authState,
+      })
+    )
+  }, [
+    feishuOfficialCliSessionCanceled,
+    feishuOfficialCliSessionExitCode,
+    feishuOfficialCliSessionMode,
+    feishuOfficialCliSessionRunning,
+    feishuOfficialCliStatus?.authState,
+  ])
+
+  useEffect(() => {
+    const unsubscribe = window.api.onFeishuInstallerEvent((payload) => {
+      if (payload.type === 'started') {
+        const nextState = resolveFeishuInstallerSessionStartState()
+        feishuInstallerPromptAutoReplyKeyRef.current = ''
+        feishuInstallerOutputRef.current = ''
+        setFeishuInstallerSessionId(payload.sessionId || nextState.sessionId)
+        setFeishuInstallerRunning(nextState.running)
+        setFeishuInstallerOutput(nextState.output)
+        setFeishuInstallerExitCode(nextState.exitCode)
+        setFeishuInstallerCanceled(nextState.canceled)
+        setFeishuInstallerInput(nextState.input)
+        setFeishuInstallerNotice(nextState.notice)
+        return
+      }
+
+      if (payload.type === 'output') {
+        const nextOutput = feishuInstallerOutputRef.current + String(payload.chunk || '')
+        const outputState = resolveFeishuInstallerOutputState(nextOutput)
+        feishuInstallerOutputRef.current = nextOutput
+        setFeishuInstallerOutput(nextOutput)
+        setFeishuInstallerNotice(
+          resolveFeishuInstallerSessionLiveNotice({
+            running: true,
+            hasLiveQr: outputState.hasLiveQr,
+            hasOutput: outputState.hasOutput,
+          })
+        )
         return
       }
 
@@ -1232,6 +3606,12 @@ export default function ChannelConnect({
         setFeishuInstallerRunning(false)
         setFeishuInstallerExitCode(payload.code ?? null)
         setFeishuInstallerCanceled(Boolean(payload.canceled))
+        setFeishuInstallerNotice(
+          resolveFeishuInstallerSessionExitNotice({
+            canceled: Boolean(payload.canceled),
+            exitCode: payload.code ?? null,
+          })
+        )
         feishuInstallerPromptAutoReplyKeyRef.current = ''
         void refreshFeishuBotsFromConfig().catch(() => {
           // Ignore refresh failures after installer exit.
@@ -1244,22 +3624,38 @@ export default function ChannelConnect({
 
   useEffect(() => {
     if (selectedChannel?.id !== 'feishu') return
+    let disposed = false
 
-    window.api
-      .getFeishuInstallerState()
-      .then((snapshot) => {
-        applyFeishuInstallerSnapshot(snapshot)
-      })
-      .catch(() => {
-        // Ignore preload failures.
-      })
-    void loadFeishuOfficialCliStatus().catch(() => {
-      // Official CLI status is best effort only.
+    void loadFeishuRefreshResources({
+      api: window.api,
+      loadSetupState: () => loadFeishuSetupState({ syncConfig: true }),
+      loadOfficialCliStatus: () => loadFeishuOfficialCliStatus(),
+    }).then((resources) => {
+      if (disposed) return
+      if (resources.installerSnapshot) {
+        applyFeishuInstallerSnapshot(resources.installerSnapshot)
+      }
+      if (resources.officialCliSessionSnapshot) {
+        applyFeishuOfficialCliSessionSnapshot(
+          resources.officialCliSessionSnapshot,
+          resources.officialCliStatus?.authState
+        )
+      }
+    }).catch(() => {
+      // Ignore preload failures here.
     })
-    void refreshFeishuBotsFromConfig().catch(() => {
-      // Ignore refresh failures here.
-    })
-  }, [applyFeishuInstallerSnapshot, loadFeishuOfficialCliStatus, refreshFeishuBotsFromConfig, selectedChannel?.id])
+
+    return () => {
+      disposed = true
+    }
+  }, [
+    applyFeishuInstallerSnapshot,
+    applyFeishuOfficialCliSessionSnapshot,
+    loadFeishuSetupState,
+    loadFeishuRefreshResources,
+    loadFeishuOfficialCliStatus,
+    selectedChannel?.id,
+  ])
 
   useEffect(() => {
     if (selectedChannel?.id !== 'feishu' || !feishuInstallerRunning) return
@@ -1286,19 +3682,53 @@ export default function ChannelConnect({
   }, [feishuBotSetupMode, feishuInstallerOutput, feishuInstallerRunning, selectedChannel?.id])
 
   const handleChannelChange = (channelId: string) => {
+    const feishuResetState = resolveFeishuChannelViewResetState()
     invalidateFeishuManualBindingRequest()
     setSelectedChannelId(channelId)
     setFormData({})
     setStatus('form')
     setLog('')
     setError('')
+    setCanSkip(false)
     setShowFieldErrors(false)
     setBindingMode('qr')
-    setFeishuBotSetupMode('create')
-    setFeishuInstallerNotice('')
-    setFeishuInstallerInput('')
-    setPreparingFeishuManualBinding(false)
+    feishuCreateStartConfigSnapshotRef.current = feishuResetState.createStartConfigSnapshot
+    setFeishuBotSetupMode(feishuResetState.botSetupMode)
+    setFeishuLinkSourceMode(feishuResetState.linkSourceMode)
+    setFeishuOfficialPluginInstalled(feishuResetState.officialPluginInstalled)
+    setFeishuOfficialPluginConfigured(feishuResetState.officialPluginConfigured)
+    setFeishuOfficialPluginConfigChanged(feishuResetState.officialPluginConfigChanged)
+    setFeishuOfficialPluginBundledPayloadAvailable(feishuResetState.officialPluginBundledPayloadAvailable)
+    setFeishuBots(feishuResetState.bots)
+    setPairingStatusByBot(feishuResetState.pairingStatusByBot)
+    setSelectedFeishuExistingBotAccountId(feishuResetState.selectedExistingBotAccountId)
+    setFeishuOfficialCliStatus(feishuResetState.officialCliStatus)
+    setFeishuInstallerSessionId(feishuResetState.installerSessionId)
+    setFeishuInstallerRunning(feishuResetState.installerRunning)
+    setFeishuInstallerOutput(feishuResetState.installerOutput)
+    setFeishuInstallerExitCode(feishuResetState.installerExitCode)
+    setFeishuInstallerCanceled(feishuResetState.installerCanceled)
+    setFeishuInstallerBusy(feishuResetState.installerBusy)
+    setFeishuInstallerNotice(feishuResetState.installerNotice)
+    setFeishuInstallerInput(feishuResetState.installerInput)
+    setFeishuOfficialCliSessionId(feishuResetState.officialCliSessionId)
+    setFeishuOfficialCliSessionMode(feishuResetState.officialCliSessionMode)
+    setFeishuOfficialCliSessionRunning(feishuResetState.officialCliSessionRunning)
+    setFeishuOfficialCliSessionOutput(feishuResetState.officialCliSessionOutput)
+    setFeishuOfficialCliSessionExitCode(feishuResetState.officialCliSessionExitCode)
+    setFeishuOfficialCliSessionCanceled(feishuResetState.officialCliSessionCanceled)
+    setFeishuOfficialCliSessionBusy(feishuResetState.officialCliSessionBusy)
+    setFeishuOfficialCliSessionInput(feishuResetState.officialCliSessionInput)
+    setFeishuOfficialCliSessionLatestAuthUrl(feishuResetState.officialCliSessionLatestAuthUrl)
+    setFeishuOfficialCliSessionLatestUserCode(feishuResetState.officialCliSessionLatestUserCode)
+    setFeishuOfficialCliSessionNotice(feishuResetState.officialCliSessionNotice)
+    setPreparingFeishuManualBinding(feishuResetState.preparingManualBinding)
+    setFeishuManualBindingPreparePhase(feishuResetState.manualBindingPreparePhase)
+    setShowFeishuInstallTutorial(feishuResetState.showInstallTutorial)
+    setFinishingFeishuSetup(feishuResetState.finishingSetup)
+    setRefreshingFeishuState(feishuResetState.refreshingState)
     feishuInstallerPromptAutoReplyKeyRef.current = ''
+    feishuInstallerOutputRef.current = ''
     setWeixinInstallerSessionId('')
     setWeixinInstallerRunning(false)
     setWeixinInstallerOutput('')
@@ -1311,7 +3741,21 @@ export default function ChannelConnect({
   }
 
   const handleFieldChange = (key: string, value: string) => {
+    if (
+      selectedChannel?.id === 'feishu'
+      && feishuBotSetupMode === 'link'
+      && (key === 'appId' || key === 'appSecret' || key === 'name')
+      && feishuLinkSourceMode !== 'manual'
+    ) {
+      setFeishuLinkSourceMode('manual')
+    }
     setFormData(prev => ({ ...prev, [key]: value }))
+  }
+
+  const handleFeishuLinkSourceModeChange = (value: string) => {
+    setFeishuLinkSourceMode(value as FeishuLinkSourceMode)
+    setError('')
+    setShowFieldErrors(false)
   }
 
   const sendFeishuInstallerInput = async (input: string) => {
@@ -1321,45 +3765,188 @@ export default function ChannelConnect({
       return false
     }
 
-    const result = await window.api.sendFeishuInstallerInput(sessionId, input)
-    if (!result.ok) {
+    try {
+      const result = await window.api.sendFeishuInstallerInput(sessionId, input)
+      if (!result.ok) {
+        setError(
+          getFeishuSessionInputFailureMessage({
+            target: 'installer',
+            detail: result.message,
+          })
+        )
+        return false
+      }
+
+      setError('')
+      return true
+    } catch (e: any) {
       setError(
-        toUserFacingCliFailureMessage({
-          stderr: result.message,
-          fallback: '写入飞书官方安装器失败',
+        getFeishuSessionInputFailureMessage({
+          target: 'installer',
+          error: e,
         })
       )
       return false
     }
-
-    setError('')
-    return true
   }
 
-  const startFeishuInstallerFlow = async (mode: 'create' | 'link') => {
-    invalidateFeishuManualBindingRequest()
-    setFeishuBotSetupMode(mode)
-    setFeishuInstallerBusy(true)
-    setError('')
-    setFeishuInstallerNotice('')
+  const sendFeishuOfficialCliSessionInput = async (input: string) => {
+    const sessionId = String(feishuOfficialCliSessionId || '').trim()
+    if (!sessionId) {
+      setError('飞书官方 lark-cli 引导会话尚未启动。')
+      return false
+    }
+
     try {
-      if (mode === 'create') {
-        const config = sanitizeFeishuPluginConfig(await window.api.readConfig())
-        feishuCreateStartConfigSnapshotRef.current = captureFeishuBotConfigSnapshot(config)
-      } else {
-        feishuCreateStartConfigSnapshotRef.current = null
+      const result = await window.api.sendFeishuOfficialCliSessionInput(sessionId, input)
+      if (!result.ok) {
+        setError(
+          getFeishuSessionInputFailureMessage({
+            target: 'official-cli',
+            detail: result.message,
+          })
+        )
+        return false
       }
 
-      const current = await window.api.getFeishuInstallerState()
+      setError('')
+      return true
+    } catch (e: any) {
+      setError(
+        getFeishuSessionInputFailureMessage({
+          target: 'official-cli',
+          error: e,
+        })
+      )
+      return false
+    }
+  }
+
+  const startFeishuOfficialCliGuidedFlow = async (mode: FeishuOfficialCliSessionMode) => {
+    setFeishuOfficialCliSessionBusy(true)
+    setError('')
+    try {
+      const current = await window.api.getFeishuOfficialCliSessionState()
+      const startPlan = resolveFeishuOfficialCliSessionStartPlan({
+        requestedMode: mode,
+        currentMode: feishuOfficialCliSessionMode,
+        hasActiveSession: current.active,
+      })
       if (current.active) {
-        applyFeishuInstallerSnapshot(current)
+        setFeishuOfficialCliSessionMode(startPlan.mode)
+        applyFeishuOfficialCliSessionSnapshot(current)
+        setFeishuOfficialCliSessionNotice(
+          resolveFeishuSessionReuseNotice({
+            target: 'official-cli',
+            requestedMode: mode,
+            currentMode: current.mode || null,
+          })
+        )
         return
       }
 
-      const snapshot = await window.api.startFeishuInstaller()
+      const nextState = resolveFeishuOfficialCliSessionStartState(mode)
+      if (startPlan.shouldPrimeFreshStartState) {
+        setFeishuOfficialCliSessionId(nextState.sessionId)
+        setFeishuOfficialCliSessionMode(nextState.mode)
+        setFeishuOfficialCliSessionOutput(nextState.output)
+        setFeishuOfficialCliSessionExitCode(nextState.exitCode)
+        setFeishuOfficialCliSessionCanceled(nextState.canceled)
+        setFeishuOfficialCliSessionInput(nextState.input)
+        setFeishuOfficialCliSessionLatestAuthUrl(nextState.latestAuthUrl)
+        setFeishuOfficialCliSessionLatestUserCode(nextState.latestUserCode)
+        setFeishuOfficialCliSessionNotice(nextState.notice)
+      }
+
+      const snapshot = await window.api.startFeishuOfficialCliSession(mode)
+      applyFeishuOfficialCliSessionSnapshot(snapshot)
+      if (!snapshot.sessionId || !snapshot.active) {
+        throw new Error(snapshot.output || 'Failed to start the official lark-cli guided session.')
+      }
+    } catch (e: any) {
+      setError(toUserFacingUnknownErrorMessage(e, 'Failed to start the official lark-cli guided session.'))
+    } finally {
+      setFeishuOfficialCliSessionBusy(false)
+    }
+  }
+
+  const stopFeishuOfficialCliGuidedFlow = async () => {
+    setFeishuOfficialCliSessionBusy(true)
+    setError('')
+    try {
+      const result = await window.api.stopFeishuOfficialCliSession()
+      const feedback = resolveFeishuStopRequestFeedback({
+        target: 'official-cli',
+        ok: result.ok,
+      })
+      if (feedback.notice) {
+        setFeishuOfficialCliSessionNotice(feedback.notice)
+      }
+      if (feedback.error) {
+        setError(feedback.error)
+      }
+    } catch (e: any) {
+      setError(
+        toUserFacingUnknownErrorMessage(
+          e,
+          resolveFeishuStopRequestFeedback({
+            target: 'official-cli',
+            ok: false,
+          }).error
+        )
+      )
+    } finally {
+      setFeishuOfficialCliSessionBusy(false)
+    }
+  }
+
+  const startFeishuInstallerFlow = async (mode: 'create' | 'link') => {
+    setFeishuInstallerBusy(true)
+    setError('')
+    try {
+      const current = await window.api.getFeishuInstallerState()
+      const startPlan = resolveFeishuInstallerStartPlan({
+        requestedMode: mode,
+        currentMode: feishuBotSetupMode,
+        hasActiveSession: current.active,
+      })
+      if (current.active) {
+        setFeishuBotSetupMode(startPlan.mode)
+        applyFeishuInstallerSnapshot(current)
+        setFeishuInstallerNotice(
+          resolveFeishuSessionReuseNotice({
+            target: 'installer',
+          })
+        )
+        return
+      }
+
+      const nextState = resolveFeishuInstallerSessionStartState()
+      if (startPlan.shouldPrimeFreshStartState) {
+        invalidateFeishuManualBindingRequest()
+        setFeishuBotSetupMode(startPlan.mode)
+        feishuInstallerPromptAutoReplyKeyRef.current = ''
+        feishuInstallerOutputRef.current = ''
+        setFeishuInstallerSessionId(nextState.sessionId)
+        setFeishuInstallerOutput(nextState.output)
+        setFeishuInstallerExitCode(nextState.exitCode)
+        setFeishuInstallerCanceled(nextState.canceled)
+        setFeishuInstallerInput(nextState.input)
+        setFeishuInstallerNotice(nextState.notice)
+      }
+
+      if (startPlan.createSnapshotAction === 'capture') {
+        const config = sanitizeFeishuPluginConfig(await window.api.readConfig())
+        feishuCreateStartConfigSnapshotRef.current = captureFeishuBotConfigSnapshot(config)
+      } else if (startPlan.createSnapshotAction === 'clear') {
+        feishuCreateStartConfigSnapshotRef.current = null
+      }
+
+      const snapshot = await window.api.startFeishuInstaller(mode)
       applyFeishuInstallerSnapshot(snapshot)
       if (!snapshot.sessionId || !snapshot.active) {
-        throw new Error(snapshot.output || '飞书官方安装器启动失败')
+        setError(String(snapshot.output || '启动飞书官方安装器失败'))
+        return
       }
     } catch (e: any) {
       setError(toUserFacingUnknownErrorMessage(e, '启动飞书官方安装器失败'))
@@ -1370,8 +3957,29 @@ export default function ChannelConnect({
 
   const stopFeishuInstallerFlow = async () => {
     setFeishuInstallerBusy(true)
+    setError('')
     try {
-      await window.api.stopFeishuInstaller()
+      const result = await window.api.stopFeishuInstaller()
+      const feedback = resolveFeishuStopRequestFeedback({
+        target: 'installer',
+        ok: result.ok,
+      })
+      if (feedback.notice) {
+        setFeishuInstallerNotice(feedback.notice)
+      }
+      if (feedback.error) {
+        setError(feedback.error)
+      }
+    } catch (e: any) {
+      setError(
+        toUserFacingUnknownErrorMessage(
+          e,
+          resolveFeishuStopRequestFeedback({
+            target: 'installer',
+            ok: false,
+          }).error
+        )
+      )
     } finally {
       setFeishuInstallerBusy(false)
     }
@@ -1456,12 +4064,7 @@ export default function ChannelConnect({
         // Keep the wizard focused; errors are surfaced below the form.
       }, { channelId: 'openclaw-weixin' })
       if (!gatewayReady.ok) {
-        throw new Error(
-          toUserFacingCliFailureMessage({
-            stderr: gatewayReady.message,
-            fallback: 'Gateway 启动失败',
-          })
-        )
+        // Feishu setup should continue into the pairing step even if the reload is still settling.
       }
 
       const successAccountId =
@@ -1515,13 +4118,18 @@ export default function ChannelConnect({
         }
 
         if (isFeishuManualBindingReady(readyState)) {
+          const preparedLinkRecovery = resolveFeishuPreparedLinkRecovery({
+            normalizedConfig: readyState.normalizedConfig,
+            fallbackExistingBotCount: feishuBotsOrdered.length,
+            prefix: initialState.configChanged
+              ? '已同步飞书官方插件配置，'
+              : '已确认飞书官方插件可用，',
+          })
           setFeishuManualBindingPreparePhase('verifying')
+          feishuCreateStartConfigSnapshotRef.current = preparedLinkRecovery.createStartConfigSnapshot
           setFeishuBotSetupMode('link')
-          setFeishuInstallerNotice(
-            initialState.configChanged
-              ? '已同步飞书官方插件配置，现在可以手动绑定已有机器人；完成机器人配置后，再继续输入飞书配对码。'
-              : '已确认飞书官方插件可用，现在可以手动绑定已有机器人；完成机器人配置后，再继续输入飞书配对码。'
-          )
+          setFeishuLinkSourceMode(preparedLinkRecovery.sourceMode)
+          setFeishuInstallerNotice(preparedLinkRecovery.notice)
           void refreshFeishuBotsFromConfig().catch(() => {
             // Keep the manual binding form available even if background refresh fails.
           })
@@ -1543,13 +4151,18 @@ export default function ChannelConnect({
         )
       }
 
+      const preparedLinkRecovery = resolveFeishuPreparedLinkRecovery({
+        normalizedConfig: ensureResult.state.normalizedConfig,
+        fallbackExistingBotCount: feishuBotsOrdered.length,
+        prefix: ensureResult.installedThisRun
+          ? '已自动补装飞书官方插件，'
+          : '已确认飞书官方插件可用，',
+      })
       setFeishuManualBindingPreparePhase('verifying')
+      feishuCreateStartConfigSnapshotRef.current = preparedLinkRecovery.createStartConfigSnapshot
       setFeishuBotSetupMode('link')
-      setFeishuInstallerNotice(
-        ensureResult.installedThisRun
-          ? '已自动补装飞书官方插件，现在可以手动绑定已有机器人；完成机器人配置后，再继续输入飞书配对码。'
-          : '已确认飞书官方插件可用，现在可以手动绑定已有机器人；完成机器人配置后，再继续输入飞书配对码。'
-      )
+      setFeishuLinkSourceMode(preparedLinkRecovery.sourceMode)
+      setFeishuInstallerNotice(preparedLinkRecovery.notice)
       void refreshFeishuBotsFromConfig().catch(() => {
         // Keep the manual binding form available even if background refresh fails.
       })
@@ -1583,53 +4196,67 @@ export default function ChannelConnect({
       let pairingTarget: { accountId: string; accountName: string } | null = null
 
       if (feishuBotSetupMode === 'link') {
-        if (!shouldValidateFeishuManualCredentials(feishuBotSetupMode, hasFeishuManualCredentialInput(formData), channelValidation.ok)) {
-          setShowFieldErrors(true)
-          throw new Error('手动绑定信息未填写完整，请补全 App ID 和 App Secret 后再继续。')
-        }
-
-        const credentialCheck = await window.api.validateFeishuCredentials(
-          channelValidation.values.appId,
-          channelValidation.values.appSecret,
-          config?.channels?.feishu?.domain
-        )
-        if (!credentialCheck.ok) {
-          throw new Error(
-            toUserFacingCliFailureMessage({
-              stderr: credentialCheck.stderr,
-              stdout: credentialCheck.stdout,
-              fallback: '飞书 App ID / App Secret 校验失败，请检查后重试。',
-            })
+        if (feishuLinkModeFinishStrategy === 'manual') {
+          const credentialCheck = await window.api.validateFeishuCredentials(
+            channelValidation.values.appId,
+            channelValidation.values.appSecret,
+            config?.channels?.feishu?.domain
           )
-        }
+          if (!credentialCheck.ok) {
+            throw new Error(
+              toUserFacingCliFailureMessage({
+                stderr: credentialCheck.stderr,
+                stdout: credentialCheck.stdout,
+                fallback: '飞书 App ID / App Secret 校验失败，请检查后重试。',
+              })
+            )
+          }
 
-        const existingBots = listFeishuBots(config)
-        if (existingBots.length > 0) {
-          const added = addFeishuBotConfig(config, {
-            name: String(formData.name || '').trim() || '飞书 Bot',
-            appId: channelValidation.values.appId,
-            appSecret: channelValidation.values.appSecret,
-            provisionSource: 'linked',
+          const existingBots = listFeishuBots(config)
+          if (existingBots.length > 0) {
+            const added = addFeishuBotConfig(config, {
+              name: String(formData.name || '').trim() || '飞书 Bot',
+              appId: channelValidation.values.appId,
+              appSecret: channelValidation.values.appSecret,
+              provisionSource: 'linked',
+            })
+            nextConfig = added.nextConfig
+            pairingTarget = {
+              accountId: added.accountId,
+              accountName: String(formData.name || '').trim() || `Bot ${added.accountId}`,
+            }
+          } else {
+            nextConfig = applyChannelConfig(config, 'feishu', channelValidation.values)
+            if (nextConfig.channels?.feishu) {
+              nextConfig.channels.feishu.mclawProvisionSource = 'linked'
+            }
+            const matchedBot = listFeishuBots(nextConfig).find(
+              (bot) => bot.appId.trim().toLowerCase() === channelValidation.values.appId.trim().toLowerCase()
+            )
+            pairingTarget = matchedBot
+              ? {
+                  accountId: matchedBot.accountId,
+                  accountName: matchedBot.name,
+                }
+              : null
+          }
+        } else if (feishuLinkModeFinishStrategy === 'existing') {
+          pairingTarget = resolveFeishuPairingTarget({
+            setupMode: 'link',
+            finishStrategy: 'existing',
+            nextConfig: config,
+            selectedAccountId: resolvedSelectedFeishuExistingBotAccountId,
           })
-          nextConfig = added.nextConfig
-          pairingTarget = {
-            accountId: added.accountId,
-            accountName: String(formData.name || '').trim() || `Bot ${added.accountId}`,
+          if (!pairingTarget) {
+            throw new Error('当前没有可直接复用的飞书机器人，请先刷新状态或改用手动绑定。')
           }
         } else {
-          nextConfig = applyChannelConfig(config, 'feishu', channelValidation.values)
-          if (nextConfig.channels?.feishu) {
-            nextConfig.channels.feishu.mclawProvisionSource = 'linked'
-          }
-          const matchedBot = listFeishuBots(nextConfig).find(
-            (bot) => bot.appId.trim().toLowerCase() === channelValidation.values.appId.trim().toLowerCase()
+          setShowFieldErrors(true)
+          throw new Error(
+            feishuLinkModeFinishStrategy === 'invalid-manual'
+              ? '手动绑定信息未填写完整，请补全 App ID 和 App Secret 后再继续。'
+              : '请先选择一个已检测到的飞书机器人，或补全 App ID 和 App Secret 后再继续。'
           )
-          pairingTarget = matchedBot
-            ? {
-                accountId: matchedBot.accountId,
-                accountName: matchedBot.name,
-              }
-            : null
         }
 
         if (feishuInstallerRunning) {
@@ -1673,14 +4300,9 @@ export default function ChannelConnect({
 
       const gatewayReady = await ensureGatewayReadyForChannelConnect(window.api, () => {
         // Keep the wizard UI focused; setup errors are surfaced directly below the form.
-      }, { channelId: 'feishu' })
+      }, { channelId: 'feishu', allowPendingManagedReady: true })
       if (!gatewayReady.ok) {
-        throw new Error(
-          toUserFacingCliFailureMessage({
-            stderr: gatewayReady.message,
-            fallback: 'Gateway 启动失败',
-          })
-        )
+        // Feishu setup should continue into the pairing step even if the reload is still settling.
       }
 
       await refreshFeishuBotsFromConfig()
@@ -1697,7 +4319,7 @@ export default function ChannelConnect({
         channelId: 'feishu',
         accountId: pairingTarget?.accountId,
         accountName: pairingTarget?.accountName,
-        skipPairing: feishuBotSetupMode === 'create',
+        skipPairing: shouldSkipFeishuPairingAfterSetup(feishuBotSetupMode),
       })
     } catch (e: any) {
       setError(toUserFacingUnknownErrorMessage(e, '飞书配置完成收尾失败'))
@@ -2117,6 +4739,232 @@ export default function ChannelConnect({
     }
   }
 
+  const focusFeishuSetupPath = useCallback((mode: 'create' | 'link') => {
+    setFeishuBotSetupMode(mode)
+    if (mode !== 'create') {
+      feishuCreateStartConfigSnapshotRef.current = null
+    }
+    if (typeof document === 'undefined') return
+
+    window.setTimeout(() => {
+      document
+        .getElementById(mode === 'create' ? 'feishu-create-path-card' : 'feishu-link-path-card')
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 0)
+  }, [])
+
+  const focusFeishuOfficialCliGuidedFlow = useCallback(() => {
+    if (typeof document === 'undefined') return
+
+    window.setTimeout(() => {
+      document
+        .getElementById('feishu-official-cli-guided-flow-card')
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 0)
+  }, [])
+
+  const handleFeishuOfficialOnboardingAction = useCallback(
+    async (action: FeishuOfficialOnboardingAction | null | undefined) => {
+      if (!action) return
+
+      if (action === 'refresh-status') {
+        await refreshFeishuSetupState(
+          resolveFeishuStatusRefreshOptions(preparingFeishuManualBinding)
+        )
+        return
+      }
+      if (action === 'start-auth-login-recommend') {
+        await startFeishuOfficialCliGuidedFlow('auth-login-recommend')
+        return
+      }
+      if (action === 'start-auth-login-no-wait') {
+        await startFeishuOfficialCliGuidedFlow('auth-login-no-wait')
+        return
+      }
+      if (action === 'start-config-init-new') {
+        await startFeishuOfficialCliGuidedFlow('config-init-new')
+        return
+      }
+      if (action === 'focus-guided-flow') {
+        focusFeishuOfficialCliGuidedFlow()
+        return
+      }
+      if (action === 'open-auth-url') {
+        if (feishuOfficialCliSessionLatestAuthUrl) {
+          try {
+            const result = await window.api.openOAuthUrl(feishuOfficialCliSessionLatestAuthUrl)
+            if (!result.ok) {
+              notifications.show({
+                color: 'red',
+                title: 'Open browser failed',
+                message: getFeishuOfficialAuthUrlOpenFailureMessage(result),
+              })
+            }
+          } catch (error) {
+            notifications.show({
+              color: 'red',
+              title: 'Open browser failed',
+              message: toUserFacingUnknownErrorMessage(
+                error,
+                FEISHU_OFFICIAL_AUTH_URL_OPEN_FAILURE_FALLBACK
+              ),
+            })
+          }
+        }
+        focusFeishuOfficialCliGuidedFlow()
+        return
+      }
+      if (action === 'copy-device-code') {
+        try {
+          if (!feishuOfficialCliSessionLatestUserCode || !navigator.clipboard?.writeText) {
+            throw new Error('当前设备码会话不可用剪贴板。')
+          }
+          await navigator.clipboard.writeText(feishuOfficialCliSessionLatestUserCode)
+          notifications.show({
+            color: 'teal',
+            title: '设备码已复制',
+            message: '当前飞书设备码已复制到剪贴板。',
+          })
+        } catch (error) {
+          notifications.show({
+            color: 'red',
+            title: '复制失败',
+            message: error instanceof Error ? error.message : '复制当前设备码失败。',
+          })
+        }
+        focusFeishuOfficialCliGuidedFlow()
+        return
+      }
+      if (action === 'finish-create' || action === 'finish-link') {
+        await finishFeishuChannelConnect()
+        return
+      }
+      if (action === 'start-create') {
+        await startFeishuInstallerFlow('create')
+        return
+      }
+      if (action === 'start-link') {
+        await prepareFeishuManualBinding()
+        return
+      }
+      if (action === 'switch-link-existing') {
+        setFeishuBotSetupMode('link')
+        setFeishuLinkSourceMode('existing')
+        focusFeishuSetupPath('link')
+        return
+      }
+      if (action === 'switch-link-manual') {
+        setFeishuBotSetupMode('link')
+        setFeishuLinkSourceMode('manual')
+        focusFeishuSetupPath('link')
+        return
+      }
+      if (action === 'focus-create') {
+        focusFeishuSetupPath('create')
+        return
+      }
+      focusFeishuSetupPath('link')
+    },
+    [
+      feishuOfficialCliSessionLatestAuthUrl,
+      feishuOfficialCliSessionLatestUserCode,
+      focusFeishuSetupPath,
+      focusFeishuOfficialCliGuidedFlow,
+      finishFeishuChannelConnect,
+      prepareFeishuManualBinding,
+      preparingFeishuManualBinding,
+      refreshFeishuSetupState,
+      startFeishuInstallerFlow,
+      startFeishuOfficialCliGuidedFlow,
+    ]
+  )
+
+  const isFeishuOfficialOnboardingActionLoading = (action: FeishuOfficialOnboardingAction): boolean => {
+    if (action === 'refresh-status') return refreshingFeishuState
+    if (action === 'start-config-init-new') {
+      return feishuOfficialCliSessionBusy && feishuOfficialCliSessionMode === 'config-init-new'
+    }
+    if (action === 'start-auth-login-recommend') {
+      return feishuOfficialCliSessionBusy && feishuOfficialCliSessionMode === 'auth-login-recommend'
+    }
+    if (action === 'start-auth-login-no-wait') {
+      return feishuOfficialCliSessionBusy && feishuOfficialCliSessionMode === 'auth-login-no-wait'
+    }
+    if (action === 'start-create') {
+      return feishuInstallerBusy && feishuBotSetupMode === 'create'
+    }
+    if (action === 'start-link') return preparingFeishuManualBinding
+    if (action === 'finish-create' || action === 'finish-link') return finishingFeishuSetup
+    return false
+  }
+
+  const isFeishuOfficialOnboardingActionDisabled = (action: FeishuOfficialOnboardingAction): boolean => {
+    if (
+      action === 'focus-create'
+      || action === 'focus-link'
+      || action === 'switch-link-existing'
+      || action === 'switch-link-manual'
+      || action === 'focus-guided-flow'
+    ) {
+      return finishingFeishuSetup
+    }
+    if (action === 'open-auth-url') return finishingFeishuSetup || !feishuOfficialCliSessionLatestAuthUrl
+    if (action === 'copy-device-code') {
+      return (
+        finishingFeishuSetup
+        || !feishuOfficialCliSessionLatestUserCode
+        || !feishuOfficialCliClipboardAvailable
+      )
+    }
+    if (action === 'finish-create' || action === 'finish-link') {
+      return finishingFeishuSetup || feishuOfficialCliSessionRunning || preparingFeishuManualBinding
+    }
+    if (action === 'refresh-status') return feishuOfficialCliSessionRunning || finishingFeishuSetup
+    if (
+      action === 'start-config-init-new'
+      || action === 'start-auth-login-recommend'
+      || action === 'start-auth-login-no-wait'
+    ) {
+      return feishuOfficialCliSessionRunning || finishingFeishuSetup
+    }
+    if (action === 'start-create') {
+      return feishuOfficialCliSessionRunning || preparingFeishuManualBinding || finishingFeishuSetup
+    }
+    if (action === 'start-link') {
+      return feishuOfficialCliSessionRunning || feishuInstallerRunning || feishuInstallerBusy || finishingFeishuSetup
+    }
+    return false
+  }
+
+  const handleFeishuOfficialCliGuidedFlowAction = useCallback(
+    async (action: FeishuOfficialCliGuidedFlowAction) => {
+      if (action === 'stop-official-cli-session') {
+        await stopFeishuOfficialCliGuidedFlow()
+        return
+      }
+
+      await handleFeishuOfficialOnboardingAction(action)
+    },
+    [handleFeishuOfficialOnboardingAction, stopFeishuOfficialCliGuidedFlow]
+  )
+
+  const isFeishuOfficialCliGuidedFlowActionLoading = (
+    action: FeishuOfficialCliGuidedFlowAction
+  ): boolean => {
+    if (action === 'stop-official-cli-session') return false
+    return isFeishuOfficialOnboardingActionLoading(action)
+  }
+
+  const isFeishuOfficialCliGuidedFlowActionDisabled = (
+    action: FeishuOfficialCliGuidedFlowAction
+  ): boolean => {
+    if (action === 'stop-official-cli-session') {
+      return !feishuOfficialCliSessionRunning || feishuOfficialCliSessionBusy
+    }
+
+    return isFeishuOfficialOnboardingActionDisabled(action)
+  }
+
   return (
     <div className="w-full">
       <Title order={3} size="lg" fw={600} mb={4}>连接 IM 渠道</Title>
@@ -2162,89 +5010,89 @@ export default function ChannelConnect({
                   <div className="rounded-xl border app-border bg-black/20 px-4 py-3">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="space-y-1">
-                        <Text size="sm" fw={600}>飞书联调两条路径都要验</Text>
+                        <Text size="sm" fw={600}>飞书接入</Text>
                         <Text size="xs" c="dimmed">
-                          `Mclaw` 当前需要同时覆盖两条接入路径：一条是“新建机器人”，一条是“关联已有机器人”。
+                          默认先走“新建机器人”；如果你已经有飞书应用，或扫码创建失败，再切到“关联已有机器人”。
                         </Text>
                       </div>
-                      <Badge size="xs" variant="light" color="blue">双路径联调</Badge>
+                      <Badge size="xs" variant="light" color="blue">两条路径</Badge>
                     </div>
                     <div className="mt-3 grid gap-2 md:grid-cols-2">
-                      <div className="rounded-lg border app-border-light app-bg-tertiary px-3 py-2">
-                        <Text size="xs" fw={600}>路径 A：新建机器人</Text>
-                        <Text size="xs" c="dimmed" mt={4}>
-                          验证官方安装器、扫码创建、自动回填和新建完成后的收尾状态。
-                        </Text>
-                      </div>
-                      <div className="rounded-lg border app-border-light app-bg-tertiary px-3 py-2">
-                        <Text size="xs" fw={600}>路径 B：关联已有机器人</Text>
-                        <Text size="xs" c="dimmed" mt={4}>
-                          验证插件就绪检查、手填 App ID / App Secret、已有机器人绑定和后续配对流程。
-                        </Text>
-                      </div>
+                      {feishuPathDescriptors.map((item) => (
+                        <div
+                          key={item.mode}
+                          className="rounded-lg border app-border-light app-bg-tertiary px-3 py-2"
+                        >
+                          <Text size="xs" fw={600}>{item.overviewTitle}</Text>
+                          <Text size="xs" c="dimmed" mt={4}>
+                            {item.overviewDetail}
+                          </Text>
+                        </div>
+                      ))}
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      variant={feishuBotSetupMode === 'create' ? 'filled' : 'light'}
-                      color="success"
-                      size="xs"
-                      onClick={() => void startFeishuInstallerFlow('create')}
-                      loading={feishuInstallerBusy && feishuBotSetupMode === 'create'}
-                      disabled={preparingFeishuManualBinding}
-                    >
-                      新建机器人
-                    </Button>
-                    <Button
-                      variant="light"
-                      size="xs"
-                      onClick={() => setShowFeishuInstallTutorial(true)}
-                    >
-                      查看教程
-                    </Button>
-                    <Button
-                      variant={feishuBotSetupMode === 'link' ? 'filled' : 'light'}
-                      color="success"
-                      size="xs"
-                      onClick={() => void prepareFeishuManualBinding()}
-                      loading={preparingFeishuManualBinding}
-                      disabled={feishuInstallerRunning || feishuInstallerBusy}
-                    >
-                      关联已有机器人
-                    </Button>
-                    <Button
-                      variant="subtle"
-                      size="xs"
-                      color="danger"
-                      onClick={() => void stopFeishuInstallerFlow()}
-                      disabled={!feishuInstallerRunning || feishuInstallerBusy || preparingFeishuManualBinding}
-                    >
-                      中止安装
-                    </Button>
-                    <Button
-                      variant="light"
-                      size="xs"
-                      onClick={() =>
-                        void refreshFeishuSetupState({
-                          userInitiated: true,
-                          recoverManualBindingIfReady: preparingFeishuManualBinding,
-                        })
-                      }
-                      loading={refreshingFeishuState}
-                      disabled={finishingFeishuSetup}
-                    >
-                      刷新状态
-                    </Button>
+                  <div className="space-y-2">
+                    <Text size="xs" c="dimmed">
+                      上方只保留路径切换和通用工具；真正执行动作请点下方路径卡里的按钮。
+                    </Text>
+                    <div className="flex flex-wrap gap-2">
+                      {feishuPathNavigatorItems.map((item) => (
+                        <Button
+                          key={item.mode}
+                          variant={item.active ? 'filled' : 'light'}
+                          color="success"
+                          size="xs"
+                          onClick={() => focusFeishuSetupPath(item.mode)}
+                        >
+                          {item.label}
+                        </Button>
+                      ))}
+                      <Button
+                        variant="light"
+                        size="xs"
+                        onClick={() => setShowFeishuInstallTutorial(true)}
+                      >
+                        查看教程
+                      </Button>
+                      <Button
+                        variant="subtle"
+                        size="xs"
+                        color="danger"
+                        onClick={() => void stopFeishuInstallerFlow()}
+                        disabled={!feishuInstallerRunning || feishuInstallerBusy || preparingFeishuManualBinding}
+                      >
+                        中止安装
+                      </Button>
+                      <Button
+                        variant="light"
+                        size="xs"
+                        onClick={() =>
+                          void refreshFeishuSetupState(
+                            resolveFeishuStatusRefreshOptions(preparingFeishuManualBinding)
+                          )
+                        }
+                        loading={refreshingFeishuState}
+                        disabled={finishingFeishuSetup}
+                      >
+                        刷新状态
+                      </Button>
+                    </div>
                   </div>
 
                   <div className="grid gap-3 md:grid-cols-2">
-                    <Card withBorder radius="md" padding="md" className="app-bg-secondary">
+                    <Card
+                      id="feishu-create-path-card"
+                      withBorder
+                      radius="md"
+                      padding="md"
+                      className="app-bg-secondary"
+                    >
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <Text size="sm" fw={600}>路径 A：新建机器人</Text>
+                          <Text size="sm" fw={600}>{feishuCreatePathDescriptor.cardTitle}</Text>
                           <Text size="xs" c="dimmed" mt={4}>
-                            适合验证官方安装器、扫码创建、自动回填和新建后的收尾。
+                            {feishuCreatePathDescriptor.cardDetail}
                           </Text>
                         </div>
                         <Badge size="xs" variant="light" color={feishuCreatePathStatus.color}>
@@ -2252,14 +5100,48 @@ export default function ChannelConnect({
                         </Badge>
                       </div>
                       <Text size="xs" mt="sm">{feishuCreatePathStatus.detail}</Text>
+                      {(feishuCreatePathCardActions.primaryAction || feishuCreatePathCardActions.secondaryAction) && (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {feishuCreatePathCardActions.primaryAction && (
+                            <Button
+                              size="xs"
+                              variant="light"
+                              color={feishuCreatePathStatus.color}
+                              loading={isFeishuOfficialOnboardingActionLoading(feishuCreatePathCardActions.primaryAction)}
+                              disabled={isFeishuOfficialOnboardingActionDisabled(feishuCreatePathCardActions.primaryAction)}
+                              onClick={() => void handleFeishuOfficialOnboardingAction(feishuCreatePathCardActions.primaryAction)}
+                            >
+                              {resolveFeishuOfficialOnboardingActionLabel(feishuCreatePathCardActions.primaryAction)}
+                            </Button>
+                          )}
+                          {feishuCreatePathCardActions.secondaryAction && (
+                            <Button
+                              size="xs"
+                              variant="subtle"
+                              color="gray"
+                              loading={isFeishuOfficialOnboardingActionLoading(feishuCreatePathCardActions.secondaryAction)}
+                              disabled={isFeishuOfficialOnboardingActionDisabled(feishuCreatePathCardActions.secondaryAction)}
+                              onClick={() => void handleFeishuOfficialOnboardingAction(feishuCreatePathCardActions.secondaryAction)}
+                            >
+                              {resolveFeishuOfficialOnboardingActionLabel(feishuCreatePathCardActions.secondaryAction)}
+                            </Button>
+                          )}
+                        </div>
+                      )}
                     </Card>
 
-                    <Card withBorder radius="md" padding="md" className="app-bg-secondary">
+                    <Card
+                      id="feishu-link-path-card"
+                      withBorder
+                      radius="md"
+                      padding="md"
+                      className="app-bg-secondary"
+                    >
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <Text size="sm" fw={600}>路径 B：关联已有机器人</Text>
+                          <Text size="sm" fw={600}>{feishuLinkPathDescriptor.cardTitle}</Text>
                           <Text size="xs" c="dimmed" mt={4}>
-                            适合验证插件就绪检查、手动填写凭证、已有机器人绑定和后续配对。
+                            {feishuLinkPathDescriptor.cardDetail}
                           </Text>
                         </div>
                         <Badge size="xs" variant="light" color={feishuLinkPathStatus.color}>
@@ -2267,18 +5149,46 @@ export default function ChannelConnect({
                         </Badge>
                       </div>
                       <Text size="xs" mt="sm">{feishuLinkPathStatus.detail}</Text>
+                      {(feishuLinkPathCardActions.primaryAction || feishuLinkPathCardActions.secondaryAction) && (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {feishuLinkPathCardActions.primaryAction && (
+                            <Button
+                              size="xs"
+                              variant="light"
+                              color={feishuLinkPathStatus.color}
+                              loading={isFeishuOfficialOnboardingActionLoading(feishuLinkPathCardActions.primaryAction)}
+                              disabled={isFeishuOfficialOnboardingActionDisabled(feishuLinkPathCardActions.primaryAction)}
+                              onClick={() => void handleFeishuOfficialOnboardingAction(feishuLinkPathCardActions.primaryAction)}
+                            >
+                              {resolveFeishuOfficialOnboardingActionLabel(feishuLinkPathCardActions.primaryAction)}
+                            </Button>
+                          )}
+                          {feishuLinkPathCardActions.secondaryAction && (
+                            <Button
+                              size="xs"
+                              variant="subtle"
+                              color="gray"
+                              loading={isFeishuOfficialOnboardingActionLoading(feishuLinkPathCardActions.secondaryAction)}
+                              disabled={isFeishuOfficialOnboardingActionDisabled(feishuLinkPathCardActions.secondaryAction)}
+                              onClick={() => void handleFeishuOfficialOnboardingAction(feishuLinkPathCardActions.secondaryAction)}
+                            >
+                              {resolveFeishuOfficialOnboardingActionLabel(feishuLinkPathCardActions.secondaryAction)}
+                            </Button>
+                          )}
+                        </div>
+                      )}
                     </Card>
                   </div>
 
                   <Card withBorder radius="md" padding="md" className="app-bg-secondary">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="space-y-1">
-                        <Text size="sm" fw={600}>飞书官方 CLI 状态</Text>
+                        <Text size="sm" fw={600}>可选：飞书官方 CLI</Text>
                         <Text size="xs" c="dimmed">
-                          用于补充官方 OAuth / scope 状态感知；当前不会替代下面的官方插件安装器。
+                          仅用于补充官方登录状态和高级调试；不影响下方默认的飞书接入流程。
                         </Text>
                       </div>
-                      <div className="flex flex-wrap gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <Badge
                           size="xs"
                           variant="light"
@@ -2303,6 +5213,16 @@ export default function ChannelConnect({
                         >
                           {resolveFeishuOfficialCliAuthBadgeLabel(feishuOfficialCliStatus?.authState)}
                         </Badge>
+                        {feishuOfficialCliStatus?.available && (
+                          <Button
+                            size="compact-xs"
+                            variant="subtle"
+                            color="gray"
+                            onClick={() => setShowFeishuOfficialCliAdvanced((current) => !current)}
+                          >
+                            {showFeishuOfficialCliAdvanced ? '收起高级工具' : '显示高级工具'}
+                          </Button>
+                        )}
                       </div>
                     </div>
 
@@ -2333,7 +5253,359 @@ export default function ChannelConnect({
                     </div>
                   </Card>
 
-                  {feishuOfficialCliStatus && !feishuOfficialCliStatus.available && (
+                  {showFeishuOfficialCliAdvanced && feishuOfficialCliStatus?.available && (
+                    <Card
+                      id="feishu-official-cli-guided-flow-card"
+                      withBorder
+                      radius="md"
+                      padding="md"
+                      className="app-bg-secondary"
+                    >
+                      <div className="space-y-3">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Text size="sm" fw={600}>下一步建议</Text>
+                              <Badge size="xs" variant="light" color="gray">决策区</Badge>
+                            </div>
+                            <Text size="xs" c="dimmed">
+                              这里根据官方 CLI 状态和当前托管路径给出下一步操作建议；下方“官方 CLI 执行区”只负责执行官方 CLI 步骤。
+                            </Text>
+                          </div>
+                          <Badge size="xs" variant="light" color={feishuOfficialCliNextStep.color}>
+                            {feishuOfficialCliNextStep.title}
+                          </Badge>
+                        </div>
+
+                        <div className="rounded-lg border app-border-light app-bg-tertiary px-3 py-2">
+                          <Text size="xs">{feishuOfficialCliNextStep.detail}</Text>
+                        </div>
+
+                        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                          {feishuOfficialCliNextStepSummary.map((item) => (
+                            <div
+                              key={item.label}
+                              className="rounded-lg border app-border-light app-bg-tertiary px-3 py-2"
+                            >
+                              <Text size="xs" fw={600}>{item.label}</Text>
+                              <Text size="xs" c="dimmed" mt={4}>{item.value}</Text>
+                            </div>
+                          ))}
+                        </div>
+
+                        {feishuOfficialCliNextStepBlockers.length > 0 && (
+                          <div className="space-y-2">
+                            <Text size="xs" fw={600}>仍阻塞完成</Text>
+                            <div className="grid gap-2 md:grid-cols-2">
+                              {feishuOfficialCliNextStepBlockers.map((item) => (
+                                <div
+                                  key={`${item.label}:${item.detail}`}
+                                  className="rounded-lg border app-border-light app-bg-tertiary px-3 py-2"
+                                >
+                                  <Text size="xs" fw={600}>{item.label}</Text>
+                                  <Text size="xs" c="dimmed" mt={4}>{item.detail}</Text>
+                                  {(item.primaryAction || item.secondaryAction) && (
+                                    <div className="mt-2 flex flex-wrap gap-2">
+                                      {item.primaryAction && (
+                                        <Button
+                                          size="xs"
+                                          variant="light"
+                                          color="yellow"
+                                          loading={isFeishuOfficialOnboardingActionLoading(item.primaryAction)}
+                                          disabled={isFeishuOfficialOnboardingActionDisabled(item.primaryAction)}
+                                          onClick={() => void handleFeishuOfficialOnboardingAction(item.primaryAction)}
+                                        >
+                                          {resolveFeishuOfficialOnboardingActionLabel(item.primaryAction)}
+                                        </Button>
+                                      )}
+                                      {item.secondaryAction && (
+                                        <Button
+                                          size="xs"
+                                          variant="subtle"
+                                          color="gray"
+                                          loading={isFeishuOfficialOnboardingActionLoading(item.secondaryAction)}
+                                          disabled={isFeishuOfficialOnboardingActionDisabled(item.secondaryAction)}
+                                          onClick={() => void handleFeishuOfficialOnboardingAction(item.secondaryAction)}
+                                        >
+                                          {resolveFeishuOfficialOnboardingActionLabel(item.secondaryAction)}
+                                        </Button>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {feishuOfficialCliLiveAssist.length > 0 && (
+                          <div className="space-y-2">
+                            <Text size="xs" fw={600}>当前验证信息</Text>
+                            <div className="grid gap-2 md:grid-cols-2">
+                              {feishuOfficialCliLiveAssist.map((item) => (
+                                <div
+                                  key={`${item.label}:${item.value}`}
+                                  className="rounded-lg border app-border-light app-bg-tertiary px-3 py-2"
+                                >
+                                  <Text size="xs" fw={600}>{item.label}</Text>
+                                  <Text size="xs" c="dimmed" mt={4}>{item.detail}</Text>
+                                  <Text size="xs" mt={6} lineClamp={item.label === '验证链接' ? 2 : undefined}>
+                                    {item.value}
+                                  </Text>
+                                  {(item.primaryAction || item.secondaryAction || item.copyValue) && (
+                                    <div className="mt-2 flex flex-wrap gap-2">
+                                      {item.primaryAction && (
+                                        <Button
+                                          size="xs"
+                                          variant="light"
+                                          color="blue"
+                                          loading={isFeishuOfficialOnboardingActionLoading(item.primaryAction)}
+                                          disabled={isFeishuOfficialOnboardingActionDisabled(item.primaryAction)}
+                                          onClick={() => void handleFeishuOfficialOnboardingAction(item.primaryAction)}
+                                        >
+                                          {resolveFeishuOfficialOnboardingActionLabel(item.primaryAction)}
+                                        </Button>
+                                      )}
+                                      {item.secondaryAction && (
+                                        <Button
+                                          size="xs"
+                                          variant="subtle"
+                                          color="gray"
+                                          loading={isFeishuOfficialOnboardingActionLoading(item.secondaryAction)}
+                                          disabled={isFeishuOfficialOnboardingActionDisabled(item.secondaryAction)}
+                                          onClick={() => void handleFeishuOfficialOnboardingAction(item.secondaryAction)}
+                                        >
+                                          {resolveFeishuOfficialOnboardingActionLabel(item.secondaryAction)}
+                                        </Button>
+                                      )}
+                                      {item.copyValue && (
+                                        <CopyButton value={item.copyValue} timeout={2000}>
+                                          {({ copied, copy }) => (
+                                            <Button size="xs" variant="subtle" color="gray" onClick={copy}>
+                                  {copied ? '已复制' : item.copyLabel || '复制'}
+                                            </Button>
+                                          )}
+                                        </CopyButton>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {(feishuOfficialCliNextStep.primaryAction || feishuOfficialCliNextStep.secondaryAction) && (
+                          <div className="flex flex-wrap gap-2">
+                            {feishuOfficialCliNextStep.primaryAction && (
+                              <Button
+                                size="xs"
+                                variant="light"
+                                color={feishuOfficialCliNextStep.color}
+                                loading={isFeishuOfficialOnboardingActionLoading(feishuOfficialCliNextStep.primaryAction)}
+                                disabled={isFeishuOfficialOnboardingActionDisabled(feishuOfficialCliNextStep.primaryAction)}
+                                onClick={() => void handleFeishuOfficialOnboardingAction(feishuOfficialCliNextStep.primaryAction)}
+                              >
+                                {resolveFeishuOfficialOnboardingActionLabel(feishuOfficialCliNextStep.primaryAction)}
+                              </Button>
+                            )}
+                            {feishuOfficialCliNextStep.secondaryAction && (
+                              <Button
+                                size="xs"
+                                variant="subtle"
+                                color="gray"
+                                loading={isFeishuOfficialOnboardingActionLoading(feishuOfficialCliNextStep.secondaryAction)}
+                                disabled={isFeishuOfficialOnboardingActionDisabled(feishuOfficialCliNextStep.secondaryAction)}
+                                onClick={() => void handleFeishuOfficialOnboardingAction(feishuOfficialCliNextStep.secondaryAction)}
+                              >
+                                {resolveFeishuOfficialOnboardingActionLabel(feishuOfficialCliNextStep.secondaryAction)}
+                              </Button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </Card>
+                  )}
+
+                  {showFeishuOfficialCliAdvanced && feishuOfficialCliStatus?.available && (
+                    <Card withBorder radius="md" padding="md" className="app-bg-secondary">
+                      <div className="space-y-3">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Text size="sm" fw={600}>官方 CLI 执行区</Text>
+                              <Badge size="xs" variant="light" color="gray">
+                                {feishuOfficialCliGuidedFlowPurpose.label}
+                              </Badge>
+                            </div>
+                            <Text size="xs" c="dimmed">
+                              {feishuOfficialCliGuidedFlowPurpose.detail}
+                            </Text>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <Badge size="xs" variant="light" color={feishuOfficialCliSessionRunning ? 'blue' : 'gray'}>
+                              {resolveFeishuOfficialCliSessionModeLabel(feishuOfficialCliSessionMode)}
+                            </Badge>
+                            <Badge size="xs" variant="light" color={feishuOfficialCliSessionStatus.color}>
+                              {feishuOfficialCliSessionStatus.label}
+                            </Badge>
+                          </div>
+                        </div>
+
+                        <div className="rounded-lg border app-border-light app-bg-tertiary px-3 py-2">
+                          <Text size="xs">{feishuOfficialCliSessionStatus.detail}</Text>
+                          {feishuOfficialCliSessionNotice && (
+                            <Text size="xs" c="dimmed" mt={6}>
+                              {feishuOfficialCliSessionNotice}
+                            </Text>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                          {feishuOfficialCliGuidedFlowActions.map((action, index) => (
+                            <Button
+                              key={action}
+                              size="xs"
+                              variant={index === 0 ? 'light' : 'subtle'}
+                              color={action === 'stop-official-cli-session' ? 'red' : index === 0 ? 'blue' : 'gray'}
+                              onClick={() => void handleFeishuOfficialCliGuidedFlowAction(action)}
+                              loading={isFeishuOfficialCliGuidedFlowActionLoading(action)}
+                              disabled={isFeishuOfficialCliGuidedFlowActionDisabled(action)}
+                            >
+                              {resolveFeishuOfficialCliGuidedFlowActionLabel(action)}
+                            </Button>
+                          ))}
+                        </div>
+
+                        {(feishuOfficialCliSessionMode || feishuOfficialCliSessionOutput.trim()) && (
+                          <div className="space-y-2">
+                            {resolveFeishuOfficialCliSessionCommand(feishuOfficialCliSessionMode) && (
+                              <Text size="xs" c="dimmed">
+                                命令：{resolveFeishuOfficialCliSessionCommand(feishuOfficialCliSessionMode)}
+                              </Text>
+                            )}
+                            {feishuOfficialCliLiveAssist.map((item) => (
+                              <div
+                                key={`guided-flow:${item.label}:${item.value}`}
+                                className="rounded-lg border app-border-light app-bg-tertiary px-3 py-2"
+                              >
+                                <Text size="xs" fw={600}>{item.label}</Text>
+                                <Text size="xs" c="dimmed" mt={4}>{item.detail}</Text>
+                                <Text size="xs" mt={6} lineClamp={item.label === '验证链接' ? 2 : undefined}>
+                                  {item.value}
+                                </Text>
+                                {(item.primaryAction || item.copyValue) && (
+                                  <div className="mt-2 flex flex-wrap gap-2">
+                                    {item.primaryAction && (
+                                      <Button
+                                        size="compact-xs"
+                                        variant="light"
+                                        loading={isFeishuOfficialOnboardingActionLoading(item.primaryAction)}
+                                        disabled={isFeishuOfficialOnboardingActionDisabled(item.primaryAction)}
+                                        onClick={() => void handleFeishuOfficialOnboardingAction(item.primaryAction)}
+                                      >
+                                        {resolveFeishuOfficialOnboardingActionLabel(item.primaryAction)}
+                                      </Button>
+                                    )}
+                                    {item.copyValue && (
+                                      <CopyButton value={item.copyValue} timeout={2000}>
+                                        {({ copied, copy }) => (
+                                          <Button size="compact-xs" variant="subtle" onClick={copy}>
+                                            {copied ? '已复制' : item.copyLabel || '复制'}
+                                          </Button>
+                                        )}
+                                      </CopyButton>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                            <div className="rounded-lg border app-border-light bg-black/40 px-3 py-3">
+                              <ScrollArea.Autosize mah={180}>
+                                <pre className="text-[11px] leading-5 whitespace-pre-wrap break-words text-gray-200">
+                                  {feishuOfficialCliSessionOutput || '当前还没有飞书官方 CLI 输出。'}
+                                </pre>
+                              </ScrollArea.Autosize>
+                            </div>
+                            <Group gap="xs" align="flex-end">
+                              <TextInput
+                                label="发送输入"
+                                size="xs"
+                                className="flex-1 min-w-[220px]"
+                                value={feishuOfficialCliSessionInput}
+                                onChange={(event) => setFeishuOfficialCliSessionInput(event.currentTarget.value)}
+                                placeholder="向当前会话发送文本"
+                                disabled={!feishuOfficialCliSessionRunning}
+                                onKeyDown={(event) => {
+                                  if (event.key === 'Enter' && !event.shiftKey) {
+                                    event.preventDefault()
+                                    const raw = feishuOfficialCliSessionInput.trim()
+                                    if (!raw) return
+                                    void sendFeishuOfficialCliSessionInput(raw.endsWith('\n') ? raw : `${raw}\n`).then((ok) => {
+                                      if (ok) setFeishuOfficialCliSessionInput('')
+                                    })
+                                  }
+                                }}
+                              />
+                              <Button
+                                size="xs"
+                                variant="light"
+                                onClick={() => void sendFeishuOfficialCliSessionInput('\u001b[A')}
+                                disabled={!feishuOfficialCliSessionRunning}
+                              >
+                                上移
+                              </Button>
+                              <Button
+                                size="xs"
+                                variant="light"
+                                onClick={() => void sendFeishuOfficialCliSessionInput('\u001b[B')}
+                                disabled={!feishuOfficialCliSessionRunning}
+                              >
+                                下移
+                              </Button>
+                              <Button
+                                size="xs"
+                                variant="light"
+                                onClick={() => void sendFeishuOfficialCliSessionInput('\r')}
+                                disabled={!feishuOfficialCliSessionRunning}
+                              >
+                                确认
+                              </Button>
+                              <Button
+                                size="xs"
+                                variant="subtle"
+                                color="red"
+                                onClick={() => void sendFeishuOfficialCliSessionInput('\u0003')}
+                                disabled={!feishuOfficialCliSessionRunning}
+                              >
+                                Ctrl+C
+                              </Button>
+                              <Button
+                                size="xs"
+                                onClick={() => {
+                                  const raw = feishuOfficialCliSessionInput.trim()
+                                  if (!raw) return
+                                  void sendFeishuOfficialCliSessionInput(raw.endsWith('\n') ? raw : `${raw}\n`).then((ok) => {
+                                    if (ok) setFeishuOfficialCliSessionInput('')
+                                  })
+                                }}
+                                disabled={!feishuOfficialCliSessionRunning || !feishuOfficialCliSessionInput.trim()}
+                              >
+                                发送
+                              </Button>
+                            </Group>
+                            {(feishuOfficialCliSessionExitCode !== null || feishuOfficialCliSessionCanceled) && !feishuOfficialCliSessionRunning && (
+                              <Text size="xs" c="dimmed">
+                                会话结果：{feishuOfficialCliSessionCanceled ? '已取消' : feishuOfficialCliSessionExitCode === 0 ? '成功' : `退出码 ${feishuOfficialCliSessionExitCode}`}
+                              </Text>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </Card>
+                  )}
+
+                  {showFeishuOfficialCliAdvanced && feishuOfficialCliStatus && !feishuOfficialCliStatus.available && (
                     <Card withBorder radius="md" padding="md" className="app-bg-secondary">
                       <div className="space-y-3">
                         <div>
@@ -2367,95 +5639,6 @@ export default function ChannelConnect({
                     </Card>
                   )}
 
-                  {feishuOfficialCliStatus && feishuOfficialCliStatus.available && feishuOfficialCliStatus.authState === 'unauthenticated' && (
-                    <Card withBorder radius="md" padding="md" className="app-bg-secondary" style={{ borderColor: 'var(--mantine-color-blue-6)' }}>
-                      <div className="space-y-3">
-                        <div className="flex items-start justify-between">
-                          <div>
-                            <Text size="sm" fw={600} c="blue">第一步：完成飞书官方验证</Text>
-                            <Text size="xs" c="dimmed">
-                              在终端中执行下方命令，按指引完成身份授权。<br/>授权成功后，点击右侧的<b>刷新</b>按钮同步状态。
-                            </Text>
-                          </div>
-                          <Button size="xs" variant="light" color="blue" onClick={loadFeishuOfficialCliStatus}>
-                            已执行，刷新状态
-                          </Button>
-                        </div>
-                        <div className="rounded-md bg-black/40 flex items-center justify-between pl-3 pr-1 py-1 font-mono text-sm font-bold text-blue-300">
-                          <code>lark-cli auth login</code>
-                          <CopyButton value="lark-cli auth login" timeout={2000}>
-                            {({ copied, copy }) => (
-                              <Tooltip label={copied ? '已复制' : '复制命令'} withArrow position="right">
-                                <ActionIcon color={copied ? 'teal' : 'blue'} onClick={copy} variant="subtle">
-                                  {copied ? (
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                  ) : (
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                                  )}
-                                </ActionIcon>
-                              </Tooltip>
-                            )}
-                          </CopyButton>
-                        </div>
-                      </div>
-                    </Card>
-                  )}
-
-                  {feishuOfficialCliStatus && feishuOfficialCliStatus.available && feishuOfficialCliStatus.authState === 'authenticated' && (
-                    <Card withBorder radius="md" padding="md" className="app-bg-secondary" style={{ borderColor: 'var(--mantine-color-green-7)' }}>
-                      <div className="flex items-center gap-3">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--mantine-color-green-6)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
-                        <div>
-                          <Text size="sm" fw={600} c="green">官方 CLI 授权已就绪</Text>
-                          <Text size="xs" c="dimmed">
-                            基础环境验证成功。请继续向下滚动，完成机器人的本体配置或绑定。
-                          </Text>
-                        </div>
-                      </div>
-                    </Card>
-                  )}
-
-                  {feishuOfficialCliStatus && feishuOfficialCliStatus.available && feishuOfficialCliStatus.authState === 'error' && (
-                    <Card withBorder radius="md" padding="md" className="app-bg-secondary" style={{ borderColor: 'var(--mantine-color-red-6)' }}>
-                      <div className="space-y-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <Text size="sm" fw={600} c="red">官方 CLI 状态读取失败</Text>
-                            <Text size="xs" c="dimmed">
-                              当前已经检测到 `lark-cli`，但读取授权状态失败。建议先在终端复核一次，再回到这里刷新状态。
-                            </Text>
-                          </div>
-                          <Button size="xs" variant="light" color="red" onClick={loadFeishuOfficialCliStatus}>
-                            重新读取
-                          </Button>
-                        </div>
-                        <div className="rounded-md bg-black/40 flex items-center justify-between pl-3 pr-1 py-1 font-mono text-[11px] text-gray-300">
-                          <code>lark-cli auth status</code>
-                          <CopyButton value="lark-cli auth status" timeout={2000}>
-                            {({ copied, copy }) => (
-                              <Tooltip label={copied ? '已复制' : '复制命令'}>
-                                <ActionIcon variant="subtle" color={copied ? 'teal' : 'gray'} onClick={copy}>
-                                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                                </ActionIcon>
-                              </Tooltip>
-                            )}
-                          </CopyButton>
-                        </div>
-                      </div>
-                    </Card>
-                  )}
-
-                  {feishuOfficialCliStatus && feishuOfficialCliStatus.available && feishuOfficialCliStatus.authState === 'unknown' && (
-                    <Card withBorder radius="md" padding="md" className="app-bg-secondary">
-                      <div className="space-y-2">
-                        <Text size="sm" fw={600}>官方 CLI 状态暂未判定</Text>
-                        <Text size="xs" c="dimmed">
-                          当前已经检测到 `lark-cli`，但还不能可靠判断是否已登录。建议先手动执行 `lark-cli auth status` 复核；复核完成后回到这里点击“刷新状态”。
-                        </Text>
-                      </div>
-                    </Card>
-                  )}
-
                   {preparingFeishuManualBinding ? (
                     <div className="rounded-xl border app-border bg-black/20 px-4 py-4">
                       <div className="flex items-start gap-3">
@@ -2481,32 +5664,52 @@ export default function ChannelConnect({
                       {feishuInstallerAsciiQr ? (
                         <div className="rounded-xl border app-border bg-black px-3 py-3 overflow-auto">
                           <div className="mb-2 flex items-center justify-between gap-2">
-                            <p className="text-[11px] font-medium text-emerald-300">本次安装器生成的真实二维码</p>
+                            <p className="text-[11px] font-medium text-emerald-300">本次创建流程的真实二维码</p>
                             <Badge size="xs" variant="light" color="success">已刷新</Badge>
                           </div>
                           <pre className="whitespace-pre font-mono text-[8px] leading-[1.1] text-zinc-100">
                             {feishuInstallerAsciiQr}
                           </pre>
                         </div>
-                      ) : (
+                      ) : feishuInstallerQrUrl ? (
                         <div className="flex flex-col items-center rounded-xl border app-border bg-black/20 px-4 py-4">
                           <div className="mb-2 flex w-full items-center justify-between gap-2">
-                            <p className="text-[11px] font-medium app-text-secondary">
-                              {feishuInstallerHasLiveQr ? '本次安装器二维码' : '官网兜底二维码'}
-                            </p>
+                            <p className="text-[11px] font-medium app-text-secondary">本次创建流程二维码</p>
                             <Badge
                               size="xs"
                               variant="light"
-                              color={feishuInstallerHasLiveQr ? 'success' : feishuInstallerRunning ? 'warning' : 'gray'}
+                              color="success"
                             >
-                              {feishuInstallerHasLiveQr ? '已刷新' : feishuInstallerRunning ? '等待刷新' : '未刷新'}
+                              已刷新
                             </Badge>
                           </div>
                           <QRCodeSVG value={feishuInstallerQrUrl} size={180} includeMargin />
-                          {feishuInstallerRunning && !feishuInstallerHasLiveQr && (
+                          <p className="mt-2 text-center text-[11px] app-text-muted">
+                            只扫描这里实时刷新的二维码；教程截图里的二维码只是示意图。
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-center rounded-xl border border-dashed app-border bg-black/20 px-4 py-4">
+                          <div className="mb-2 flex w-full items-center justify-between gap-2">
+                            <p className="text-[11px] font-medium app-text-secondary">本次创建流程二维码</p>
+                            <Badge
+                              size="xs"
+                              variant="light"
+                              color={feishuInstallerRunning ? 'warning' : 'gray'}
+                            >
+                              {feishuInstallerRunning ? '等待生成' : '未生成'}
+                            </Badge>
+                          </div>
+                          <p className="text-center text-sm app-text-primary">当前还没有拿到本次创建流程二维码。</p>
+                          <p className="mt-2 text-center text-[11px] app-text-muted">
+                            {feishuInstallerRunning
+                              ? '请先等待下方输出刷新；只有这里出现二维码后再扫码，教程截图里的二维码不要扫。'
+                              : '重新启动创建流程后，二维码会显示在这里。'}
+                          </p>
+                          {feishuInstallerRunning && (
                             <div className="mt-3 w-full">
                               <div className="mb-1 flex items-center justify-between text-[11px] app-text-muted">
-                                <span>正在等待官方安装器生成本次二维码</span>
+                                <span>正在等待本次创建流程二维码</span>
                                 <span>加载中</span>
                               </div>
                               <div className="h-1.5 overflow-hidden rounded-full app-bg-tertiary">
@@ -2525,7 +5728,7 @@ export default function ChannelConnect({
 
                       <div className="space-y-2 text-xs leading-6 app-text-tertiary">
                         <p className="font-medium app-text-secondary">新建机器人</p>
-                        <p>使用飞书扫码创建新的官方机器人即可。</p>
+                        <p>大多数用户直接用飞书扫码创建新的官方机器人即可，不需要先手填 App ID / App Secret。</p>
                         <a
                           href={FEISHU_OFFICIAL_GUIDE_URL}
                           target="_blank"
@@ -2535,20 +5738,97 @@ export default function ChannelConnect({
                           打开飞书官网使用指南
                         </a>
                         <p className="text-[11px] leading-5 app-text-muted">
-                          如果你已经在飞书开放平台创建好了机器人，请点击上方“关联已有机器人”，
+                          如果你已经在飞书开放平台创建好了机器人，或扫码创建失败后需要手动回退，请点击上方“关联已有机器人”，
                           Mclaw 会先确认飞书官方插件真实可用；缺失时会先自动补装，再开放手动绑定。
                         </p>
                       </div>
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      <Text size="xs" c="dimmed">
-                        已确认飞书官方插件可用，现在可以手动填写已有机器人的 App ID / App Secret；完成机器人配置后，再继续输入飞书配对码。
-                      </Text>
                       <div className="rounded-xl border app-border bg-black/20 px-3 py-3">
                         <div className="mb-2 flex items-center justify-between gap-2">
-                          <p className="text-xs font-medium app-text-secondary">手动绑定</p>
+                          <p className="text-xs font-medium app-text-secondary">运行态入口提示</p>
                           <Badge
+                            size="xs"
+                            variant="light"
+                            color={feishuLinkPathPanelIntro.color}
+                          >
+                            {feishuLinkPathPanelIntro.label}
+                          </Badge>
+                        </div>
+                        <Text size="xs" c="dimmed">
+                          {feishuLinkPathPanelIntro.detail}
+                        </Text>
+                      </div>
+                      {feishuBotsOrdered.length > 0 && (
+                        <div className="rounded-xl border app-border bg-black/20 px-3 py-3">
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <p className="text-xs font-medium app-text-secondary">绑定方式</p>
+                            <Badge
+                              size="xs"
+                              variant="light"
+                              color={feishuLinkSourceMode === 'existing' ? 'success' : 'blue'}
+                            >
+                              {feishuLinkSourceMode === 'existing' ? '复用模式' : '手动模式'}
+                            </Badge>
+                          </div>
+                          <SegmentedControl
+                            value={feishuLinkSourceMode}
+                            onChange={handleFeishuLinkSourceModeChange}
+                            data={[
+                              { label: '复用已检测到机器人', value: 'existing' },
+                              { label: '手动输入凭证', value: 'manual' },
+                            ]}
+                            size="xs"
+                            fullWidth
+                          />
+                        </div>
+                      )}
+                      {feishuBotsOrdered.length > 0 && feishuLinkSourceMode === 'existing' && (
+                        <div className="rounded-xl border app-border bg-black/20 px-3 py-3">
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <p className="text-xs font-medium app-text-secondary">已检测到的机器人</p>
+                            <Badge
+                              size="xs"
+                              variant="light"
+                              color="success"
+                            >
+                              {feishuBotsOrdered.length} 个可复用
+                            </Badge>
+                          </div>
+                          <p className="mb-3 text-[11px] leading-5 app-text-muted">
+                            保持当前模式时，底部“完成机器人配置”会直接复用这里选中的机器人。
+                          </p>
+                          {feishuBotsOrdered.length > 1 ? (
+                            <SegmentedControl
+                              value={resolvedSelectedFeishuExistingBotAccountId}
+                              onChange={setSelectedFeishuExistingBotAccountId}
+                              data={feishuBotsOrdered.map((bot) => ({
+                                label: bot.name,
+                                value: bot.accountId,
+                              }))}
+                              size="xs"
+                              fullWidth
+                            />
+                          ) : (
+                            <div className="rounded-lg border app-border-light app-bg-tertiary px-3 py-2">
+                              <Text size="xs" fw={600}>{feishuBotsOrdered[0]?.name}</Text>
+                            </div>
+                          )}
+                          {selectedFeishuExistingBot && (
+                            <Text size="xs" c="dimmed" mt="sm">
+                              当前选中：{' '}
+                              {selectedFeishuExistingBot.name}
+                              {selectedFeishuExistingBotMeta ? ` (${selectedFeishuExistingBotMeta})` : ''}
+                            </Text>
+                          )}
+                        </div>
+                      )}
+                      {(feishuLinkSourceMode === 'manual' || feishuBotsOrdered.length === 0) && (
+                        <div className="rounded-xl border app-border bg-black/20 px-3 py-3">
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <p className="text-xs font-medium app-text-secondary">手动绑定</p>
+                            <Badge
                             size="xs"
                             variant="light"
                             color={feishuManualCredentialsReady ? 'success' : 'gray'}
@@ -2556,10 +5836,10 @@ export default function ChannelConnect({
                             {feishuManualCredentialsReady ? '可直接绑定' : '填写后可用'}
                           </Badge>
                         </div>
-                        <p className="mb-3 text-[11px] leading-5 app-text-muted">
-                          如果你已经拿到了已有飞书机器人的 App ID / App Secret，可以直接在这里输入，
-                          然后点击下方“完成机器人配置”。
-                        </p>
+                          <p className="mb-3 text-[11px] leading-5 app-text-muted">
+                            仅当你已经拿到了已有飞书机器人的 App ID / App Secret，或扫码创建失败需要回退时，再在这里输入，
+                            然后点击下方“完成机器人配置”。
+                          </p>
                         <div className="space-y-2">
                           <TextInput
                             label="App ID"
@@ -2591,7 +5871,8 @@ export default function ChannelConnect({
                             {error}
                           </Alert>
                         )}
-                      </div>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -2871,7 +6152,7 @@ export default function ChannelConnect({
                 disabled={
                   (
                     feishuBotSetupMode === 'link'
-                      ? !feishuManualCredentialsReady
+                      ? !feishuLinkModeCanFinish || feishuLinkModeFinishStrategy === 'invalid-manual'
                       : !feishuCreateModeCanFinish || feishuCreateModeFinishStrategy === 'invalid-manual'
                   ) || finishingFeishuSetup
                 }

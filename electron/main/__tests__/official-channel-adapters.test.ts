@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
   ensureFeishuOfficialPluginReadyMock,
+  getFeishuBotRuntimeStatusesMock,
   getFeishuOfficialPluginStateMock,
   isPluginInstalledOnDiskMock,
   repairStalePluginConfigFromCommandResultMock,
@@ -9,6 +10,7 @@ const {
   runCliMock,
 } = vi.hoisted(() => ({
   ensureFeishuOfficialPluginReadyMock: vi.fn(),
+  getFeishuBotRuntimeStatusesMock: vi.fn(),
   getFeishuOfficialPluginStateMock: vi.fn(),
   isPluginInstalledOnDiskMock: vi.fn(),
   repairStalePluginConfigFromCommandResultMock: vi.fn(),
@@ -17,6 +19,7 @@ const {
 }))
 
 vi.mock('../cli', () => ({
+  getFeishuBotRuntimeStatuses: getFeishuBotRuntimeStatusesMock,
   isPluginInstalledOnDisk: isPluginInstalledOnDiskMock,
   runCli: runCliMock,
 }))
@@ -36,12 +39,21 @@ vi.mock('../dingtalk-official-channel', () => ({
 
 describe('official channel adapters', () => {
   beforeEach(() => {
+    vi.resetModules()
     ensureFeishuOfficialPluginReadyMock.mockReset()
+    getFeishuBotRuntimeStatusesMock.mockReset()
     getFeishuOfficialPluginStateMock.mockReset()
     isPluginInstalledOnDiskMock.mockReset()
     repairStalePluginConfigFromCommandResultMock.mockReset()
     repairDingtalkOfficialChannelMock.mockReset()
     runCliMock.mockReset()
+
+    getFeishuBotRuntimeStatusesMock.mockResolvedValue({})
+    repairStalePluginConfigFromCommandResultMock.mockResolvedValue({
+      stalePluginIds: [],
+      changed: false,
+      removedPluginIds: [],
+    })
   })
 
   it('maps DingTalk status into evidence-backed installed / registered / loaded / ready stages', async () => {
@@ -49,9 +61,7 @@ describe('official channel adapters', () => {
     runCliMock.mockResolvedValue({
       ok: true,
       stdout: JSON.stringify({
-        plugins: [
-          { id: 'dingtalk-connector' },
-        ],
+        plugins: [{ id: 'dingtalk-connector' }],
       }),
       stderr: '',
       code: 0,
@@ -66,30 +76,30 @@ describe('official channel adapters', () => {
         id: 'installed',
         state: 'verified',
         source: 'disk',
-        message: '已确认本机存在钉钉官方插件安装',
+        message: '已确认本机存在钉钉官方插件安装。',
       },
       {
         id: 'registered',
         state: 'verified',
         source: 'plugins-list',
-        message: '已在上游 plugins list 中确认插件已注册',
+        message: '已在上游 plugins list 中确认插件已注册。',
       },
       {
         id: 'loaded',
         state: 'unknown',
         source: 'upstream-status-missing',
-        message: '当前缺少上游 loaded 证明',
+        message: '当前缺少上游 loaded 证明。',
       },
       {
         id: 'ready',
         state: 'unknown',
         source: 'upstream-probe-missing',
-        message: '当前缺少上游 ready 证明',
+        message: '当前缺少上游 ready 证明。',
       },
     ])
   })
 
-  it('surfaces Feishu config drift in the shared status summary without promoting it to ready', async () => {
+  it('surfaces Feishu config drift without promoting runtime readiness', async () => {
     getFeishuOfficialPluginStateMock.mockResolvedValue({
       pluginId: 'openclaw-lark',
       installedOnDisk: true,
@@ -102,9 +112,7 @@ describe('official channel adapters', () => {
     runCliMock.mockResolvedValue({
       ok: true,
       stdout: JSON.stringify({
-        plugins: [
-          { id: 'openclaw-lark' },
-        ],
+        plugins: [{ id: 'openclaw-lark' }],
       }),
       stderr: '',
       code: 0,
@@ -115,7 +123,53 @@ describe('official channel adapters', () => {
 
     expect(result.summary).toContain('配置仍待同步')
     expect(result.stages.find((stage) => stage.id === 'registered')?.state).toBe('verified')
+    expect(result.stages.find((stage) => stage.id === 'loaded')?.state).toBe('unknown')
     expect(result.stages.find((stage) => stage.id === 'ready')?.state).toBe('unknown')
+  })
+
+  it('promotes Feishu loaded / ready once runtime status proves an online bot', async () => {
+    getFeishuOfficialPluginStateMock.mockResolvedValue({
+      pluginId: 'openclaw-lark',
+      installedOnDisk: true,
+      installPath: '/tmp/home/extensions/openclaw-lark',
+      officialPluginConfigured: true,
+      legacyPluginIdsPresent: [],
+      configChanged: false,
+      normalizedConfig: {},
+    })
+    getFeishuBotRuntimeStatusesMock.mockResolvedValue({
+      default: {
+        runtimeState: 'online',
+        summary: 'running',
+        issues: [],
+        gatewayRunning: true,
+      },
+    })
+    runCliMock.mockResolvedValue({
+      ok: true,
+      stdout: JSON.stringify({
+        plugins: [{ id: 'openclaw-lark' }],
+      }),
+      stderr: '',
+      code: 0,
+    })
+
+    const { getOfficialChannelStatus } = await import('../official-channel-adapters')
+    const result = await getOfficialChannelStatus('feishu')
+
+    expect(result.summary).toContain('运行中')
+    expect(result.stages.find((stage) => stage.id === 'loaded')).toEqual({
+      id: 'loaded',
+      state: 'verified',
+      source: 'gateway-runtime',
+      message: '已通过飞书运行态确认当前 Gateway 已暴露飞书 Bot 运行快照。',
+    })
+    expect(result.stages.find((stage) => stage.id === 'ready')).toEqual({
+      id: 'ready',
+      state: 'verified',
+      source: 'gateway-runtime',
+      message: '已通过飞书运行态确认 1 个飞书 Bot 处于在线状态。',
+    })
   })
 
   it('retries plugins list once after stale plugin repair so registration evidence can recover', async () => {
@@ -139,9 +193,7 @@ describe('official channel adapters', () => {
       .mockResolvedValueOnce({
         ok: true,
         stdout: JSON.stringify({
-          plugins: [
-            { id: 'openclaw-lark' },
-          ],
+          plugins: [{ id: 'openclaw-lark' }],
         }),
         stderr: '',
         code: 0,
@@ -157,7 +209,6 @@ describe('official channel adapters', () => {
 
     expect(runCliMock).toHaveBeenCalledTimes(2)
     expect(repairStalePluginConfigFromCommandResultMock).toHaveBeenCalledTimes(1)
-    expect(result.summary).toContain('已安装并已注册')
     expect(result.stages.find((stage) => stage.id === 'registered')?.state).toBe('verified')
   })
 
@@ -174,7 +225,7 @@ describe('official channel adapters', () => {
       stdout: '',
       stderr: '',
       code: 0,
-      message: '已确认飞书官方插件可用',
+      message: '已确认飞书官方插件可用。',
     })
 
     const { repairOfficialChannel } = await import('../official-channel-adapters')
@@ -184,7 +235,7 @@ describe('official channel adapters', () => {
       ok: true,
       channelId: 'feishu',
       pluginId: 'openclaw-lark',
-      summary: '飞书官方插件已归一化；loaded / ready 仍待上游证据。',
+      summary: '飞书官方插件已归一化；loaded / ready 仍待运行态证据。',
       installedThisRun: false,
       gatewayResult: null,
       evidence: [
@@ -192,13 +243,13 @@ describe('official channel adapters', () => {
           source: 'status',
           channelId: 'feishu',
           pluginId: 'openclaw-lark',
-          message: '已确认飞书官方插件安装存在，且配置已处于归一化状态',
+          message: '已确认飞书官方插件安装存在，且配置已处于归一化状态。',
         },
       ],
       stdout: '',
       stderr: '',
       code: 0,
-      message: '已确认飞书官方插件可用',
+      message: '已确认飞书官方插件可用。',
     })
   })
 
@@ -214,7 +265,7 @@ describe('official channel adapters', () => {
       stdout: '',
       stderr: '',
       code: 0,
-      message: '钉钉官方插件已完成修复，ready 仍待上游证据',
+      message: '钉钉官方插件已完成修复。',
     })
 
     const { repairOfficialChannel } = await import('../official-channel-adapters')

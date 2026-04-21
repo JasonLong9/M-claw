@@ -1,0 +1,66 @@
+import { describe, expect, it } from 'vitest'
+
+import mainSurfacePropsContractSource from '../channels-page-main-surface-props-contract.ts?raw'
+
+describe('channels-page-main-surface-props-contract module', () => {
+  it('keeps the main surface input and output contract behind one dedicated module', () => {
+    expect(mainSurfacePropsContractSource).toContain("import type { ComponentProps } from 'react'")
+    expect(mainSurfacePropsContractSource).toContain("import type ChannelsPageChannelCards from '../components/ChannelsPageChannelCards'")
+    expect(mainSurfacePropsContractSource).toContain("import type ChannelsPageChannelListPanel from '../components/ChannelsPageChannelListPanel'")
+    expect(mainSurfacePropsContractSource).toContain("import type ChannelsPageTopPanel from '../components/ChannelsPageTopPanel'")
+    expect(mainSurfacePropsContractSource).toContain("import type {")
+    expect(mainSurfacePropsContractSource).toContain('ChannelsPageChannelSurfaceActionHandlers,')
+    expect(mainSurfacePropsContractSource).toContain('ChannelsPageTogglingChannelBinding,')
+    expect(mainSurfacePropsContractSource).toContain("} from './channels-page-channel-actions-contract'")
+    expect(mainSurfacePropsContractSource).toContain(
+      "import type { ChannelsPageOpenAddChannelHandler } from './channels-page-config-flow-contract'"
+    )
+    expect(mainSurfacePropsContractSource).toContain("import type {")
+    expect(mainSurfacePropsContractSource).toContain('ChannelsPageChannelsBinding,')
+    expect(mainSurfacePropsContractSource).toContain('ChannelsPageChannelInfo,')
+    expect(mainSurfacePropsContractSource).toContain('ChannelsPageRefreshFeedbackBinding,')
+    expect(mainSurfacePropsContractSource).toContain('ChannelsPageSetPageErrorBinding,')
+    expect(mainSurfacePropsContractSource).toContain("} from './channels-page-data-contract'")
+    expect(mainSurfacePropsContractSource).toContain(
+      "import type { ChannelsPageRepairingPluginChannelBinding } from './channels-page-feishu-plugin-repair-contract'"
+    )
+    expect(mainSurfacePropsContractSource).toContain("import type {")
+    expect(mainSurfacePropsContractSource).toContain('ChannelsPageChannelStatusBadgeDeriverBinding,')
+    expect(mainSurfacePropsContractSource).toContain('ChannelsPageChannelStatusBadgeDeriver,')
+    expect(mainSurfacePropsContractSource).toContain("} from './channels-page-state-helpers-contract'")
+    expect(mainSurfacePropsContractSource).toContain('export interface ChannelsPageChannelCardDisplayHelpers {')
+    expect(mainSurfacePropsContractSource).toContain('export interface ChannelsPageMainSurfacePropsOptions')
+    expect(mainSurfacePropsContractSource).toContain('extends ChannelsPageChannelSurfaceActionHandlers<ChannelsPageChannelInfo>')
+    expect(mainSurfacePropsContractSource).toContain('ChannelsPageChannelsBinding<ChannelsPageChannelInfo>,')
+    expect(mainSurfacePropsContractSource).toContain('ChannelsPageChannelCardDisplayHelpers,')
+    expect(mainSurfacePropsContractSource).toContain('ChannelsPageChannelStatusBadgeDeriverBinding,')
+    expect(mainSurfacePropsContractSource).toContain('ChannelsPageTogglingChannelBinding,')
+    expect(mainSurfacePropsContractSource).toContain('ChannelsPageRepairingPluginChannelBinding,')
+    expect(mainSurfacePropsContractSource).toContain('ChannelsPageRefreshFeedbackBinding,')
+    expect(mainSurfacePropsContractSource).toContain('ChannelsPageSetPageErrorBinding {')
+    expect(mainSurfacePropsContractSource).toContain('export interface ChannelsPageMainSurfacePropsResult {')
+  })
+
+  it('keeps top-panel, list-panel, and channel-card prop shapes in the shared main surface contract module', () => {
+    expect(mainSurfacePropsContractSource).toContain('ChannelsPageChannelStatusBadgeDeriverBinding,')
+    expect(mainSurfacePropsContractSource).toContain('ChannelsPageTogglingChannelBinding,')
+    expect(mainSurfacePropsContractSource).toContain('ChannelsPageRepairingPluginChannelBinding,')
+    expect(mainSurfacePropsContractSource).toContain('ChannelsPageRefreshFeedbackBinding,')
+    expect(mainSurfacePropsContractSource).toContain('ChannelsPageSetPageErrorBinding {')
+    expect(mainSurfacePropsContractSource).not.toContain('channels: ChannelsPageChannelInfo[]')
+    expect(mainSurfacePropsContractSource).not.toContain('deriveChannelStatusBadges: ChannelsPageChannelStatusBadgeDeriver')
+    expect(mainSurfacePropsContractSource).toContain('handleOpenAddChannel: ChannelsPageOpenAddChannelHandler')
+    expect(mainSurfacePropsContractSource).not.toContain('handleRefreshChannels: ChannelsPageRefreshChannelsHandler')
+    expect(mainSurfacePropsContractSource).not.toContain('refreshing: boolean')
+    expect(mainSurfacePropsContractSource).not.toContain('error: string')
+    expect(mainSurfacePropsContractSource).not.toContain('legacyFeishuAgentIds: string[]')
+    expect(mainSurfacePropsContractSource).not.toContain('togglingChannelId: ChannelsPagePendingChannelId')
+    expect(mainSurfacePropsContractSource).not.toContain('repairingPluginChannelId: ChannelsPagePendingChannelId')
+    expect(mainSurfacePropsContractSource).not.toContain('setError: ChannelsPagePageErrorHandler')
+    expect(mainSurfacePropsContractSource).toContain("getChannelCardSummary: ComponentProps<typeof ChannelsPageChannelCards>['getSummary']")
+    expect(mainSurfacePropsContractSource).toContain("getFeishuSharedStatusAlert: ComponentProps<typeof ChannelsPageChannelCards>['getFeishuSharedStatusAlert']")
+    expect(mainSurfacePropsContractSource).toContain("topPanelProps: ComponentProps<typeof ChannelsPageTopPanel>")
+    expect(mainSurfacePropsContractSource).toContain("channelListPanelProps: ComponentProps<typeof ChannelsPageChannelListPanel>")
+    expect(mainSurfacePropsContractSource).toContain("channelCardsProps: ComponentProps<typeof ChannelsPageChannelCards>")
+  })
+})

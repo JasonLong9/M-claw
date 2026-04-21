@@ -2,15 +2,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
   applyConfigPatchGuardedMock,
+  ensureFeishuManagedWorkspaceBootstrapMock,
   getOpenClawPathsMock,
   installPluginNpxMock,
+  materializeBundledManagedPluginMock,
+  resolveBundledManagedPluginSourcePathMock,
   readConfigMock,
   repairIncompatibleExtensionPluginsMock,
   reloadGatewayForConfigChangeMock,
 } = vi.hoisted(() => ({
   applyConfigPatchGuardedMock: vi.fn(),
+  ensureFeishuManagedWorkspaceBootstrapMock: vi.fn(),
   getOpenClawPathsMock: vi.fn(),
   installPluginNpxMock: vi.fn(),
+  materializeBundledManagedPluginMock: vi.fn(),
+  resolveBundledManagedPluginSourcePathMock: vi.fn(),
   readConfigMock: vi.fn(),
   repairIncompatibleExtensionPluginsMock: vi.fn(),
   reloadGatewayForConfigChangeMock: vi.fn(),
@@ -27,8 +33,17 @@ vi.mock('../openclaw-config-coordinator', () => ({
   applyConfigPatchGuarded: applyConfigPatchGuardedMock,
 }))
 
+vi.mock('../openclaw-bundled-managed-plugin', () => ({
+  materializeBundledManagedPlugin: materializeBundledManagedPluginMock,
+  resolveBundledManagedPluginSourcePath: resolveBundledManagedPluginSourcePathMock,
+}))
+
 vi.mock('../gateway-lifecycle-controller', () => ({
   reloadGatewayForConfigChange: reloadGatewayForConfigChangeMock,
+}))
+
+vi.mock('../feishu-managed-workspace-bootstrap', () => ({
+  ensureFeishuManagedWorkspaceBootstrap: ensureFeishuManagedWorkspaceBootstrapMock,
 }))
 
 vi.mock('../plugin-install-npx', () => ({
@@ -38,12 +53,27 @@ vi.mock('../plugin-install-npx', () => ({
 describe('getFeishuOfficialPluginState', () => {
   beforeEach(() => {
     applyConfigPatchGuardedMock.mockReset()
+    ensureFeishuManagedWorkspaceBootstrapMock.mockReset()
     getOpenClawPathsMock.mockReset()
     installPluginNpxMock.mockReset()
+    materializeBundledManagedPluginMock.mockReset()
+    resolveBundledManagedPluginSourcePathMock.mockReset()
     readConfigMock.mockReset()
     repairIncompatibleExtensionPluginsMock.mockReset()
     reloadGatewayForConfigChangeMock.mockReset()
     applyConfigPatchGuardedMock.mockResolvedValue({ ok: true })
+    ensureFeishuManagedWorkspaceBootstrapMock.mockResolvedValue({
+      changed: false,
+      changedWorkspaces: [],
+    })
+    materializeBundledManagedPluginMock.mockResolvedValue({
+      ok: false,
+      copied: false,
+      sourcePath: null,
+      targetPath: '/Users/alice/.openclaw/extensions/openclaw-lark',
+      error: 'Bundled plugin source was not found.',
+    })
+    resolveBundledManagedPluginSourcePathMock.mockReturnValue(null)
     repairIncompatibleExtensionPluginsMock.mockResolvedValue({
       ok: true,
       repaired: false,
@@ -85,6 +115,9 @@ describe('getFeishuOfficialPluginState', () => {
     const result = await getFeishuOfficialPluginState()
 
     expect(result.installedOnDisk).toBe(false)
+    expect(result.installSource).toBe('')
+    expect(result.bundledPayloadAvailable).toBe(false)
+    expect(result.bundledPayloadPath).toBe('')
     expect(result.legacyPluginIdsPresent).toEqual(['feishu', 'feishu-openclaw-plugin'])
     expect(result.officialPluginConfigured).toBe(false)
     expect(result.configChanged).toBe(true)
@@ -117,6 +150,7 @@ describe('getFeishuOfficialPluginState', () => {
       const result = await getFeishuOfficialPluginState()
 
       expect(result.installedOnDisk).toBe(true)
+      expect(result.bundledPayloadAvailable).toBe(false)
       expect(result.legacyPluginIdsPresent).toEqual(['feishu'])
       expect(result.officialPluginConfigured).toBe(true)
       expect(result.configChanged).toBe(true)
@@ -210,6 +244,7 @@ describe('getFeishuOfficialPluginState', () => {
     })
 
     const fs = process.getBuiltinModule('node:fs') as typeof import('node:fs')
+    const path = process.getBuiltinModule('node:path') as typeof import('node:path')
     const accessSpy = vi.spyOn(fs.promises, 'access').mockResolvedValue(undefined)
 
     try {
@@ -217,6 +252,8 @@ describe('getFeishuOfficialPluginState', () => {
       const result = await getFeishuOfficialPluginState()
 
       expect(result.installedOnDisk).toBe(true)
+      expect(result.installSource).toBe('npm')
+      expect(result.bundledPayloadAvailable).toBe(false)
       expect(result.officialPluginConfigured).toBe(true)
       expect(result.configChanged).toBe(true)
       expect(result.normalizedConfig.plugins.allow).toContain('openclaw-lark')
@@ -224,7 +261,7 @@ describe('getFeishuOfficialPluginState', () => {
         expect.objectContaining({
           source: 'npm',
           spec: '@larksuite/openclaw-lark',
-          installPath: '/Users/alice/.openclaw/extensions/openclaw-lark',
+          installPath: path.join('/Users/alice/.openclaw', 'extensions', 'openclaw-lark'),
         })
       )
       expect(result.normalizedConfig.session.dmScope).toBe('per-account-channel-peer')
@@ -262,6 +299,54 @@ describe('getFeishuOfficialPluginState', () => {
     }
   })
 
+  it('normalizes legacy bundled install metadata to a path source while preserving the install path', async () => {
+    getOpenClawPathsMock.mockResolvedValue({
+      homeDir: '/Users/alice/.openclaw',
+    })
+    readConfigMock.mockResolvedValue({
+      channels: {
+        feishu: {
+          enabled: true,
+          appId: 'cli_default',
+          appSecret: 'secret-default',
+        },
+      },
+      plugins: {
+        allow: ['openclaw-lark'],
+        installs: {
+          'openclaw-lark': {
+            source: 'bundled',
+            spec: '@larksuite/openclaw-lark',
+            installPath: '/Users/alice/.openclaw/extensions/openclaw-lark',
+          },
+        },
+      },
+    })
+
+    const fs = process.getBuiltinModule('node:fs') as typeof import('node:fs')
+    const accessSpy = vi.spyOn(fs.promises, 'access').mockResolvedValue(undefined)
+    resolveBundledManagedPluginSourcePathMock.mockReturnValue('D:/bundle/openclaw-lark')
+
+    try {
+      const { getFeishuOfficialPluginState } = await import('../feishu-official-plugin-state')
+      const result = await getFeishuOfficialPluginState()
+
+      expect(result.installedOnDisk).toBe(true)
+      expect(result.installSource).toBe('path')
+      expect(result.bundledPayloadAvailable).toBe(true)
+      expect(result.bundledPayloadPath).toBe('D:/bundle/openclaw-lark')
+      expect(result.normalizedConfig.plugins.installs['openclaw-lark']).toEqual(
+        expect.objectContaining({
+          source: 'path',
+          spec: '@larksuite/openclaw-lark',
+          installPath: '/Users/alice/.openclaw/extensions/openclaw-lark',
+        })
+      )
+    } finally {
+      accessSpy.mockRestore()
+    }
+  })
+
   it('installs the official plugin on demand when it is missing for link preparation', async () => {
     getOpenClawPathsMock.mockResolvedValue({
       homeDir: '/Users/alice/.openclaw',
@@ -280,6 +365,7 @@ describe('getFeishuOfficialPluginState', () => {
     })
 
     const fs = process.getBuiltinModule('node:fs') as typeof import('node:fs')
+    const path = process.getBuiltinModule('node:path') as typeof import('node:path')
     const accessSpy = vi
       .spyOn(fs.promises, 'access')
       .mockRejectedValueOnce(new Error('missing'))
@@ -300,9 +386,70 @@ describe('getFeishuOfficialPluginState', () => {
 
       expect(result.ok).toBe(true)
       expect(result.installedThisRun).toBe(true)
+      expect(materializeBundledManagedPluginMock).toHaveBeenCalledWith({
+        pluginId: 'openclaw-lark',
+        targetPath: path.join('/Users/alice/.openclaw', 'extensions', 'openclaw-lark'),
+        resourcesPath: process.resourcesPath,
+        cwd: process.cwd(),
+      })
       expect(installPluginNpxMock).toHaveBeenCalledWith('@larksuite/openclaw-lark-tools', ['openclaw-lark'])
       expect(result.state.installedOnDisk).toBe(true)
+      expect(result.state.installSource).toBe('npm')
       expect(applyConfigPatchGuardedMock).toHaveBeenCalled()
+      expect(reloadGatewayForConfigChangeMock).toHaveBeenCalledWith('feishu-official-plugin-install')
+    } finally {
+      accessSpy.mockRestore()
+    }
+  })
+
+  it('prefers the bundled official plugin payload before falling back to npm installation', async () => {
+    getOpenClawPathsMock.mockResolvedValue({
+      homeDir: '/Users/alice/.openclaw',
+    })
+    readConfigMock.mockResolvedValue({
+      channels: {
+        feishu: {
+          enabled: true,
+          appId: 'cli_default',
+          appSecret: 'secret-default',
+        },
+      },
+    })
+
+    const fs = process.getBuiltinModule('node:fs') as typeof import('node:fs')
+    const path = process.getBuiltinModule('node:path') as typeof import('node:path')
+    const accessSpy = vi
+      .spyOn(fs.promises, 'access')
+      .mockRejectedValueOnce(new Error('missing'))
+      .mockRejectedValueOnce(new Error('still-missing-before-install'))
+      .mockResolvedValue(undefined)
+      .mockResolvedValue(undefined)
+
+    materializeBundledManagedPluginMock.mockResolvedValue({
+      ok: true,
+      copied: true,
+      sourcePath: 'D:/bundle/openclaw-lark',
+      targetPath: '/Users/alice/.openclaw/extensions/openclaw-lark',
+    })
+    resolveBundledManagedPluginSourcePathMock.mockReturnValue('D:/bundle/openclaw-lark')
+
+    try {
+      const { ensureFeishuOfficialPluginReady } = await import('../feishu-official-plugin-state')
+      const result = await ensureFeishuOfficialPluginReady()
+
+      expect(result.ok).toBe(true)
+      expect(result.installedThisRun).toBe(true)
+      expect(installPluginNpxMock).not.toHaveBeenCalled()
+      expect(result.stdout).toContain('Installed bundled openclaw-lark')
+      expect(result.state.installedOnDisk).toBe(true)
+      expect(result.state.installSource).toBe('path')
+      expect(result.state.bundledPayloadAvailable).toBe(true)
+      expect(result.state.normalizedConfig.plugins.installs['openclaw-lark']).toEqual(
+        expect.objectContaining({
+          source: 'path',
+          installPath: path.join('/Users/alice/.openclaw', 'extensions', 'openclaw-lark'),
+        })
+      )
       expect(reloadGatewayForConfigChangeMock).toHaveBeenCalledWith('feishu-official-plugin-install')
     } finally {
       accessSpy.mockRestore()
@@ -421,6 +568,45 @@ describe('getFeishuOfficialPluginState', () => {
     }
   })
 
+  it('surfaces bundled payload materialization failure instead of silently falling back to npm', async () => {
+    getOpenClawPathsMock.mockResolvedValue({
+      homeDir: '/Users/alice/.openclaw',
+    })
+    readConfigMock.mockResolvedValue({
+      channels: {
+        feishu: {
+          enabled: true,
+          appId: 'cli_default',
+          appSecret: 'secret-default',
+        },
+      },
+    })
+
+    const fs = process.getBuiltinModule('node:fs') as typeof import('node:fs')
+    const accessSpy = vi.spyOn(fs.promises, 'access').mockRejectedValue(new Error('missing'))
+
+    materializeBundledManagedPluginMock.mockResolvedValue({
+      ok: false,
+      copied: false,
+      sourcePath: 'D:/bundle/openclaw-lark',
+      targetPath: '/Users/alice/.openclaw/extensions/openclaw-lark',
+      error: 'copy failed',
+    })
+
+    try {
+      const { ensureFeishuOfficialPluginReady } = await import('../feishu-official-plugin-state')
+      const result = await ensureFeishuOfficialPluginReady()
+
+      expect(result.ok).toBe(false)
+      expect(result.installedThisRun).toBe(false)
+      expect(result.stderr).toContain('copy failed')
+      expect(installPluginNpxMock).not.toHaveBeenCalled()
+      expect(reloadGatewayForConfigChangeMock).not.toHaveBeenCalled()
+    } finally {
+      accessSpy.mockRestore()
+    }
+  })
+
   it('applies config healing before surfacing install failure when the official plugin is missing', async () => {
     getOpenClawPathsMock.mockResolvedValue({
       homeDir: '/Users/alice/.openclaw',
@@ -515,7 +701,7 @@ describe('getFeishuOfficialPluginState', () => {
 
       expect(result.ok).toBe(false)
       expect(result.installedThisRun).toBe(false)
-      expect(result.message).toBe('飞书官方插件安装失败，且配置归一化失败')
+      expect(result.message).toBe('飞书官方插件安装失败，且配置归一化失败。')
       expect(result.stderr).toContain('network failed')
       expect(result.stderr).toContain('after-install-patch-failed')
       expect(reloadGatewayForConfigChangeMock).not.toHaveBeenCalled()

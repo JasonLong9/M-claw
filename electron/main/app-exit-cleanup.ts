@@ -1,5 +1,6 @@
 import { cancelActiveCommands } from './cli'
 import { stopFeishuInstallerSession } from './feishu-installer-session'
+import { stopFeishuOfficialCliSession } from './feishu-official-cli-session'
 import { stopWeixinInstallerSession } from './weixin-installer-session'
 
 const EXIT_CANCEL_DOMAINS = [
@@ -12,6 +13,7 @@ const EXIT_CANCEL_DOMAINS = [
   'env',
   'plugin-install',
   'feishu-installer',
+  'feishu-lark-cli',
   'weixin-installer',
   'upgrade',
   'env-setup',
@@ -41,7 +43,9 @@ export async function runAppExitCleanup(): Promise<AppExitCleanupResult> {
   let installerStopped = false
   try {
     const [feishuStopResult, weixinStopResult] = await Promise.all([
-      stopFeishuInstallerSession(),
+      Promise.all([stopFeishuInstallerSession(), stopFeishuOfficialCliSession()]).then(([installer, guided]) => ({
+        ok: Boolean(installer?.ok) && Boolean(guided?.ok),
+      })),
       stopWeixinInstallerSession(),
     ])
     installerStopped = Boolean(feishuStopResult?.ok) && Boolean(weixinStopResult?.ok)

@@ -15,6 +15,12 @@ export interface OpenClawBundledArtifactManifest {
     directoryName: string
     version: string
   }[] | null
+  managedPlugins?: {
+    id: string
+    directoryName: string
+    version: string
+    channels?: string[] | null
+  }[] | null
 }
 
 export interface OpenClawBundledRuntimeManifest {
@@ -81,6 +87,24 @@ export function isOpenClawBundledRuntimeManifest(
     }
   }
 
+  const managedPlugins = (artifacts as Record<string, unknown>).managedPlugins
+  if (managedPlugins != null) {
+    if (!Array.isArray(managedPlugins)) return false
+    for (const item of managedPlugins) {
+      if (!item || typeof item !== 'object') return false
+      const pluginRecord = item as Record<string, unknown>
+      if (!isNonEmptyString(pluginRecord.id)) return false
+      if (!isNonEmptyString(pluginRecord.directoryName)) return false
+      if (!isNonEmptyString(pluginRecord.version)) return false
+
+      const channels = pluginRecord.channels
+      if (channels != null) {
+        if (!Array.isArray(channels)) return false
+        if (!channels.every((channel) => isNonEmptyString(channel))) return false
+      }
+    }
+  }
+
   const notes = record.notes
   if (notes != null) {
     if (!Array.isArray(notes)) return false
@@ -89,4 +113,3 @@ export function isOpenClawBundledRuntimeManifest(
 
   return true
 }
-

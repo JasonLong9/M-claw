@@ -1,6 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { readConfigMock, runCliMock, restartGatewayLifecycleMock, guardedWriteConfigMock } = vi.hoisted(() => ({
+const {
+  ensureFeishuManagedWorkspaceBootstrapMock,
+  getOpenClawPathsMock,
+  readConfigMock,
+  runCliMock,
+  restartGatewayLifecycleMock,
+  guardedWriteConfigMock,
+} = vi.hoisted(() => ({
+  ensureFeishuManagedWorkspaceBootstrapMock: vi.fn(),
+  getOpenClawPathsMock: vi.fn(),
   readConfigMock: vi.fn(),
   runCliMock: vi.fn(),
   restartGatewayLifecycleMock: vi.fn(),
@@ -8,6 +17,7 @@ const { readConfigMock, runCliMock, restartGatewayLifecycleMock, guardedWriteCon
 }))
 
 vi.mock('../cli', () => ({
+  getOpenClawPaths: getOpenClawPathsMock,
   readConfig: readConfigMock,
   runCli: runCliMock,
 }))
@@ -18,6 +28,10 @@ vi.mock('../gateway-lifecycle-controller', () => ({
 
 vi.mock('../openclaw-config-guard', () => ({
   guardedWriteConfig: guardedWriteConfigMock,
+}))
+
+vi.mock('../feishu-managed-workspace-bootstrap', () => ({
+  ensureFeishuManagedWorkspaceBootstrap: ensureFeishuManagedWorkspaceBootstrapMock,
 }))
 
 import { applyConfigPatchGuarded } from '../openclaw-config-coordinator'
@@ -43,11 +57,20 @@ async function waitForGuardedWriteCalls(expectedCalls: number, timeoutMs = 200):
 
 describe('openclaw config coordinator', () => {
   beforeEach(() => {
+    ensureFeishuManagedWorkspaceBootstrapMock.mockReset()
+    getOpenClawPathsMock.mockReset()
     readConfigMock.mockReset()
     runCliMock.mockReset()
     restartGatewayLifecycleMock.mockReset()
     guardedWriteConfigMock.mockReset()
 
+    ensureFeishuManagedWorkspaceBootstrapMock.mockResolvedValue({
+      changed: false,
+      changedWorkspaces: [],
+    })
+    getOpenClawPathsMock.mockResolvedValue({
+      homeDir: '/Users/alice/.openclaw',
+    })
     runCliMock.mockResolvedValue({
       ok: true,
       stdout: '',
@@ -134,6 +157,60 @@ describe('openclaw config coordinator', () => {
     )
     expect(restartGatewayLifecycleMock).toHaveBeenCalledTimes(1)
     expect(runCliMock).not.toHaveBeenCalled()
+  })
+
+  it('syncs the Feishu managed workspace bootstrap after a successful config write', async () => {
+    const beforeConfig = {
+      channels: {
+        feishu: {},
+      },
+    }
+    const afterConfig = {
+      channels: {
+        feishu: {
+          enabled: true,
+          accounts: {
+            'bot-123456': {
+              enabled: true,
+              name: '飞书 Bot 123456',
+              appId: 'cli_123456',
+              appSecret: 'secret',
+            },
+          },
+        },
+      },
+    }
+
+    readConfigMock.mockResolvedValue(beforeConfig)
+    guardedWriteConfigMock.mockResolvedValue({
+      ok: true,
+      blocked: false,
+      wrote: true,
+      target: 'config',
+      snapshotCreated: false,
+      snapshot: null,
+      changedJsonPaths: ['$.channels.feishu.accounts.bot-123456'],
+      ownershipSummary: null,
+      message: 'ok',
+    })
+
+    await applyConfigPatchGuarded(
+      {
+        beforeConfig,
+        afterConfig,
+        reason: 'unknown',
+      },
+      undefined,
+      {
+        applyGatewayPolicy: false,
+      }
+    )
+
+    expect(getOpenClawPathsMock).toHaveBeenCalledTimes(1)
+    expect(ensureFeishuManagedWorkspaceBootstrapMock).toHaveBeenCalledWith({
+      homeDir: '/Users/alice/.openclaw',
+      config: afterConfig,
+    })
   })
 
   it('serializes concurrent config patch requests through one write queue', async () => {

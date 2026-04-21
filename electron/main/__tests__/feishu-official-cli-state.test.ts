@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+﻿import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { runShellMock } = vi.hoisted(() => ({
   runShellMock: vi.fn(),
@@ -13,11 +13,11 @@ describe('getFeishuOfficialCliStatus', () => {
     runShellMock.mockReset()
   })
 
-  it('reports missing official CLI without blocking the existing plugin flow', async () => {
+  it('reports a missing official CLI without blocking the managed plugin path', async () => {
     runShellMock.mockResolvedValue({
       ok: false,
       stdout: '',
-      stderr: "'lark-cli' 不是内部或外部命令，也不是可运行的程序或批处理文件。",
+      stderr: "'lark-cli' is not recognized as an internal or external command",
       code: 1,
     })
 
@@ -26,8 +26,8 @@ describe('getFeishuOfficialCliStatus', () => {
 
     expect(result.available).toBe(false)
     expect(result.authState).toBe('unknown')
-    expect(result.summary).toContain('未检测到飞书官方 CLI')
-    expect(result.recommendedAction).toContain('安装 lark-cli')
+    expect(result.summary).toContain('official Feishu CLI')
+    expect(result.recommendedAction).toContain('@larksuite/cli')
     expect(runShellMock).toHaveBeenCalledTimes(1)
   })
 
@@ -52,7 +52,7 @@ describe('getFeishuOfficialCliStatus', () => {
     expect(result.available).toBe(true)
     expect(result.version).toBe('1.2.3')
     expect(result.authState).toBe('unauthenticated')
-    expect(result.recommendedAction).toContain('lark-cli auth login')
+    expect(result.recommendedAction).toContain('lark-cli auth login --recommend')
     expect(runShellMock).toHaveBeenNthCalledWith(
       1,
       'lark-cli',
@@ -94,7 +94,7 @@ describe('getFeishuOfficialCliStatus', () => {
     expect(result.available).toBe(true)
     expect(result.version).toBe('2.0.0')
     expect(result.authState).toBe('authenticated')
-    expect(result.summary).toContain('授权状态看起来已就绪')
-    expect(result.recommendedAction).toContain('官方插件安装器')
+    expect(result.summary).toContain('already looks authenticated')
+    expect(result.recommendedAction).toContain('config init --new')
   })
 })

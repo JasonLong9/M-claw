@@ -1,4 +1,4 @@
-import { getChannelDefinition } from '../lib/openclaw-channel-registry'
+﻿import { getChannelDefinition } from '../lib/openclaw-channel-registry'
 
 export type ChannelsConfigStep = 'channel-connect' | 'pairing-code'
 
@@ -8,6 +8,8 @@ export interface ChannelPairingTarget {
   accountName?: string | null
   skipPairing?: boolean | null
 }
+
+export type ChannelPairingTargetRef = Pick<ChannelPairingTarget, 'channelId' | 'accountId'>
 
 export function shouldCompleteChannelConnect(target: ChannelPairingTarget): boolean {
   const channelDef = getChannelDefinition(target.channelId || '')
@@ -56,19 +58,25 @@ export function getPairingIntroCopy(target: ChannelPairingTarget | null): {
   if (target?.channelId === 'feishu' && accountName) {
     return {
       title: `${channelName} Bot「${accountName}」已接入`,
-      message: `已完成${channelName} Bot「${accountName}」的接入配置。接下来请在对应的飞书机器人里发送一条消息，建议直接粘贴机器人完整回复（含配对码和用户 ID）到下方，完成这个 Bot 的用户配对。`,
+      message:
+        `已完成 ${channelName} Bot「${accountName}」的接入配置。接下来请先在对应的飞书机器人里发送一条消息，` +
+        '再把机器人返回的完整内容（包含配对码和用户 ID）粘贴到下方，完成这个 Bot 的用户配对。',
     }
   }
 
   if (target?.channelId === 'openclaw-weixin' && accountName) {
     return {
       title: `${channelName}账号「${accountName}」已接入`,
-      message: `已完成${channelName}账号「${accountName}」的接入配置。当前版本暂不支持给其他微信用户做配对授权，完成扫码后仅当前登录账号可直接使用。`,
+      message:
+        `已完成 ${channelName}账号「${accountName}」的接入配置。当前版本暂不支持给其他微信用户做配对授权，` +
+        '完成扫码后仅当前登录账号可直接使用。',
     }
   }
 
   return {
     title: `${channelName} 机器人已接入`,
-    message: `已完成${channelName}机器人的接入配置。接下来请在${channelName}中给机器人发送一条消息，建议直接粘贴机器人完整回复（含配对码和用户 ID）到下方，完成用户配对。`,
+    message:
+      `已完成 ${channelName}机器人的接入配置。接下来请先在 ${channelName} 中给机器人发送一条消息，` +
+      '再把机器人返回的完整内容（包含配对码和用户 ID）粘贴到下方，完成用户配对。',
   }
 }

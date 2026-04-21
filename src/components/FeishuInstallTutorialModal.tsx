@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+﻿import { useEffect, useState } from 'react'
 import { Alert, Badge, Button, Group, Modal, Stack, Text } from '@mantine/core'
 
 import {
@@ -108,7 +108,7 @@ export default function FeishuInstallTutorialModal({
                 onClick={() => setImagePreviewOpened(true)}
                 className="block w-full overflow-hidden rounded-xl border app-border bg-black/30 text-left transition-opacity hover:opacity-95"
                 style={{ cursor: 'zoom-in' }}
-                aria-label={`放大查看${activeStepImage.alt}`}
+                aria-label={`放大查看 ${activeStepImage.alt}`}
               >
                 <img
                   src={activeStepImage.src}
@@ -139,13 +139,13 @@ export default function FeishuInstallTutorialModal({
               上一步
             </Button>
             <Button
-            color="success"
-            onClick={() => {
-              if (isLastStep) {
-                onClose()
-                return
-              }
-              setActiveStepIndex((current) => Math.min(FEISHU_INSTALL_TUTORIAL_STEPS.length - 1, current + 1))
+              color="success"
+              onClick={() => {
+                if (isLastStep) {
+                  onClose()
+                  return
+                }
+                setActiveStepIndex((current) => Math.min(FEISHU_INSTALL_TUTORIAL_STEPS.length - 1, current + 1))
               }}
             >
               {getFeishuInstallTutorialPrimaryActionLabel(activeStepIndex)}

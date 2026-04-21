@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   reconcileTrustedPluginAllowlist,
   restoreTrustedPluginConfig,
+  sanitizeManagedPluginConfig,
 } from '../openclaw-plugin-config'
 
 describe('openclaw plugin config helpers', () => {
@@ -202,5 +203,26 @@ describe('openclaw plugin config helpers', () => {
       'openclaw-lark': { enabled: true },
     })
     expect(result.config.plugins.installs).not.toHaveProperty('feishu')
+  })
+
+  it('rewrites legacy bundled feishu install metadata to an OpenClaw-supported path source', () => {
+    const result = sanitizeManagedPluginConfig({
+      plugins: {
+        installs: {
+          'openclaw-lark': {
+            source: 'bundled',
+            spec: '@larksuite/openclaw-lark',
+            installPath: '/Users/alice/.openclaw/extensions/openclaw-lark',
+          },
+        },
+      },
+    })
+
+    expect(result.changed).toBe(true)
+    expect(result.config.plugins.installs['openclaw-lark']).toEqual({
+      source: 'path',
+      spec: '@larksuite/openclaw-lark',
+      installPath: '/Users/alice/.openclaw/extensions/openclaw-lark',
+    })
   })
 })

@@ -79,6 +79,33 @@ function resolvePayloadPath(manifest) {
   return exists(candidate) ? candidate : null
 }
 
+function resolveManagedPluginArtifacts(manifest) {
+  return Array.isArray(manifest?.artifacts?.managedPlugins) ? manifest.artifacts.managedPlugins : []
+}
+
+function resolveManagedPluginPath(artifact) {
+  if (!artifact?.directoryName) return null
+  const pluginPath = path.join(bundleRoot, 'managed-plugins', artifact.directoryName)
+  return exists(pluginPath) ? pluginPath : null
+}
+
+function readManagedPluginVersion(pluginPath) {
+  if (!pluginPath) return null
+  const packageManifestPath = path.join(pluginPath, 'package.json')
+  if (!exists(packageManifestPath)) {
+    return {
+      packageManifestPath,
+      packageVersion: null,
+    }
+  }
+
+  const packageManifest = readJsonShared(packageManifestPath)
+  return {
+    packageManifestPath,
+    packageVersion: normalizeVersion(packageManifest?.version),
+  }
+}
+
 function resolvePreferredSource({ runtimeBinaryPath, payloadPath }) {
   if (runtimeBinaryPath) return 'bundled-runtime'
   if (payloadPath) return 'bundled-fallback'
@@ -130,6 +157,7 @@ if (!exists(manifestPath)) {
 
 const manifest = readJson(manifestPath)
 const payloadPath = resolvePayloadPath(manifest)
+const managedPluginArtifacts = resolveManagedPluginArtifacts(manifest)
 const pinnedVersion = normalizeVersion(manifest?.openclawVersion)
 const targetResults = []
 
@@ -139,6 +167,38 @@ console.log(`[openclaw-bundle] openclawVersion=${pinnedVersion || 'unknown'}`)
 console.log(`[openclaw-bundle] defaultDeliveryMode=${manifest?.defaultDeliveryMode ?? 'unknown'}`)
 console.log(`[openclaw-bundle] targetDeliveryMode=${manifest?.targetDeliveryMode ?? 'unknown'}`)
 console.log(`[openclaw-bundle] tgzPayload=${payloadPath ? path.relative(repoRoot, payloadPath) : 'missing'}`)
+
+for (const artifact of managedPluginArtifacts) {
+  const pluginPath = resolveManagedPluginPath(artifact)
+  const pluginManifestPath = pluginPath ? path.join(pluginPath, 'openclaw.plugin.json') : null
+  const packageInfo = readManagedPluginVersion(pluginPath)
+  const warnings = []
+
+  if (!pluginPath) warnings.push('managed plugin directory missing on disk')
+  if (pluginPath && pluginManifestPath && !exists(pluginManifestPath)) warnings.push('managed plugin manifest missing')
+  if (packageInfo && packageInfo.packageVersion !== normalizeVersion(artifact.version)) {
+    warnings.push('managed plugin package version does not align with manifest')
+  }
+
+  console.log('')
+  console.log(`[openclaw-bundle] managedPlugin=${artifact.id || 'unknown'}`)
+  console.log(`[openclaw-bundle] managedPluginPath=${pluginPath ? path.relative(repoRoot, pluginPath) : 'missing'}`)
+  console.log(`[openclaw-bundle] managedPluginVersion=${normalizeVersion(artifact.version) || 'unknown'}`)
+  console.log(`[openclaw-bundle] managedPluginPackageVersion=${packageInfo?.packageVersion || 'unknown'}`)
+  console.log(
+    `[openclaw-bundle] managedPluginChannels=${
+      Array.isArray(artifact.channels) && artifact.channels.length > 0 ? artifact.channels.join(',') : 'unknown'
+    }`
+  )
+  if (packageInfo?.packageManifestPath && exists(packageInfo.packageManifestPath)) {
+    console.log(`[openclaw-bundle] managedPluginPackage=${path.relative(repoRoot, packageInfo.packageManifestPath)}`)
+  }
+  if (warnings.length > 0) {
+    for (const warning of warnings) {
+      console.log(`[openclaw-bundle] warning=${warning}`)
+    }
+  }
+}
 
 for (const target of targets) {
   const artifact = resolveRuntimeArtifact(manifest, target.platform, target.arch)

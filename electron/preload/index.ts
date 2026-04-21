@@ -161,10 +161,20 @@ export const api = {
   getFeishuOfficialPluginState: () => ipcRenderer.invoke('plugins:feishu-state'),
   ensureFeishuOfficialPluginReady: () => ipcRenderer.invoke('plugins:feishu-ensure-ready'),
   getFeishuOfficialCliStatus: () => ipcRenderer.invoke('feishu:lark-cli:status:get'),
+  getFeishuOfficialCliSessionState: () => ipcRenderer.invoke('feishu:lark-cli:session:get'),
+  startFeishuOfficialCliSession: (mode: string) => ipcRenderer.invoke('feishu:lark-cli:session:start', mode),
+  sendFeishuOfficialCliSessionInput: (sessionId: string, input: string) =>
+    ipcRenderer.invoke('feishu:lark-cli:session:input', sessionId, input),
+  stopFeishuOfficialCliSession: () => ipcRenderer.invoke('feishu:lark-cli:session:stop'),
+  onFeishuOfficialCliSessionEvent: (listener: (payload: Record<string, any>) => void) =>
+    subscribeToChannel('feishu:lark-cli:event', listener),
   validateFeishuCredentials: (appId: string, appSecret: string, domain?: string) =>
     ipcRenderer.invoke('feishu:credentials:validate', appId, appSecret, domain),
   getFeishuInstallerState: () => ipcRenderer.invoke('feishu:installer:state:get'),
-  startFeishuInstaller: () => ipcRenderer.invoke('feishu:installer:start'),
+  startFeishuInstaller: (mode?: 'create' | 'link') =>
+    typeof mode === 'string'
+      ? ipcRenderer.invoke('feishu:installer:start', mode)
+      : ipcRenderer.invoke('feishu:installer:start'),
   listenFeishuBotDiagnosticActivity: (
     accountId?: FeishuBotDiagnosticListenRequest['accountId'],
     timeoutMs?: FeishuBotDiagnosticListenRequest['timeoutMs'],

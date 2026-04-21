@@ -28,6 +28,19 @@
     {
       "from": "resources/openclaw-bundle",
       "to": "openclaw-bundle"
+    },
+    {
+      "from": "node-v24.14.1-win-x64/node-v24.14.1-win-x64",
+      "to": "openclaw-bundle/runtime/windows-x64",
+      "filter": [
+        "npm",
+        "npm.cmd",
+        "npm.ps1",
+        "npx",
+        "npx.cmd",
+        "npx.ps1",
+        "node_modules/npm/**/*"
+      ]
     }
   ],
   "mac": {
@@ -51,6 +64,7 @@
     "format": "UDZO"
   },
   "win": {
+    "icon": "public/favicon.ico",
     "target": [
       {
         "target": "nsis",
@@ -65,6 +79,8 @@
     "oneClick": false,
     "perMachine": false,
     "allowToChangeInstallationDirectory": true,
+    "installerIcon": "public/favicon.ico",
+    "uninstallerIcon": "public/favicon.ico",
     "deleteAppDataOnUninstall": false
   },
   "publish": {

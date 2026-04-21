@@ -39,6 +39,25 @@ function ensureFile(filePath, label) {
   return true
 }
 
+function ensureDirectory(dirPath, label) {
+  if (!exists(dirPath)) {
+    fail(`Missing ${label}: ${path.relative(repoRoot, dirPath)}`)
+    return false
+  }
+
+  try {
+    if (!fs.statSync(dirPath).isDirectory()) {
+      fail(`Expected ${label} to be a directory: ${path.relative(repoRoot, dirPath)}`)
+      return false
+    }
+  } catch {
+    fail(`Unable to inspect ${label}: ${path.relative(repoRoot, dirPath)}`)
+    return false
+  }
+
+  return true
+}
+
 function resolveRuntimeBinaryCandidates(platform, runtimeDir) {
   if (platform === 'win32') {
     return [
@@ -88,6 +107,61 @@ function validateRuntimeArtifact(artifact) {
   )
 }
 
+function validateManagedPluginArtifact(artifact) {
+  const pluginDir = path.join(bundleRoot, 'managed-plugins', artifact.directoryName)
+  if (!ensureDirectory(pluginDir, `managed plugin directory for ${artifact.id}`)) return
+
+  const pluginManifestPath = path.join(pluginDir, 'openclaw.plugin.json')
+  const packageManifestPath = path.join(pluginDir, 'package.json')
+  const nodeModulesPath = path.join(pluginDir, 'node_modules')
+  if (!ensureFile(pluginManifestPath, `managed plugin manifest for ${artifact.id}`)) return
+  if (!ensureFile(packageManifestPath, `managed plugin package manifest for ${artifact.id}`)) return
+  if (!ensureDirectory(nodeModulesPath, `managed plugin dependencies for ${artifact.id}`)) return
+
+  const pluginManifest = readJson(pluginManifestPath)
+  if (String(pluginManifest?.id || '').trim() !== artifact.id) {
+    fail(
+      `Managed plugin manifest id mismatch for ${artifact.id}: got ${JSON.stringify(pluginManifest?.id || '')}`
+    )
+    return
+  }
+
+  if (Array.isArray(artifact.channels) && artifact.channels.length > 0) {
+    const manifestChannels = Array.isArray(pluginManifest?.channels)
+      ? pluginManifest.channels.map((item) => String(item || '').trim()).filter(Boolean)
+      : []
+    for (const channelId of artifact.channels) {
+      if (!manifestChannels.includes(channelId)) {
+        fail(`Managed plugin ${artifact.id} is missing declared channel ${channelId} in openclaw.plugin.json`)
+        return
+      }
+    }
+  }
+
+  const packageManifest = readJson(packageManifestPath)
+  const packageVersion = String(packageManifest?.version || '').trim()
+  if (packageVersion !== artifact.version) {
+    fail(
+      `Managed plugin package version mismatch for ${artifact.id}: manifest=${artifact.version}, package.json=${packageVersion || 'missing'}`
+    )
+    return
+  }
+
+  const extensionEntries = Array.isArray(packageManifest?.openclaw?.extensions)
+    ? packageManifest.openclaw.extensions.map((item) => String(item || '').trim()).filter(Boolean)
+    : []
+  if (extensionEntries.length === 0) {
+    fail(`Managed plugin ${artifact.id} is missing openclaw.extensions in package.json`)
+    return
+  }
+
+  for (const extensionEntry of extensionEntries) {
+    ensureFile(path.join(pluginDir, extensionEntry), `managed plugin entry ${artifact.id}:${extensionEntry}`)
+  }
+
+  info(`Validated managed plugin ${artifact.id}: ${path.relative(repoRoot, pluginDir)}`)
+}
+
 if (!exists(manifestPath)) {
   fail(`Missing manifest: ${path.relative(repoRoot, manifestPath)}`)
   process.exit(process.exitCode || 1)
@@ -95,6 +169,9 @@ if (!exists(manifestPath)) {
 
 const manifest = readJson(manifestPath)
 const runtimeArtifacts = Array.isArray(manifest?.artifacts?.runtime) ? manifest.artifacts.runtime : []
+const managedPluginArtifacts = Array.isArray(manifest?.artifacts?.managedPlugins)
+  ? manifest.artifacts.managedPlugins
+  : []
 const tgzFileName = manifest?.artifacts?.tgz?.fileName
 const tgzPath = tgzFileName ? path.join(bundleRoot, tgzFileName) : null
 
@@ -123,6 +200,14 @@ if (runtimeArtifacts.length === 0) {
     }
     validateRuntimeArtifact(artifact)
   }
+}
+
+for (const artifact of managedPluginArtifacts) {
+  if (!artifact?.id || !artifact?.directoryName || !artifact?.version) {
+    fail(`Managed plugin artifact entry is incomplete: ${JSON.stringify(artifact)}`)
+    continue
+  }
+  validateManagedPluginArtifact(artifact)
 }
 
 if (

@@ -4,6 +4,7 @@ import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { readLocalPublishUrl } from './electron-builder-local-config.mjs'
 import { claimPackageVersion, persistPackageVersionState, releasePackageVersionClaim } from './package-version.mjs'
+import { verifyWinPackagedOpenClawBundle } from './check-win-packaged-openclaw-bundle.mjs'
 
 const forwardedArgs = process.argv.slice(2)
 const packageVersion = claimPackageVersion()
@@ -300,6 +301,26 @@ child.on('exit', (code, signal) => {
   }
 
   if ((code ?? 1) === 0) {
+    try {
+      const winUnpackedDir = join(currentReleaseDir, 'win-unpacked')
+      if (existsSync(winUnpackedDir)) {
+        verifyWinPackagedOpenClawBundle({ winUnpackedDir })
+      }
+    } catch (error) {
+      try {
+        releasePackageVersionClaim(packageVersion)
+      } catch (releaseError) {
+        console.error(
+          `[run-electron-builder] 鎵撳寘浜х墿楠岃瘉澶辫触锛屼笖鍥炴粴姣忔棩鐗堟湰璁℃暟澶辫触锛?{releaseError instanceof Error ? releaseError.message : String(releaseError)}`
+        )
+      }
+      console.error(
+        `[run-electron-builder] 鎵撳寘浜х墿楠岃瘉澶辫触锛?{error instanceof Error ? error.message : String(error)}`
+      )
+      process.exit(1)
+      return
+    }
+
     try {
       const persistedState = persistPackageVersionState(packageVersion)
       if (persistedState?.skipped) {

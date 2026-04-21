@@ -1,4 +1,4 @@
-﻿/**
+/**
  * OpenClaw CLI wrapper — all interactions via spawn
  */
 import type { ChildProcess } from 'node:child_process'
@@ -246,6 +246,12 @@ async function ensureOpenClawConfigRepairPreflight(): Promise<void> {
         return repairResult
       },
     })
+
+    const currentConfig = await readConfig().catch(() => null)
+    const normalizedManagedPluginConfig = sanitizeManagedPluginConfig(currentConfig)
+    if (normalizedManagedPluginConfig.changed) {
+      await writeConfig(normalizedManagedPluginConfig.config)
+    }
   })()
 
   return openClawConfigRepairPreflightPromise

@@ -23,6 +23,7 @@ import {
   resolveManagedPluginInstallPreflight,
   resolveManagedPluginInstallStrategy,
   restoreCapturedFeishuBotConfig,
+  shouldSkipFeishuPairingAfterSetup,
   shouldValidateFeishuManualCredentials,
 } from '../ChannelConnect'
 import { getChannelDefinition } from '../../lib/openclaw-channel-registry'
@@ -470,6 +471,53 @@ describe('ensureGatewayReadyForChannelConnect', () => {
     expect(ensureGatewayRunning).toHaveBeenCalledWith({ skipRuntimePrecheck: true })
     expect(getManagedChannelPluginStatus).toHaveBeenCalledWith('openclaw-weixin')
   })
+
+  it('allows Feishu to continue into the pairing step while ready state is still settling', async () => {
+    const reloadGatewayAfterChannelChange = vi.fn().mockResolvedValue({
+      ok: true,
+      running: true,
+      autoInstalledNode: false,
+      autoInstalledOpenClaw: false,
+      autoInstalledGatewayService: false,
+      autoPortMigrated: false,
+      effectivePort: 18789,
+      stateCode: 'healthy',
+      summary: 'Gateway 宸茬‘璁ゅ彲鐢?',
+      attemptedCommands: [],
+      evidence: [],
+      repairActionsTried: [],
+      repairOutcome: 'recovered',
+      safeToRetry: true,
+      stdout: '',
+      stderr: '',
+      code: 0,
+    })
+    const getManagedChannelPluginStatus = vi.fn().mockResolvedValue({
+      channelId: 'feishu',
+      pluginId: 'openclaw-lark',
+      summary: '椋炰功瀹樻柟鎻掍欢宸插畨瑁呭苟宸叉敞鍐岋紱loaded / ready 浠嶅緟涓婃父璇佹嵁銆?',
+      stages: [
+        { id: 'installed', state: 'verified', source: 'disk', message: 'installed' },
+        { id: 'registered', state: 'verified', source: 'plugins-list', message: 'registered' },
+        { id: 'loaded', state: 'verified', source: 'gateway-runtime', message: 'loaded' },
+        { id: 'ready', state: 'missing', source: 'gateway-runtime', message: 'ready' },
+      ],
+      evidence: [],
+    })
+
+    const appendLog = vi.fn()
+    const result = await ensureGatewayReadyForChannelConnect(
+      {
+        reloadGatewayAfterChannelChange,
+        getManagedChannelPluginStatus,
+      } as any,
+      appendLog,
+      { channelId: 'feishu', allowPendingManagedReady: true }
+    )
+
+    expect(result).toEqual({ ok: true })
+    expect(getManagedChannelPluginStatus).toHaveBeenCalledWith('feishu')
+  })
 })
 
 describe('QQ channel connect flow', () => {
@@ -710,6 +758,13 @@ describe('buildChannelConnectConnectedActionLabel', () => {
         skipPairing: true,
       })
     ).toBe('完成配置')
+  })
+})
+
+describe('shouldSkipFeishuPairingAfterSetup', () => {
+  it('keeps Feishu on the pairing step after both create and link flows', () => {
+    expect(shouldSkipFeishuPairingAfterSetup('create')).toBe(false)
+    expect(shouldSkipFeishuPairingAfterSetup('link')).toBe(false)
   })
 })
 

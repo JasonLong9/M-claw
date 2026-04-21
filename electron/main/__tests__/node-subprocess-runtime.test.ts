@@ -53,6 +53,63 @@ afterEach(() => {
 })
 
 describe('resolveQualifiedNodeRuntime', () => {
+  it('prefers the bundled OpenClaw Node runtime before shell or nvm discovery', async () => {
+    const result = await resolveQualifiedNodeRuntime(
+      {
+        env: TEST_ENV,
+        platform: 'win32',
+      },
+      {
+        inspectBundledDeliveryStatus: vi.fn(() => ({
+          manifestPath: 'C:\\Program Files\\Mclaw\\resources\\openclaw-bundle\\manifest.json',
+          manifest: null,
+          platform: 'win32',
+          arch: 'x64',
+          defaultDeliveryMode: 'bundled-runtime',
+          targetDeliveryMode: 'bundled-runtime',
+          runtimeArtifact: null,
+          runtimePath: 'C:\\Program Files\\Mclaw\\resources\\openclaw-bundle\\runtime\\windows-x64',
+          runtimeBinaryPath: 'C:\\Program Files\\Mclaw\\resources\\openclaw-bundle\\runtime\\windows-x64\\openclaw.cmd',
+        }) as any),
+        probeCapability: vi.fn(async () => makeNodeCapability({ platform: 'win32', resolvedPath: 'C:\\node22\\node.exe' })),
+        probeVersion: vi.fn(async (executablePath: string) => {
+          if (executablePath === 'C:\\Program Files\\Mclaw\\resources\\openclaw-bundle\\runtime\\windows-x64\\node.exe') {
+            return 'v24.14.1'
+          }
+          if (executablePath === 'C:\\node22\\node.exe') return 'v22.22.1'
+          return null
+        }),
+        resolveRequirement: vi.fn(async () => ({
+          minVersion: '22.16.0',
+          source: 'bundled-fallback' as const,
+        })),
+        resolveInstallPlan: vi.fn(async () =>
+          makeInstallPlan({
+            platform: 'win32',
+            detectedArch: 'x64',
+            installerArch: 'x64',
+            url: 'https://nodejs.org/dist/v24.14.0/node-v24.14.0-x64.msi',
+            filename: 'node-v24.14.0-x64.msi',
+          })
+        ),
+        detectNvmDir: vi.fn(async () => null),
+        listExecutablePathCandidates: vi.fn(() => ['C:\\node22\\node.exe']),
+      }
+    )
+
+    expect(result).toEqual({
+      ok: true,
+      runtime: expect.objectContaining({
+        executablePath: 'C:\\Program Files\\Mclaw\\resources\\openclaw-bundle\\runtime\\windows-x64\\node.exe',
+        version: 'v24.14.1',
+        installStrategy: 'installer',
+        source: 'bundled',
+        requiredVersion: '22.16.0',
+        targetVersion: '24.14.0',
+      }),
+    })
+  })
+
   it('prefers a healthy nvm runtime over an older shell node', async () => {
     const result = await resolveQualifiedNodeRuntime(
       {
@@ -237,6 +294,77 @@ describe('runNodeEvalWithQualifiedRuntime', () => {
         version: 'v24.14.0',
       }),
     })
+  })
+
+  it('executes eval scripts with the bundled OpenClaw Node runtime when available', async () => {
+    const execFile = vi.fn(
+      (
+        command: string,
+        args: string[],
+        _options: Record<string, unknown>,
+        callback: (error: Error | null, stdout: string, stderr: string) => void
+      ) => {
+        expect(command).toBe('C:\\Program Files\\Mclaw\\resources\\openclaw-bundle\\runtime\\windows-x64\\node.exe')
+        expect(args).toEqual(['--input-type=module', '--eval', 'console.log("bundled")'])
+        callback(null, 'bundled\n', '')
+      }
+    )
+
+    const result = await runNodeEvalWithQualifiedRuntime(
+      {
+        script: 'console.log("bundled")',
+        env: TEST_ENV,
+        platform: 'win32',
+      },
+      {
+        inspectBundledDeliveryStatus: vi.fn(() => ({
+          manifestPath: 'C:\\Program Files\\Mclaw\\resources\\openclaw-bundle\\manifest.json',
+          manifest: null,
+          platform: 'win32',
+          arch: 'x64',
+          defaultDeliveryMode: 'bundled-runtime',
+          targetDeliveryMode: 'bundled-runtime',
+          runtimeArtifact: null,
+          runtimePath: 'C:\\Program Files\\Mclaw\\resources\\openclaw-bundle\\runtime\\windows-x64',
+          runtimeBinaryPath: 'C:\\Program Files\\Mclaw\\resources\\openclaw-bundle\\runtime\\windows-x64\\openclaw.cmd',
+        }) as any),
+        probeCapability: vi.fn(async () =>
+          makeNodeCapability({
+            platform: 'win32',
+            resolvedPath: 'C:\\node22\\node.exe',
+          })
+        ),
+        probeVersion: vi.fn(async (executablePath: string) => {
+          if (executablePath === 'C:\\Program Files\\Mclaw\\resources\\openclaw-bundle\\runtime\\windows-x64\\node.exe') {
+            return 'v24.14.1'
+          }
+          if (executablePath === 'C:\\node22\\node.exe') return 'v22.22.1'
+          return null
+        }),
+        resolveRequirement: vi.fn(async () => ({
+          minVersion: '22.16.0',
+          source: 'bundled-fallback' as const,
+        })),
+        resolveInstallPlan: vi.fn(async () =>
+          makeInstallPlan({
+            platform: 'win32',
+            detectedArch: 'x64',
+            installerArch: 'x64',
+            url: 'https://nodejs.org/dist/v24.14.0/node-v24.14.0-x64.msi',
+            filename: 'node-v24.14.0-x64.msi',
+          })
+        ),
+        detectNvmDir: vi.fn(async () => null),
+        listExecutablePathCandidates: vi.fn(() => ['C:\\node22\\node.exe']),
+        execFile: execFile as any,
+      }
+    )
+
+    expect(result.ok).toBe(true)
+    expect(result.runtime?.source).toBe('bundled')
+    expect(result.runtime?.executablePath).toBe(
+      'C:\\Program Files\\Mclaw\\resources\\openclaw-bundle\\runtime\\windows-x64\\node.exe'
+    )
   })
 
   it('does not fall back to Electron process.execPath when the host runtime is Electron', async () => {

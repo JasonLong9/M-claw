@@ -5,8 +5,9 @@ import type {
 } from '../../src/shared/openclaw-phase2'
 import { collectChangedJsonPaths } from './openclaw-config-diff'
 import { resolveGatewayApplyAction } from './gateway-apply-policy'
-import { readConfig, runCli } from './cli'
+import { getOpenClawPaths, readConfig, runCli } from './cli'
 import { restartGatewayLifecycle } from './gateway-lifecycle-controller'
+import { ensureFeishuManagedWorkspaceBootstrap } from './feishu-managed-workspace-bootstrap'
 import { guardedWriteConfig } from './openclaw-config-guard'
 
 let configWriteQueue: Promise<void> = Promise.resolve()
@@ -134,6 +135,23 @@ function appendMessage(baseMessage: string | undefined, extraMessage: string): s
   return `${normalizedBase} ${extraMessage}`
 }
 
+async function syncFeishuManagedWorkspaceBootstrap(config: Record<string, any>): Promise<void> {
+  const openClawPaths = await getOpenClawPaths().catch(() => null)
+  const homeDir = String(openClawPaths?.homeDir || '').trim()
+  if (!homeDir) return
+
+  const result = await ensureFeishuManagedWorkspaceBootstrap({
+    homeDir,
+    config,
+  })
+
+  if (result.changed && process.env.NODE_ENV !== 'test') {
+    console.info(
+      `[feishu-workspace-bootstrap] updated=${result.changedWorkspaces.length} homeDir=${homeDir}`
+    )
+  }
+}
+
 async function applyGatewayDecision(action: 'none' | 'hot-reload' | 'restart'): Promise<{
   ok: boolean
   mode: 'none' | 'hot-reload' | 'restart'
@@ -207,6 +225,16 @@ export async function applyConfigPatchGuarded(
       },
       preferredCandidate
     )
+
+    if (writeResult.ok && writeResult.wrote) {
+      await syncFeishuManagedWorkspaceBootstrap(nextConfig).catch((error) => {
+        if (process.env.NODE_ENV !== 'test') {
+          console.warn(
+            `[feishu-workspace-bootstrap] sync failed: ${error instanceof Error ? error.message : String(error)}`
+          )
+        }
+      })
+    }
 
     if (writeResult.ok && writeResult.wrote && options.applyGatewayPolicy !== false) {
       const decision = resolveGatewayApplyAction({

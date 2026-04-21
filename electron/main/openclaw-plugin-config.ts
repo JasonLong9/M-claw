@@ -26,6 +26,17 @@ function normalizePluginId(value: unknown): string {
   return String(value || '').trim()
 }
 
+function normalizeManagedInstallSource(pluginId: string, source: unknown): string {
+  const normalizedPluginId = normalizePluginId(pluginId)
+  const normalizedSource = String(source || '').trim().toLowerCase()
+
+  if (normalizedPluginId === FEISHU_OFFICIAL_PLUGIN_ID && normalizedSource === 'bundled') {
+    return 'path'
+  }
+
+  return normalizedSource
+}
+
 function normalizeBlockedPluginIds(values: string[] | undefined): Set<string> {
   return new Set((values || []).map((value) => normalizePluginId(value)).filter(Boolean))
 }
@@ -158,6 +169,15 @@ export function sanitizeManagedPluginConfig(
     for (const pluginId of new Set([...LEGACY_PLUGIN_INSTALL_IDS, ...blockedPluginIds])) {
       if (pluginId in plugins.installs) {
         delete plugins.installs[pluginId]
+        changed = true
+      }
+    }
+
+    for (const [pluginId, installRecord] of Object.entries(plugins.installs)) {
+      if (!hasOwnRecord(installRecord)) continue
+      const normalizedSource = normalizeManagedInstallSource(pluginId, installRecord.source)
+      if (normalizedSource && normalizedSource !== String(installRecord.source || '').trim()) {
+        installRecord.source = normalizedSource
         changed = true
       }
     }

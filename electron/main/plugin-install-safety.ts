@@ -1,11 +1,13 @@
 import { pruneStalePluginConfigEntries } from './openclaw-config-warnings'
 import { runNodeEvalWithQualifiedRuntime } from './node-subprocess-runtime'
+import { inspectBundledOpenClawDeliveryStatus } from './openclaw-bundled-manifest'
 import { formatDisplayPath } from './openclaw-paths'
 import {
   isOfficialManagedPluginId,
   listManagedChannelPluginRecords,
 } from '../../src/shared/managed-channel-plugin-registry'
 
+const fs = process.getBuiltinModule('node:fs') as typeof import('node:fs')
 const { createRequire } = process.getBuiltinModule('node:module') as typeof import('node:module')
 const path = process.getBuiltinModule('node:path') as typeof import('node:path')
 const { mkdir, readFile, readdir, rename, stat } =
@@ -134,24 +136,85 @@ async function pluginTreeReferencesPluginSdk(rootPath: string): Promise<boolean>
   return false
 }
 
+function resolvePluginSdkSmokeHostPackageRoot(): string {
+  const bundledStatus = inspectBundledOpenClawDeliveryStatus({
+    resourcesPath: process.resourcesPath,
+    cwd: process.cwd(),
+  })
+  const runtimePath = String(bundledStatus.runtimePath || '').trim()
+  if (!runtimePath) return ''
+
+  const packageRoot = path.join(runtimePath, 'node_modules', 'openclaw')
+  try {
+    return fs.existsSync(path.join(packageRoot, 'package.json')) ? packageRoot : ''
+  } catch {
+    return ''
+  }
+}
+
 async function smokeTestPluginEntry(
   entryPath: string,
   options: Pick<PluginInstallSafetyOptions, 'runNodeEval'>
 ): Promise<{ ok: boolean; stderr: string }> {
+  const hostPackageRoot = resolvePluginSdkSmokeHostPackageRoot()
   const script = `
+    import fs from 'node:fs'
+    import path from 'node:path'
+    import { createRequire } from 'node:module'
     import { pathToFileURL } from 'node:url'
+    const entryPath = process.argv[1]
+    const openclawPackageRoot = process.argv[2] || ''
+    function buildPluginSdkAliasMap(packageRoot) {
+      const packageJsonPath = path.join(packageRoot, 'package.json')
+      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'))
+      const aliasMap = {
+        'openclaw/plugin-sdk': path.join(packageRoot, 'dist', 'plugin-sdk', 'root-alias.cjs'),
+      }
+      for (const key of Object.keys(packageJson.exports || {})) {
+        if (!key.startsWith('./plugin-sdk/')) continue
+        const subpath = key.slice('./plugin-sdk/'.length)
+        const candidate = path.join(packageRoot, 'dist', 'plugin-sdk', subpath + '.js')
+        if (fs.existsSync(candidate)) {
+          aliasMap['openclaw/plugin-sdk/' + subpath] = candidate
+        }
+      }
+      return aliasMap
+    }
+    function loadWithPluginSdkAlias(packageRoot) {
+      const packageJsonPath = path.join(packageRoot, 'package.json')
+      const require = createRequire(pathToFileURL(packageJsonPath).href)
+      const { createJiti } = require(path.join(packageRoot, 'node_modules', 'jiti'))
+      const loader = createJiti(packageJsonPath, {
+        alias: buildPluginSdkAliasMap(packageRoot),
+        interopDefault: true,
+        tryNative: true,
+        extensions: ['.ts', '.tsx', '.mts', '.cts', '.mtsx', '.ctsx', '.js', '.mjs', '.cjs', '.json'],
+      })
+      loader(entryPath)
+    }
     try {
-      await import(pathToFileURL(process.argv[1]).href)
+      await import(pathToFileURL(entryPath).href)
+      process.exit(0)
     } catch (error) {
-      console.error(error?.stack || error?.message || String(error))
-      process.exit(1)
+      const detail = error?.stack || error?.message || String(error)
+      if (!openclawPackageRoot || !/openclaw\\/plugin-sdk/i.test(detail)) {
+        console.error(detail)
+        process.exit(1)
+      }
+      try {
+        loadWithPluginSdkAlias(openclawPackageRoot)
+        process.exit(0)
+      } catch (aliasError) {
+        console.error(aliasError?.stack || aliasError?.message || String(aliasError))
+        process.exit(1)
+      }
     }
   `
 
   const runNodeEval = options.runNodeEval || runNodeEvalWithQualifiedRuntime
   const result = await runNodeEval({
     script,
-    args: [entryPath],
+    args: [entryPath, hostPackageRoot],
   })
   const mergedStderr = [result.stderr, result.stdout].filter(Boolean).join('\n').trim()
 

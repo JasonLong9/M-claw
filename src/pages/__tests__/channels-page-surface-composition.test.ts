@@ -1,0 +1,45 @@
+import { describe, expect, it } from 'vitest'
+
+import surfaceCompositionSource from '../channels-page-surface-composition.ts?raw'
+
+describe('channels-page-surface-composition hook', () => {
+  it('keeps the shared target-state and surface-prop composition contract behind one hook', () => {
+    expect(surfaceCompositionSource).toContain('import type {')
+    expect(surfaceCompositionSource).toContain('ChannelsPageSurfaceCompositionOptions,')
+    expect(surfaceCompositionSource).toContain('ChannelsPageSurfaceCompositionResult,')
+    expect(surfaceCompositionSource).toContain("} from './channels-page-surface-composition-contract'")
+    expect(surfaceCompositionSource).toContain("import { useChannelsPageMainSurfaceProps } from './channels-page-main-surface-props'")
+    expect(surfaceCompositionSource).toContain("import { useChannelsPageModalProps } from './channels-page-modal-props'")
+    expect(surfaceCompositionSource).toContain("import { useChannelsPageModelModalProps } from './channels-page-model-modal-props'")
+    expect(surfaceCompositionSource).toContain("import { useChannelsPageTargetStateGroups } from './channels-page-target-state-groups'")
+    expect(surfaceCompositionSource).toContain('export function useChannelsPageSurfaceComposition({')
+    expect(surfaceCompositionSource).toContain('}: ChannelsPageSurfaceCompositionOptions): ChannelsPageSurfaceCompositionResult {')
+    expect(surfaceCompositionSource).not.toContain('export interface UseChannelsPageSurfaceCompositionOptions {')
+  })
+
+  it('keeps target-state grouping plus modal/main/model surface prop mapping inside one shared hook', () => {
+    expect(surfaceCompositionSource).toContain('const {')
+    expect(surfaceCompositionSource).toContain('configTargetState,')
+    expect(surfaceCompositionSource).toContain('pairingTargetState,')
+    expect(surfaceCompositionSource).toContain('diagnosticsTargetState,')
+    expect(surfaceCompositionSource).toContain('} = useChannelsPageTargetStateGroups({')
+    expect(surfaceCompositionSource).toContain('refreshChannels: refreshChannelsInBackground,')
+    expect(surfaceCompositionSource).toContain('const {')
+    expect(surfaceCompositionSource).toContain('configModalProps,')
+    expect(surfaceCompositionSource).toContain('pairingModalProps,')
+    expect(surfaceCompositionSource).toContain('diagnosticsModalProps,')
+    expect(surfaceCompositionSource).toContain('} = useChannelsPageModalProps({')
+    expect(surfaceCompositionSource).toContain('configTargetState: {')
+    expect(surfaceCompositionSource).toContain('blockedBySharedStatus: configTargetState.blockedBySharedStatus,')
+    expect(surfaceCompositionSource).toContain('pairingTargetState: {')
+    expect(surfaceCompositionSource).toContain('blockedBySharedStatus: pairingTargetState.blockedBySharedStatus,')
+    expect(surfaceCompositionSource).toContain('diagnosticsTargetState: {')
+    expect(surfaceCompositionSource).toContain('refreshTargetChannelStatus: diagnosticsTargetState.refreshTargetChannelStatus,')
+    expect(surfaceCompositionSource).toContain('} = useChannelsPageMainSurfaceProps({')
+    expect(surfaceCompositionSource).toContain('} = useChannelsPageModelModalProps({')
+    expect(surfaceCompositionSource).toContain('topPanelProps,')
+    expect(surfaceCompositionSource).toContain('channelListPanelProps,')
+    expect(surfaceCompositionSource).toContain('channelCardsProps,')
+    expect(surfaceCompositionSource).toContain('modelConfigModalProps,')
+  })
+})

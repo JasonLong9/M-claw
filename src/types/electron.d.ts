@@ -263,6 +263,9 @@ interface FeishuOfficialPluginState {
   pluginId: string
   installedOnDisk: boolean
   installPath: string
+  installSource: string
+  bundledPayloadAvailable: boolean
+  bundledPayloadPath: string
   officialPluginConfigured: boolean
   legacyPluginIdsPresent: string[]
   configChanged: boolean
@@ -288,6 +291,40 @@ interface FeishuOfficialCliStatus {
   statusCommand: string[]
   statusOutput: string
   statusError: string
+}
+
+type FeishuOfficialCliGuidedMode =
+  | 'config-init-new'
+  | 'auth-login-recommend'
+  | 'auth-login-no-wait'
+
+interface FeishuOfficialCliSessionSnapshot {
+  active: boolean
+  sessionId: string | null
+  phase: 'idle' | 'running' | 'exited'
+  mode: FeishuOfficialCliGuidedMode | null
+  output: string
+  code: number | null
+  ok: boolean
+  canceled: boolean
+  command: string[]
+  latestAuthUrl: string
+  latestUserCode: string
+}
+
+interface FeishuOfficialCliSessionEvent {
+  sessionId: string
+  type: 'started' | 'output' | 'challenge' | 'exit'
+  stream?: 'stdout' | 'stderr'
+  chunk?: string
+  phase?: FeishuOfficialCliSessionSnapshot['phase']
+  code?: number | null
+  ok?: boolean
+  canceled?: boolean
+  command?: string[]
+  mode?: FeishuOfficialCliGuidedMode | null
+  latestAuthUrl?: string
+  latestUserCode?: string
 }
 
 type CommandControlDomain =
@@ -1753,9 +1790,13 @@ interface ElectronApi {
   getFeishuOfficialPluginState: () => Promise<FeishuOfficialPluginState>
   ensureFeishuOfficialPluginReady: () => Promise<EnsureFeishuOfficialPluginReadyResult>
   getFeishuOfficialCliStatus: () => Promise<FeishuOfficialCliStatus>
+  getFeishuOfficialCliSessionState: () => Promise<FeishuOfficialCliSessionSnapshot>
+  startFeishuOfficialCliSession: (mode: FeishuOfficialCliGuidedMode) => Promise<FeishuOfficialCliSessionSnapshot>
+  sendFeishuOfficialCliSessionInput: (sessionId: string, input: string) => Promise<{ ok: boolean; message?: string }>
+  stopFeishuOfficialCliSession: () => Promise<{ ok: boolean }>
   validateFeishuCredentials: (appId: string, appSecret: string, domain?: string) => Promise<CliResult>
   getFeishuInstallerState: () => Promise<FeishuInstallerSessionSnapshot>
-  startFeishuInstaller: () => Promise<FeishuInstallerSessionSnapshot>
+  startFeishuInstaller: (mode?: 'create' | 'link') => Promise<FeishuInstallerSessionSnapshot>
   listenFeishuBotDiagnosticActivity: (
     accountId?: FeishuBotDiagnosticListenRequest['accountId'],
     timeoutMs?: FeishuBotDiagnosticListenRequest['timeoutMs'],
@@ -1765,6 +1806,7 @@ interface ElectronApi {
   sendFeishuDiagnosticMessage: (request: FeishuBotDiagnosticSendRequest) => Promise<FeishuBotDiagnosticSendResult>
   sendFeishuInstallerInput: (sessionId: string, input: string) => Promise<{ ok: boolean; message?: string }>
   stopFeishuInstaller: () => Promise<{ ok: boolean }>
+  onFeishuOfficialCliSessionEvent: (listener: (payload: FeishuOfficialCliSessionEvent) => void) => () => void
   onFeishuInstallerEvent: (listener: (payload: FeishuInstallerSessionEvent) => void) => () => void
   getWeixinInstallerState: () => Promise<WeixinInstallerSessionSnapshot>
   startWeixinInstaller: () => Promise<WeixinInstallerSessionSnapshot>

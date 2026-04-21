@@ -140,6 +140,12 @@ import {
   writeFeishuInstallerSessionInput,
 } from './feishu-installer-session'
 import {
+  getFeishuOfficialCliSessionSnapshot,
+  startFeishuOfficialCliSession,
+  stopFeishuOfficialCliSession,
+  writeFeishuOfficialCliSessionInput,
+} from './feishu-official-cli-session'
+import {
   cancelFeishuBotDiagnosticListen,
   listenForFeishuBotDiagnosticActivity,
   sendFeishuDiagnosticMessage,
@@ -158,6 +164,7 @@ import {
   getFeishuOfficialPluginState,
 } from './feishu-official-plugin-state'
 import { getFeishuOfficialCliStatus } from './feishu-official-cli-state'
+import type { FeishuOfficialCliGuidedMode } from './feishu-official-cli'
 import { setupDingtalkOfficialChannel } from './dingtalk-official-channel'
 import {
   getOfficialChannelStatus,
@@ -725,12 +732,22 @@ export function registerIpcHandlers() {
   ipcMain.handle('plugins:feishu-state', () => getFeishuOfficialPluginState())
   ipcMain.handle('plugins:feishu-ensure-ready', () => ensureFeishuOfficialPluginReady())
   ipcMain.handle('feishu:lark-cli:status:get', () => getFeishuOfficialCliStatus())
+  ipcMain.handle('feishu:lark-cli:session:get', () => getFeishuOfficialCliSessionSnapshot())
+  ipcMain.handle('feishu:lark-cli:session:start', (event, mode: FeishuOfficialCliGuidedMode) =>
+    startFeishuOfficialCliSession(mode, (payload) => {
+      event.sender.send('feishu:lark-cli:event', payload)
+    })
+  )
+  ipcMain.handle('feishu:lark-cli:session:input', (_e, sessionId: string, input: string) =>
+    writeFeishuOfficialCliSessionInput(sessionId, input)
+  )
+  ipcMain.handle('feishu:lark-cli:session:stop', () => stopFeishuOfficialCliSession())
   ipcMain.handle('feishu:credentials:validate', (_e, appId: string, appSecret: string, domain?: string) =>
     validateFeishuCredentials(appId, appSecret, domain)
   )
   ipcMain.handle('feishu:installer:state:get', () => getFeishuInstallerSessionSnapshot())
-  ipcMain.handle('feishu:installer:start', (event) =>
-    startFeishuInstallerSession((payload) => {
+  ipcMain.handle('feishu:installer:start', (event, mode?: 'create' | 'link') =>
+    startFeishuInstallerSession(mode, (payload) => {
       event.sender.send('feishu:installer:event', payload)
     })
   )

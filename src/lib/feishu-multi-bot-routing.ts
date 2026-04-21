@@ -1,4 +1,4 @@
-const DEFAULT_FEISHU_ACCOUNT_ID = 'default'
+﻿const DEFAULT_FEISHU_ACCOUNT_ID = 'default'
 const FEISHU_AGENT_ID_PREFIX = 'feishu-'
 const FEISHU_DM_SCOPE = 'per-account-channel-peer'
 const LEGACY_FEISHU_AGENT_IDS = ['feishu-bot']
@@ -99,7 +99,7 @@ export function extractFeishuRoutingBots(config: Record<string, any> | null): Fe
 export function buildExpectedFeishuAgents(bots: FeishuRoutingBot[]): FeishuManagedAgent[] {
   return bots.map((bot) => ({
     id: getFeishuManagedAgentId(bot.accountId),
-    name: `${bot.name} Agent`,
+    name: `${bot.name} 助手`,
     workspace: getFeishuManagedWorkspace(bot.accountId),
   }))
 }
@@ -285,3 +285,4 @@ export function detectFeishuIsolationDrift(config: Record<string, any> | null): 
     conflictingBindingAccountIds,
   }
 }
+

@@ -1,0 +1,48 @@
+import { describe, expect, it } from 'vitest'
+
+import dataSource from '../channels-page-data.ts?raw'
+
+describe('channels-page-data hook', () => {
+  it('keeps the shared data controller contract for channel state, refresh state, and the fetch lifecycle', () => {
+    expect(dataSource).toContain("import { useEffect, useRef, useState } from 'react'")
+    expect(dataSource).toContain("import { createPageDataCache } from '../lib/page-data-cache'")
+    expect(dataSource).toContain('ChannelsPageChannelInfo,')
+    expect(dataSource).toContain('ChannelsPageDataOptions,')
+    expect(dataSource).toContain('ChannelsPageDataResult,')
+    expect(dataSource).toContain('ChannelsPageFetchChannelsOptions,')
+    expect(dataSource).toContain('ChannelsPageSnapshot,')
+    expect(dataSource).toContain('FeishuRuntimeStatusState,')
+    expect(dataSource).toContain("} from './channels-page-data-contract'")
+    expect(dataSource).toContain('export function useChannelsPageData({')
+    expect(dataSource).toContain('}: ChannelsPageDataOptions): ChannelsPageDataResult {')
+    expect(dataSource).toContain('const initialSnapshotRef = useRef<ChannelsPageSnapshot | null>(channelsPageCache.get()?.data || null)')
+    expect(dataSource).toContain('const [channels, setChannels] = useState<ChannelsPageChannelInfo[]>(initialSnapshot?.channels || [])')
+    expect(dataSource).toContain('const [loading, setLoading] = useState(!initialSnapshot)')
+    expect(dataSource).toContain('const [refreshing, setRefreshing] = useState(false)')
+    expect(dataSource).toContain("const [error, setError] = useState('')")
+    expect(dataSource).toContain('const [legacyFeishuAgentIds, setLegacyFeishuAgentIds] = useState<string[]>([])')
+    expect(dataSource).toContain('options?: ChannelsPageFetchChannelsOptions')
+    expect(dataSource).toContain('const handleRefreshChannels = async () => {')
+    expect(dataSource).not.toContain('export interface ChannelsPageChannelInfo {')
+    expect(dataSource).not.toContain('export interface ChannelsPageSnapshot {')
+    expect(dataSource).not.toContain('interface UseChannelsPageDataOptions {')
+  })
+
+  it('keeps config normalization, channel listing, cache updates, and initial background refresh inside one shared hook', () => {
+    expect(dataSource).toContain('window.api.getFeishuOfficialPluginState().catch(() => null)')
+    expect(dataSource).toContain('window.api.listWeixinAccounts().catch(() => [])')
+    expect(dataSource).toContain('const pluginStatusCache: Partial<Record<string, ManagedChannelPluginStatusView | null>> = {}')
+    expect(dataSource).toContain('const feishuRuntimeStatus: FeishuRuntimeStatusRecord = await window.api')
+    expect(dataSource).toContain('const normalizedConfig = feishuPluginState?.normalizedConfig || sanitizeFeishuPluginConfig(config)')
+    expect(dataSource).toContain('setLegacyFeishuAgentIds(listResidualLegacyFeishuAgentIds(normalizedConfig))')
+    expect(dataSource).toContain('const feishuBots = listFeishuBots(normalizedConfig)')
+    expect(dataSource).toContain("const weixinConfig = config.channels?.['openclaw-weixin']")
+    expect(dataSource).toContain('const identity = resolveManagedChannelIdentity({')
+    expect(dataSource).toContain('setChannels(channelList)')
+    expect(dataSource).toContain('syncSelectedChannelSnapshots(channelList)')
+    expect(dataSource).toContain('channelsPageCache.set({ channels: channelList })')
+    expect(dataSource).toContain("void fetchChannels({ background: Boolean(initialSnapshot) })")
+    expect(dataSource).toContain('setRefreshing(true)')
+    expect(dataSource).toContain('setRefreshing(false)')
+  })
+})

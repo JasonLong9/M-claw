@@ -1,0 +1,44 @@
+import { describe, expect, it } from 'vitest'
+
+import configModalShellSource from '../ChannelConfigModalShell.tsx?raw'
+
+describe('ChannelConfigModalShell', () => {
+  it('keeps the shared config-modal shell contract for connect and pairing-step routing', () => {
+    expect(configModalShellSource).toContain("import ChannelConnect, { type ChannelConnectNextPayload } from '../pages/ChannelConnect'")
+    expect(configModalShellSource).toContain('getConfigModalTitle,')
+    expect(configModalShellSource).toContain('type ChannelPairingTarget,')
+    expect(configModalShellSource).toContain('type ChannelsConfigStep,')
+    expect(configModalShellSource).toContain("import type { FeishuSharedStatusAlertState } from './FeishuSharedStatusAlert'")
+    expect(configModalShellSource).toContain('opened: boolean')
+    expect(configModalShellSource).toContain('configStep: ChannelsConfigStep')
+    expect(configModalShellSource).toContain('selectedChannelId?: string | null')
+    expect(configModalShellSource).toContain('selectedTarget: ChannelPairingTarget | null')
+    expect(configModalShellSource).toContain('onChannelConnectNext: (payload: ChannelConnectNextPayload) => void')
+    expect(configModalShellSource).toContain('pairingIntroTitle: string')
+    expect(configModalShellSource).toContain('pairingIntroMessage: string')
+    expect(configModalShellSource).toContain('statusPending: boolean')
+    expect(configModalShellSource).toContain('missingAfterRefresh: boolean')
+    expect(configModalShellSource).toContain('blockedBySharedStatus: boolean')
+    expect(configModalShellSource).toContain('onBackToChannelConnect: () => void')
+  })
+
+  it('renders one shared config modal shell that switches between ChannelConnect and ChannelConfigPairingStep', () => {
+    expect(configModalShellSource).toContain('title={getConfigModalTitle(configStep, selectedTarget)}')
+    expect(configModalShellSource).toContain("selectedChannelId === 'openclaw-weixin'")
+    expect(configModalShellSource).toContain("selectedTarget?.channelId === 'openclaw-weixin'")
+    expect(configModalShellSource).toContain("maxHeight: 'calc(100vh - 120px)'")
+    expect(configModalShellSource).toContain("configStep === 'channel-connect'")
+    expect(configModalShellSource).toContain('<ChannelConnect')
+    expect(configModalShellSource).toContain('initialChannelId={selectedChannelId ?? undefined}')
+    expect(configModalShellSource).toContain('onNext={onChannelConnectNext}')
+    expect(configModalShellSource).toContain('onBack={onClose}')
+    expect(configModalShellSource).toContain('onSkip={onComplete}')
+    expect(configModalShellSource).toContain("configStep === 'pairing-code'")
+    expect(configModalShellSource).toContain('<ChannelConfigPairingStep')
+    expect(configModalShellSource).toContain('target={selectedTarget}')
+    expect(configModalShellSource).toContain('introTitle={pairingIntroTitle}')
+    expect(configModalShellSource).toContain('introMessage={pairingIntroMessage}')
+    expect(configModalShellSource).toContain('onBackToChannelConnect={onBackToChannelConnect}')
+    expect(configModalShellSource).toContain('onComplete={onComplete}')
+  })
+})

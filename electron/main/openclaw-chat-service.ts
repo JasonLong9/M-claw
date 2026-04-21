@@ -2559,6 +2559,108 @@ function buildChatMessageMergeFingerprint(message: ChatMessage): string {
   return `${message.role}::${text}::${images}`
 }
 
+function normalizeChatMessageCompositeText(text: string): string {
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function isCompositeLocalAssistantReplay(
+  localMessage: ChatMessage,
+  externalMessages: ChatMessage[]
+): boolean {
+  if (localMessage.role !== 'assistant') return false
+
+  const localText = normalizeChatMessageCompositeText(localMessage.text)
+  if (!localText) return false
+
+  const localCreatedAt = Number(localMessage.createdAt || 0)
+  const normalizedExternalTexts = Array.from(
+    new Set(
+      (Array.isArray(externalMessages) ? externalMessages : [])
+        .filter((message) => message.role === 'assistant')
+        .filter((message) => {
+          if (!Number.isFinite(localCreatedAt) || localCreatedAt <= 0) return true
+          const externalCreatedAt = Number(message.createdAt || 0)
+          if (!Number.isFinite(externalCreatedAt) || externalCreatedAt <= 0) return false
+          return externalCreatedAt >= localCreatedAt - 5 * 60_000 && externalCreatedAt <= localCreatedAt + 15_000
+        })
+        .slice(-6)
+        .map((message) => normalizeChatMessageCompositeText(message.text))
+        .filter((text) => text.length >= 8 && text.length < localText.length)
+        .filter((text) => localText.includes(text))
+    )
+  )
+
+  if (normalizedExternalTexts.length < 2) return false
+
+  const nonOverlappingMatches = normalizedExternalTexts
+    .map((text) => ({
+      text,
+      start: localText.indexOf(text),
+      end: localText.indexOf(text) + text.length,
+    }))
+    .filter((match) => match.start >= 0)
+    .sort((left, right) => left.start - right.start || right.text.length - left.text.length)
+    .reduce<Array<{ text: string; start: number; end: number }>>((result, match) => {
+      if (result.some((entry) => match.start < entry.end && match.end > entry.start)) {
+        return result
+      }
+      result.push(match)
+      return result
+    }, [])
+
+  if (nonOverlappingMatches.length < 2) return false
+
+  const coveredLength = nonOverlappingMatches.reduce((total, match) => total + match.text.length, 0)
+  return coveredLength >= Math.max(40, Math.floor(localText.length * 0.55))
+}
+
+function isLocalUserReplayForCompositeAssistantTurn(
+  localMessage: ChatMessage,
+  localIndex: number,
+  localMessages: ChatMessage[],
+  externalMessages: ChatMessage[]
+): boolean {
+  if (localMessage.role !== 'user') return false
+
+  const localText = normalizeChatMessageCompositeText(localMessage.text)
+  if (!localText) return false
+
+  let pairedAssistant: ChatMessage | null = null
+  for (let cursor = localIndex + 1; cursor < localMessages.length; cursor += 1) {
+    const candidate = localMessages[cursor]
+    if (candidate.role === 'user') break
+    if (candidate.role === 'assistant') {
+      pairedAssistant = candidate
+      break
+    }
+  }
+
+  if (!pairedAssistant || !isCompositeLocalAssistantReplay(pairedAssistant, externalMessages)) {
+    return false
+  }
+
+  const matchingExternalUsers = (Array.isArray(externalMessages) ? externalMessages : []).filter((message) => {
+    if (message.role !== 'user') return false
+    return normalizeChatMessageCompositeText(message.text) === localText
+  })
+  if (matchingExternalUsers.length === 0) return false
+
+  const localCreatedAt = Number(localMessage.createdAt || 0)
+  if (!Number.isFinite(localCreatedAt) || localCreatedAt <= 0) {
+    return true
+  }
+
+  return matchingExternalUsers.some((message) => {
+    const externalCreatedAt = Number(message.createdAt || 0)
+    if (!Number.isFinite(externalCreatedAt) || externalCreatedAt <= 0) {
+      return true
+    }
+    return externalCreatedAt >= localCreatedAt - 5 * 60_000 && externalCreatedAt <= localCreatedAt + 15_000
+  })
+}
+
 function areChatMessagesEquivalentForTranscriptMerge(left: ChatMessage, right: ChatMessage): boolean {
   if (buildChatMessageMergeFingerprint(left) !== buildChatMessageMergeFingerprint(right)) {
     return false
@@ -2577,13 +2679,21 @@ function mergeExternalTranscriptWithLocalMessages(
   externalMessages: ChatMessage[],
   localMessages: ChatMessage[]
 ): ChatMessage[] {
-  const mergedMessages = [...(Array.isArray(externalMessages) ? externalMessages : [])]
+  const normalizedExternalMessages = [...(Array.isArray(externalMessages) ? externalMessages : [])]
+    .sort((left, right) => left.createdAt - right.createdAt)
+  const mergedMessages = [...normalizedExternalMessages]
     .sort((left, right) => left.createdAt - right.createdAt)
   const normalizedLocalMessages = [...(Array.isArray(localMessages) ? localMessages : [])]
     .sort((left, right) => left.createdAt - right.createdAt)
 
-  for (const localMessage of normalizedLocalMessages) {
+  for (const [localIndex, localMessage] of normalizedLocalMessages.entries()) {
     if (mergedMessages.some((externalMessage) => areChatMessagesEquivalentForTranscriptMerge(externalMessage, localMessage))) {
+      continue
+    }
+    if (isLocalUserReplayForCompositeAssistantTurn(localMessage, localIndex, normalizedLocalMessages, normalizedExternalMessages)) {
+      continue
+    }
+    if (isCompositeLocalAssistantReplay(localMessage, normalizedExternalMessages)) {
       continue
     }
     mergedMessages.push(localMessage)

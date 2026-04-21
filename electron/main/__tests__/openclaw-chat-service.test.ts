@@ -5767,6 +5767,210 @@ describe('openclaw chat service', () => {
     ])
   })
 
+  it('suppresses a locally cached composite assistant reply once upstream history already exposes the split tool turns', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-external-transcript-composite-replay')
+
+    await appendLocalChatMessages({
+      scopeKey: 'fingerprint-external-transcript-composite-replay',
+      sessionId: 'remote-session',
+      sessionKey: 'agent:main:history-direct-session',
+      upstreamConfirmed: true,
+      agentId: 'main',
+      model: 'openai/gpt-5.4',
+      transportSessionId: 'transport-remote-session',
+      messages: [
+        {
+          id: 'local-user-1',
+          role: 'user',
+          text: 'List the top CPU processes',
+          createdAt: 9_100_000,
+          status: 'sent',
+        },
+        {
+          id: 'local-assistant-1',
+          role: 'assistant',
+          text: 'I will inspect the top CPU processes. Top CPU processes:\n1. proc-a\n2. proc-b',
+          createdAt: 9_104_000,
+          status: 'sent',
+          model: 'openai/gpt-5.4',
+        },
+      ],
+      updatedAt: 9_104_000,
+    })
+
+    const transcript = await getChatTranscript('remote-session', {
+      discoverOpenClaw,
+      runCommand: async (args) => {
+        if (args[0] === 'sessions') {
+          return {
+            ok: true,
+            stdout: JSON.stringify({
+              sessions: [
+                {
+                  sessionId: 'remote-session',
+                  key: 'agent:main:history-direct-session',
+                  agentId: 'main',
+                  model: 'openai/gpt-5.4',
+                  updatedAt: 9_104,
+                  kind: 'direct',
+                },
+              ],
+            }),
+            stderr: '',
+            code: 0,
+          }
+        }
+
+        if (args[0] === 'gateway' && args[1] === 'call' && args[2] === 'sessions.get') {
+          return {
+            ok: true,
+            stdout: JSON.stringify({
+              messages: [
+                {
+                  id: 'user-1',
+                  role: 'user',
+                  content: [{ type: 'text', text: 'List the top CPU processes' }],
+                  createdAt: 9_100,
+                },
+                {
+                  id: 'assistant-1',
+                  role: 'assistant',
+                  content: [{ type: 'text', text: 'I will inspect the top CPU processes.' }],
+                  createdAt: 9_101,
+                  model: 'openai/gpt-5.4',
+                },
+                {
+                  id: 'assistant-2',
+                  role: 'assistant',
+                  content: [{ type: 'text', text: 'Top CPU processes:\n1. proc-a\n2. proc-b' }],
+                  createdAt: 9_102,
+                  model: 'openai/gpt-5.4',
+                },
+              ],
+            }),
+            stderr: '',
+            code: 0,
+          }
+        }
+
+        return {
+          ok: false,
+          stdout: '',
+          stderr: 'unexpected command',
+          code: 1,
+        }
+      },
+    })
+
+    expect(transcript.messages.map((message) => message.text)).toEqual([
+      'List the top CPU processes',
+      'I will inspect the top CPU processes.',
+      'Top CPU processes:\n1. proc-a\n2. proc-b',
+    ])
+  })
+
+  it('suppresses a delayed locally cached user replay when its paired assistant turn is already split upstream', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-external-transcript-user-replay')
+
+    await appendLocalChatMessages({
+      scopeKey: 'fingerprint-external-transcript-user-replay',
+      sessionId: 'remote-session',
+      sessionKey: 'agent:main:history-direct-session',
+      upstreamConfirmed: true,
+      agentId: 'main',
+      model: 'openai/gpt-5.4',
+      transportSessionId: 'transport-remote-session',
+      messages: [
+        {
+          id: 'local-user-1',
+          role: 'user',
+          text: 'List the top CPU processes',
+          createdAt: 9_124_000,
+          status: 'sent',
+        },
+        {
+          id: 'local-assistant-1',
+          role: 'assistant',
+          text: 'I will inspect the top CPU processes. Top CPU processes:\n1. proc-a\n2. proc-b',
+          createdAt: 9_124_001,
+          status: 'sent',
+          model: 'openai/gpt-5.4',
+        },
+      ],
+      updatedAt: 9_124_001,
+    })
+
+    const transcript = await getChatTranscript('remote-session', {
+      discoverOpenClaw,
+      runCommand: async (args) => {
+        if (args[0] === 'sessions') {
+          return {
+            ok: true,
+            stdout: JSON.stringify({
+              sessions: [
+                {
+                  sessionId: 'remote-session',
+                  key: 'agent:main:history-direct-session',
+                  agentId: 'main',
+                  model: 'openai/gpt-5.4',
+                  updatedAt: 9_124,
+                  kind: 'direct',
+                },
+              ],
+            }),
+            stderr: '',
+            code: 0,
+          }
+        }
+
+        if (args[0] === 'gateway' && args[1] === 'call' && args[2] === 'sessions.get') {
+          return {
+            ok: true,
+            stdout: JSON.stringify({
+              messages: [
+                {
+                  id: 'user-1',
+                  role: 'user',
+                  content: [{ type: 'text', text: 'List the top CPU processes' }],
+                  createdAt: 9_100,
+                },
+                {
+                  id: 'assistant-1',
+                  role: 'assistant',
+                  content: [{ type: 'text', text: 'I will inspect the top CPU processes.' }],
+                  createdAt: 9_101,
+                  model: 'openai/gpt-5.4',
+                },
+                {
+                  id: 'assistant-2',
+                  role: 'assistant',
+                  content: [{ type: 'text', text: 'Top CPU processes:\n1. proc-a\n2. proc-b' }],
+                  createdAt: 9_102,
+                  model: 'openai/gpt-5.4',
+                },
+              ],
+            }),
+            stderr: '',
+            code: 0,
+          }
+        }
+
+        return {
+          ok: false,
+          stdout: '',
+          stderr: 'unexpected command',
+          code: 1,
+        }
+      },
+    })
+
+    expect(transcript.messages.map((message) => `${message.role}:${message.text}`)).toEqual([
+      'user:List the top CPU processes',
+      'assistant:I will inspect the top CPU processes.',
+      'assistant:Top CPU processes:\n1. proc-a\n2. proc-b',
+    ])
+  })
+
   it('prefers chat.history for direct sessions when the history flag and capability gate are enabled', async () => {
     const discoverOpenClaw = createDiscovery('fingerprint-chat-history-primary')
     const capturedCommands: string[][] = []

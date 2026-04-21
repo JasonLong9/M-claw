@@ -3,6 +3,7 @@ const path = process.getBuiltinModule('node:path') as typeof import('node:path')
 
 import { probePlatformCommandCapability } from './command-capabilities'
 import { detectNvmDir, listInstalledNvmNodeBinDirs } from './nvm-node-runtime'
+import { inspectBundledOpenClawDeliveryStatus } from './openclaw-bundled-manifest'
 import {
   DEFAULT_BUNDLED_NODE_REQUIREMENT,
   resolveNodeInstallPlan,
@@ -18,7 +19,7 @@ export interface QualifiedNodeRuntime {
   executablePath: string
   version: string
   installStrategy: 'nvm' | 'installer'
-  source: 'shell' | 'nvm' | 'candidate'
+  source: 'bundled' | 'shell' | 'nvm' | 'candidate'
   requiredVersion: string
   targetVersion: string
 }
@@ -79,6 +80,7 @@ interface ProbeNodeRuntimeDependencies {
       cwd: string
     }
   ) => Promise<string | null>
+  inspectBundledDeliveryStatus?: typeof inspectBundledOpenClawDeliveryStatus
   resolveRequirement?: typeof resolveOpenClawNodeRequirement
   resolveInstallPlan?: typeof resolveNodeInstallPlan
   detectNvmDir?: typeof detectNvmDir
@@ -114,6 +116,10 @@ function buildLookupEnv(options: ProbeNodeRuntimeOptions): NodeJS.ProcessEnv {
       env,
     }),
   }
+}
+
+function getPathModuleForPlatform(platform: NodeJS.Platform): typeof path.win32 | typeof path.posix {
+  return platform === 'win32' ? path.win32 : path.posix
 }
 
 async function defaultProbeNodeVersion(
@@ -182,6 +188,40 @@ async function probeRuntimeCandidate(
   }
 }
 
+async function probeBundledRuntimeCandidate(
+  options: ProbeNodeRuntimeOptions,
+  dependencies: Pick<ProbeNodeRuntimeDependencies, 'inspectBundledDeliveryStatus' | 'probeVersion' | 'cwdResolver'>
+): Promise<RuntimeCandidateWithPath | null> {
+  const platform = options.platform || process.platform
+  const timeoutMs = options.timeoutMs ?? MAIN_RUNTIME_POLICY.cli.lightweightProbeTimeoutMs
+  const env = buildLookupEnv(options)
+  const cwd = (dependencies.cwdResolver || resolveSafeWorkingDirectory)({
+    env,
+    platform,
+  })
+  const inspectBundledDeliveryStatusImpl =
+    dependencies.inspectBundledDeliveryStatus || inspectBundledOpenClawDeliveryStatus
+  const bundledDeliveryStatus = inspectBundledDeliveryStatusImpl({
+    cwd,
+    resourcesPath: process.resourcesPath,
+    env,
+    platform,
+  })
+  const runtimePath = normalizeVersion(bundledDeliveryStatus.runtimePath)
+  if (!runtimePath) return null
+
+  const executablePath = getPathModuleForPlatform(platform).join(
+    runtimePath,
+    platform === 'win32' ? 'node.exe' : 'node'
+  )
+
+  return await probeRuntimeCandidate(
+    executablePath,
+    { timeoutMs, env, cwd },
+    dependencies.probeVersion || defaultProbeNodeVersion
+  )
+}
+
 function candidateMeetsRequirement(
   candidate: RuntimeCandidateWithPath | null,
   requiredVersion: string
@@ -218,6 +258,29 @@ export async function resolveQualifiedNodeRuntime(
   const requiredVersion = installPlan?.requiredVersion || requirement.minVersion
   const targetVersion = installPlan?.version || ''
   const detectedVersions = new Set<string>()
+  const pathModule = getPathModuleForPlatform(platform)
+
+  const bundledCandidate = await probeBundledRuntimeCandidate(options, {
+    inspectBundledDeliveryStatus: dependencies.inspectBundledDeliveryStatus,
+    probeVersion,
+    cwdResolver,
+  })
+  if (bundledCandidate?.version) {
+    detectedVersions.add(bundledCandidate.version)
+    if (candidateMeetsRequirement(bundledCandidate, requiredVersion)) {
+      return {
+        ok: true,
+        runtime: {
+          executablePath: bundledCandidate.executablePath,
+          version: bundledCandidate.version,
+          installStrategy: 'installer',
+          source: 'bundled',
+          requiredVersion,
+          targetVersion,
+        },
+      }
+    }
+  }
 
   const capability = await probeCapability('node', {
     platform,
@@ -239,14 +302,16 @@ export async function resolveQualifiedNodeRuntime(
     const candidateBins = Array.from(
       new Set(
         [
-          targetVersion ? path.join(nvmDir, 'versions', 'node', `v${targetVersion.replace(/^v/, '')}`, 'bin') : '',
+          targetVersion
+            ? pathModule.join(nvmDir, 'versions', 'node', `v${targetVersion.replace(/^v/, '')}`, 'bin')
+            : '',
           ...(await listInstalledNvmNodeBinDirsImpl(nvmDir).catch(() => [])),
         ].filter(Boolean)
       )
     )
 
     for (const candidateBin of candidateBins) {
-      const executablePath = path.join(candidateBin, platform === 'win32' ? 'node.exe' : 'node')
+      const executablePath = pathModule.join(candidateBin, platform === 'win32' ? 'node.exe' : 'node')
       nvmCandidate = await probeRuntimeCandidate(
         executablePath,
         { timeoutMs, env: lookupEnv, cwd },

@@ -1,8 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { cancelActiveCommandsMock, stopFeishuInstallerSessionMock, stopWeixinInstallerSessionMock } = vi.hoisted(() => ({
+const {
+  cancelActiveCommandsMock,
+  stopFeishuInstallerSessionMock,
+  stopFeishuOfficialCliSessionMock,
+  stopWeixinInstallerSessionMock,
+} = vi.hoisted(() => ({
   cancelActiveCommandsMock: vi.fn(),
   stopFeishuInstallerSessionMock: vi.fn(),
+  stopFeishuOfficialCliSessionMock: vi.fn(),
   stopWeixinInstallerSessionMock: vi.fn(),
 }))
 
@@ -12,6 +18,10 @@ vi.mock('../cli', () => ({
 
 vi.mock('../feishu-installer-session', () => ({
   stopFeishuInstallerSession: stopFeishuInstallerSessionMock,
+}))
+
+vi.mock('../feishu-official-cli-session', () => ({
+  stopFeishuOfficialCliSession: stopFeishuOfficialCliSessionMock,
 }))
 
 vi.mock('../weixin-installer-session', () => ({
@@ -24,6 +34,7 @@ describe('app exit cleanup', () => {
   beforeEach(() => {
     cancelActiveCommandsMock.mockReset()
     stopFeishuInstallerSessionMock.mockReset()
+    stopFeishuOfficialCliSessionMock.mockReset()
     stopWeixinInstallerSessionMock.mockReset()
     cancelActiveCommandsMock.mockResolvedValue({
       canceledDomains: [],
@@ -31,6 +42,7 @@ describe('app exit cleanup', () => {
       untouchedDomains: [],
     })
     stopFeishuInstallerSessionMock.mockResolvedValue({ ok: true })
+    stopFeishuOfficialCliSessionMock.mockResolvedValue({ ok: true })
     stopWeixinInstallerSessionMock.mockResolvedValue({ ok: true })
   })
 
@@ -54,12 +66,14 @@ describe('app exit cleanup', () => {
       'env',
       'plugin-install',
       'feishu-installer',
+      'feishu-lark-cli',
       'weixin-installer',
       'upgrade',
       'env-setup',
       'global',
     ])
     expect(stopFeishuInstallerSessionMock).toHaveBeenCalledTimes(1)
+    expect(stopFeishuOfficialCliSessionMock).toHaveBeenCalledTimes(1)
     expect(stopWeixinInstallerSessionMock).toHaveBeenCalledTimes(1)
 
     expect(result.canceledDomains).toEqual(['chat', 'global'])
@@ -97,6 +111,7 @@ describe('app exit cleanup', () => {
       'env',
       'plugin-install',
       'feishu-installer',
+      'feishu-lark-cli',
       'weixin-installer',
       'upgrade',
       'env-setup',

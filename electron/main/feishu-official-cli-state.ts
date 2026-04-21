@@ -1,10 +1,13 @@
-import type { CliResult } from './cli'
-import { runShell } from './cli'
-import { MAIN_RUNTIME_POLICY } from './runtime-policy'
-
-const FEISHU_OFFICIAL_CLI_COMMAND = 'lark-cli'
-const FEISHU_OFFICIAL_CLI_VERSION_ARGS = ['--version'] as const
-const FEISHU_OFFICIAL_CLI_STATUS_ARGS = ['auth', 'status'] as const
+﻿import type { CliResult } from './cli'
+import {
+  collectFeishuOfficialCliCommandDetail,
+  FEISHU_OFFICIAL_CLI_COMMAND,
+  FEISHU_OFFICIAL_CLI_STATUS_ARGS,
+  FEISHU_OFFICIAL_CLI_VERSION_ARGS,
+  isMissingFeishuOfficialCliDetail,
+  normalizeFeishuOfficialCliVersion,
+  runFeishuOfficialCli,
+} from './feishu-official-cli'
 
 export type FeishuOfficialCliAuthState = 'authenticated' | 'unauthenticated' | 'unknown' | 'error'
 
@@ -21,46 +24,8 @@ export interface FeishuOfficialCliStatus {
   statusError: string
 }
 
-function extractFirstNonEmptyLine(text: string): string {
-  for (const line of String(text || '').split(/\r?\n/g)) {
-    const trimmed = line.trim()
-    if (trimmed) return trimmed
-  }
-  return ''
-}
-
-function collectCommandDetail(result: Pick<CliResult, 'stdout' | 'stderr'>): string {
-  return [String(result.stderr || '').trim(), String(result.stdout || '').trim()]
-    .filter(Boolean)
-    .join('\n')
-    .trim()
-}
-
-function normalizeVersion(output: string): string {
-  const firstLine = extractFirstNonEmptyLine(output)
-  if (!firstLine) return ''
-  return firstLine
-    .replace(/^lark-cli\s*/i, '')
-    .replace(/^version[:\s]*/i, '')
-    .trim()
-}
-
-function isMissingCommandDetail(detail: string): boolean {
-  const normalized = String(detail || '').toLowerCase()
-  return (
-    normalized.includes('not recognized as an internal or external command') ||
-    normalized.includes('command not found') ||
-    normalized.includes('no such file or directory') ||
-    normalized.includes('enoent') ||
-    normalized.includes('不是内部或外部命令') ||
-    normalized.includes('无法将') && normalized.includes('识别为') ||
-    normalized.includes('未找到命令') ||
-    normalized.includes('找不到指定的文件')
-  )
-}
-
 function classifyAuthState(result: CliResult): FeishuOfficialCliAuthState {
-  const detail = collectCommandDetail(result).toLowerCase()
+  const detail = collectFeishuOfficialCliCommandDetail(result).toLowerCase()
   if (!detail) return result.ok ? 'unknown' : 'error'
 
   const negativeSignals = [
@@ -72,10 +37,7 @@ function classifyAuthState(result: CliResult): FeishuOfficialCliAuthState {
     'unauth',
     'not authenticated',
     'not authorized',
-    '未登录',
-    '请先登录',
-    '未授权',
-    '未认证',
+    'please sign in',
   ]
   if (negativeSignals.some((signal) => detail.includes(signal))) {
     return 'unauthenticated'
@@ -87,10 +49,6 @@ function classifyAuthState(result: CliResult): FeishuOfficialCliAuthState {
     'authenticated',
     'authorized',
     'auth ok',
-    '已登录',
-    '已授权',
-    '认证成功',
-    '授权成功',
   ]
   if (positiveSignals.some((signal) => detail.includes(signal))) {
     return 'authenticated'
@@ -106,53 +64,41 @@ function buildSummary(params: {
 }): string {
   if (!params.available) {
     return params.statusError
-      ? '未检测到飞书官方 CLI，当前仍以官方插件安装链路为主。'
-      : '当前未检测到飞书官方 CLI。'
+      ? '当前未检测到可用的飞书官方 CLI，Mclaw 会继续使用内置插件接入流程。'
+      : '当前机器还没有安装飞书官方 CLI。'
   }
 
   if (params.authState === 'authenticated') {
-    return '已检测到飞书官方 CLI，且官方授权状态看起来已就绪。'
+    return '已检测到飞书官方 CLI，且当前机器看起来已经完成官方登录。'
   }
   if (params.authState === 'unauthenticated') {
-    return '已检测到飞书官方 CLI，但当前还没有完成官方授权登录。'
+    return '已检测到飞书官方 CLI，但当前机器还没有完成官方登录。'
   }
   if (params.authState === 'error') {
-    return '已检测到飞书官方 CLI，但读取官方授权状态失败。'
+    return '已检测到飞书官方 CLI，但当前无法可靠读取它的登录状态。'
   }
-  return '已检测到飞书官方 CLI，但当前无法可靠判断官方授权状态。'
+  return '已检测到飞书官方 CLI，但当前登录状态还不能被明确判定。'
 }
 
 function buildRecommendedAction(available: boolean, authState: FeishuOfficialCliAuthState): string {
   if (!available) {
-    return '当前可以继续使用下面的官方插件安装器，不会与 lark-cli 冲突；如需补充官方 OAuth / scope 状态感知，请先执行 `npm install -g @larksuite/cli` 安装官方 CLI，完成后回到页面点击“刷新状态”。'
+    return '如果你后续需要走飞书官方 CLI 的浏览器登录或设备码流程，可额外安装 `@larksuite/cli`；这不是当前内置插件接入的前置条件。'
   }
   if (authState === 'unauthenticated') {
-    return '建议先在终端执行 `lark-cli auth login` 完成官方授权；登录成功后回到这里点击“刷新状态”，然后继续使用下面的官方插件安装器完成 Bot 落盘。'
+    return '可在终端执行 `lark-cli auth login --recommend` 完成官方登录，然后回到这里刷新状态。'
   }
   if (authState === 'authenticated') {
-    return '官方授权层已可用；可以继续使用下面的官方插件安装器完成 Bot 落盘和渠道接入，两者当前按职责分层共存。'
+    return '飞书官方 CLI 登录已就绪；如需高级调试或官方授权链路，可再使用 `lark-cli config init --new` / `auth login`。'
   }
-  return '建议在终端手动执行 `lark-cli auth status` 或 `lark-cli auth login` 复核当前授权状态；复核完成后回到页面点击“刷新状态”。复核期间仍可按需使用下面的官方插件安装器。'
-}
-
-async function runFeishuOfficialCli(args: string[]): Promise<CliResult> {
-  return runShell(
-    FEISHU_OFFICIAL_CLI_COMMAND,
-    args,
-    MAIN_RUNTIME_POLICY.cli.lightweightProbeTimeoutMs,
-    {
-      controlDomain: 'env-setup',
-      shell: process.platform === 'win32',
-    }
-  )
+  return '可在终端执行 `lark-cli auth status` 或 `lark-cli auth login --recommend` 核对当前官方登录状态，然后回到这里刷新。'
 }
 
 export async function getFeishuOfficialCliStatus(): Promise<FeishuOfficialCliStatus> {
   const versionResult = await runFeishuOfficialCli([...FEISHU_OFFICIAL_CLI_VERSION_ARGS])
-  const versionDetail = collectCommandDetail(versionResult)
+  const versionDetail = collectFeishuOfficialCliCommandDetail(versionResult)
 
   if (!versionResult.ok) {
-    const missingCommand = isMissingCommandDetail(versionDetail)
+    const missingCommand = isMissingFeishuOfficialCliDetail(versionDetail)
     const statusError = missingCommand ? '' : versionDetail
     return {
       available: false,
@@ -180,7 +126,7 @@ export async function getFeishuOfficialCliStatus(): Promise<FeishuOfficialCliSta
   return {
     available: true,
     command: FEISHU_OFFICIAL_CLI_COMMAND,
-    version: normalizeVersion(versionResult.stdout),
+    version: normalizeFeishuOfficialCliVersion(versionResult.stdout),
     authState,
     summary: buildSummary({
       available: true,

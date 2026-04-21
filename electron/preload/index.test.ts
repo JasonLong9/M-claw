@@ -326,6 +326,18 @@ describe('preload api model channels', () => {
     await api.getFeishuOfficialCliStatus()
     expect(invokeMock).toHaveBeenLastCalledWith('feishu:lark-cli:status:get')
 
+    await api.getFeishuOfficialCliSessionState()
+    expect(invokeMock).toHaveBeenLastCalledWith('feishu:lark-cli:session:get')
+
+    await api.startFeishuOfficialCliSession('auth-login-recommend')
+    expect(invokeMock).toHaveBeenLastCalledWith('feishu:lark-cli:session:start', 'auth-login-recommend')
+
+    await api.sendFeishuOfficialCliSessionInput('session-2', '\n')
+    expect(invokeMock).toHaveBeenLastCalledWith('feishu:lark-cli:session:input', 'session-2', '\n')
+
+    await api.stopFeishuOfficialCliSession()
+    expect(invokeMock).toHaveBeenLastCalledWith('feishu:lark-cli:session:stop')
+
     await api.listenFeishuBotDiagnosticActivity('default', 45000, 'listen-1')
     expect(invokeMock).toHaveBeenLastCalledWith('feishu:diagnostics:listen', 'default', 45000, 'listen-1')
 
@@ -389,6 +401,9 @@ describe('preload api model channels', () => {
     const offFeishuInstaller = api.onFeishuInstallerEvent(() => {})
     expect(onMock).toHaveBeenCalledWith('feishu:installer:event', expect.any(Function))
 
+    const offFeishuOfficialCli = api.onFeishuOfficialCliSessionEvent(() => {})
+    expect(onMock).toHaveBeenCalledWith('feishu:lark-cli:event', expect.any(Function))
+
     const offState = api.onOAuthState(() => {})
     expect(onMock).toHaveBeenCalledWith('oauth:state', expect.any(Function))
 
@@ -404,11 +419,12 @@ describe('preload api model channels', () => {
     offChat()
     offGatewayBootstrap()
     offFeishuInstaller()
+    offFeishuOfficialCli()
     offState()
     offCode()
     offSuccess()
     offError()
-    expect(removeListenerMock).toHaveBeenCalledTimes(7)
+    expect(removeListenerMock).toHaveBeenCalledTimes(8)
 
     await api.startModelOAuth({ providerId: 'qwen', methodId: 'qwen-portal', setDefault: true })
     expect(invokeMock).toHaveBeenLastCalledWith('models:oauth:start', {

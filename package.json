@@ -27,6 +27,7 @@
     "package:mac:notarized": "npm run check:mac:release-env -- --allow-placeholder-publish && npm run build:app && node scripts/run-electron-builder.mjs --mac --publish never",
     "package:win:dir": "npm run check:win:release-env -- --allow-placeholder-publish --allow-unsigned && npm run build:app && node scripts/run-electron-builder.mjs -c.forceCodeSigning=false -c.win.signAndEditExecutable=false --win dir --publish never",
     "package:win": "npm run check:win:release-env -- --allow-placeholder-publish --allow-unsigned && npm run build:app && node scripts/run-electron-builder.mjs -c.forceCodeSigning=false -c.win.signAndEditExecutable=false --win nsis --publish never",
+    "check:win:artifact:bundle": "node scripts/check-win-packaged-openclaw-bundle.mjs",
     "release:mac": "npm run check:mac:release-env && npm run build:app && node scripts/run-electron-builder.mjs --mac --publish never",
     "release:win": "npm run check:win:release-env && npm run build:app && node scripts/run-electron-builder.mjs --win --publish never",
     "release:prepare-cos": "node scripts/prepare-cos-update-release.mjs",
