@@ -2,6 +2,7 @@ import { cancelActiveCommands } from './cli'
 import { stopFeishuInstallerSession } from './feishu-installer-session'
 import { stopFeishuOfficialCliSession } from './feishu-official-cli-session'
 import { stopWeixinInstallerSession } from './weixin-installer-session'
+import { stopWatchdog } from './watchdog'
 
 const EXIT_CANCEL_DOMAINS = [
   'gateway',
@@ -31,6 +32,8 @@ function shouldLogCleanupSummary(): boolean {
 }
 
 export async function runAppExitCleanup(): Promise<AppExitCleanupResult> {
+  stopWatchdog()
+
   const domainCancelResult = await cancelActiveCommands([...EXIT_CANCEL_DOMAINS])
     .catch(() => ({
       canceledDomains: [] as string[],

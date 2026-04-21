@@ -41,6 +41,12 @@ import {
   formatChatTraceEntryLabel,
   formatChatTraceEntryMeta,
 } from './chat-panel-diagnostics'
+import {
+  buildRedactedPreviewRows,
+  buildWatchdogBadges,
+  buildWatchdogRows,
+  formatWatchdogEvent,
+} from './system-diagnostics'
 import { findEquivalentRuntimeModelKey } from '../../lib/model-runtime-resolution'
 
 const QUICK_PROMPTS = [
@@ -73,6 +79,9 @@ interface ImagePreviewNaturalSize {
   width: number
   height: number
 }
+
+type WatchdogStateSnapshot = Awaited<ReturnType<typeof window.api.getWatchdogState>>
+type WatchdogEventEntry = Awaited<ReturnType<typeof window.api.listWatchdogEvents>>[number]
 
 function clampImagePreviewScale(scale: number): number {
   if (!Number.isFinite(scale)) return 1
@@ -374,6 +383,11 @@ export default function DashboardChatPanel({
   const [capabilitySnapshot, setCapabilitySnapshot] = useState<ChatCapabilitySnapshot | null>(null)
   const [sessionDebugSnapshot, setSessionDebugSnapshot] = useState<ChatSessionDebugSnapshot | null>(null)
   const [traceEntries, setTraceEntries] = useState<ChatTraceEntry[]>([])
+  const [watchdogState, setWatchdogState] = useState<WatchdogStateSnapshot | null>(null)
+  const [watchdogRunning, setWatchdogRunning] = useState(false)
+  const [watchdogEvents, setWatchdogEvents] = useState<WatchdogEventEntry[]>([])
+  const [redactedConfigSnapshot, setRedactedConfigSnapshot] = useState<Record<string, unknown> | null>(null)
+  const [redactedEnvSnapshot, setRedactedEnvSnapshot] = useState<Record<string, string>>({})
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const activeSendSessionIdRef = useRef('')
   const sessionsRequestIdRef = useRef(0)
@@ -527,6 +541,10 @@ export default function DashboardChatPanel({
   const externalTranscriptMessage = resolveExternalTranscriptMessage(activeTranscript)
   const capabilityIndicators = buildChatCapabilityIndicators(capabilitySnapshot)
   const debugFieldRows = buildChatDebugFieldRows(sessionDebugSnapshot)
+  const watchdogBadges = buildWatchdogBadges(watchdogState, watchdogRunning)
+  const watchdogRows = buildWatchdogRows(watchdogState)
+  const redactedConfigRows = buildRedactedPreviewRows(redactedConfigSnapshot)
+  const redactedEnvRows = buildRedactedPreviewRows(redactedEnvSnapshot)
 
   const stopComposerResize = () => {
     composerResizeStateRef.current = null
@@ -579,10 +597,24 @@ export default function DashboardChatPanel({
       setDiagnosticsError('')
     }
 
-    const [capabilityResult, traceResult, debugResult] = await Promise.allSettled([
+    const [
+      capabilityResult,
+      traceResult,
+      debugResult,
+      watchdogStateResult,
+      watchdogEventsResult,
+      watchdogRunningResult,
+      redactedConfigResult,
+      redactedEnvResult,
+    ] = await Promise.allSettled([
       window.api.getChatCapabilitySnapshot(),
       window.api.listChatTraceEntries(8),
       normalizedSessionId ? window.api.getChatSessionDebugSnapshot(normalizedSessionId) : Promise.resolve(null),
+      window.api.getWatchdogState(),
+      window.api.listWatchdogEvents(),
+      window.api.isWatchdogRunning(),
+      window.api.readConfigRedacted(),
+      window.api.readEnvFileRedacted(),
     ])
 
     if (requestId !== diagnosticsRequestIdRef.current) return
@@ -616,6 +648,56 @@ export default function DashboardChatPanel({
         debugResult.reason instanceof Error
           ? debugResult.reason.message
           : String(debugResult.reason || 'debug-snapshot-read-failed')
+      )
+    }
+
+    if (watchdogStateResult.status === 'fulfilled') {
+      setWatchdogState(watchdogStateResult.value)
+    } else {
+      nextErrors.push(
+        watchdogStateResult.reason instanceof Error
+          ? watchdogStateResult.reason.message
+          : String(watchdogStateResult.reason || 'watchdog-state-read-failed')
+      )
+    }
+
+    if (watchdogEventsResult.status === 'fulfilled') {
+      setWatchdogEvents(Array.isArray(watchdogEventsResult.value) ? watchdogEventsResult.value : [])
+    } else {
+      nextErrors.push(
+        watchdogEventsResult.reason instanceof Error
+          ? watchdogEventsResult.reason.message
+          : String(watchdogEventsResult.reason || 'watchdog-events-read-failed')
+      )
+    }
+
+    if (watchdogRunningResult.status === 'fulfilled') {
+      setWatchdogRunning(Boolean(watchdogRunningResult.value))
+    } else {
+      nextErrors.push(
+        watchdogRunningResult.reason instanceof Error
+          ? watchdogRunningResult.reason.message
+          : String(watchdogRunningResult.reason || 'watchdog-running-read-failed')
+      )
+    }
+
+    if (redactedConfigResult.status === 'fulfilled') {
+      setRedactedConfigSnapshot(redactedConfigResult.value)
+    } else {
+      nextErrors.push(
+        redactedConfigResult.reason instanceof Error
+          ? redactedConfigResult.reason.message
+          : String(redactedConfigResult.reason || 'config-redacted-read-failed')
+      )
+    }
+
+    if (redactedEnvResult.status === 'fulfilled') {
+      setRedactedEnvSnapshot(redactedEnvResult.value || {})
+    } else {
+      nextErrors.push(
+        redactedEnvResult.reason instanceof Error
+          ? redactedEnvResult.reason.message
+          : String(redactedEnvResult.reason || 'env-redacted-read-failed')
       )
     }
 
@@ -1346,6 +1428,104 @@ export default function DashboardChatPanel({
                     ))}
                   </Stack>
                 ) : null}
+
+                <Paper withBorder p="xs" radius="md" mt="sm">
+                  <Text size="xs" fw={500}>Watchdog 状态</Text>
+                  <Group gap={6} wrap="wrap" mt="xs">
+                    {watchdogBadges.map((item) => (
+                      <Badge key={item.label} size="xs" variant="light" color={item.tone}>
+                        {item.label}: {item.value}
+                      </Badge>
+                    ))}
+                  </Group>
+
+                  {watchdogRows.length > 0 && (
+                    <Stack gap={4} mt="xs">
+                      {watchdogRows.map((row) => (
+                        <Group key={row.label} gap={6} wrap="nowrap" align="flex-start">
+                          <Badge size="xs" variant="light" color="gray" style={{ flexShrink: 0 }}>
+                            {row.label}
+                          </Badge>
+                          <Text size="xs" style={{ wordBreak: 'break-word' }}>
+                            {row.value}
+                          </Text>
+                        </Group>
+                      ))}
+                    </Stack>
+                  )}
+
+                  {watchdogEvents.length > 0 ? (
+                    <Stack gap={6} mt="sm">
+                      {watchdogEvents.slice(-3).reverse().map((entry) => (
+                        <Paper key={entry.id} withBorder p="xs" radius="md">
+                          <Group justify="space-between" gap="xs" wrap="wrap">
+                            <Badge size="xs" variant="light" color="gray">
+                              {entry.kind}
+                            </Badge>
+                            <Text size="xs" c="dimmed">
+                              {new Date(entry.timestamp).toLocaleTimeString('zh-CN', {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                second: '2-digit',
+                              })}
+                            </Text>
+                          </Group>
+                          <Text size="xs" mt={4}>
+                            {entry.message}
+                          </Text>
+                          <Text size="xs" c="dimmed" mt={2}>
+                            {formatWatchdogEvent(entry)}
+                          </Text>
+                        </Paper>
+                      ))}
+                    </Stack>
+                  ) : (
+                    <Text size="xs" c="dimmed" mt="xs">
+                      暂无 watchdog 事件。
+                    </Text>
+                  )}
+                </Paper>
+
+                <Paper withBorder p="xs" radius="md" mt="sm">
+                  <Text size="xs" fw={500}>脱敏配置快照</Text>
+                  <Text size="xs" c="dimmed" mt={4}>
+                    这里读取的是脱敏后的 config / env 视图，用于排查状态，不直接暴露原始密钥。
+                  </Text>
+
+                  <Group align="flex-start" grow mt="xs">
+                    <Stack gap={4}>
+                      <Text size="xs" fw={500}>config</Text>
+                      {redactedConfigRows.length > 0 ? redactedConfigRows.map((row) => (
+                        <Group key={`config:${row.label}`} gap={6} wrap="nowrap" align="flex-start">
+                          <Badge size="xs" variant="light" color="gray" style={{ flexShrink: 0 }}>
+                            {row.label}
+                          </Badge>
+                          <Text size="xs" style={{ wordBreak: 'break-word' }}>
+                            {row.value}
+                          </Text>
+                        </Group>
+                      )) : (
+                        <Text size="xs" c="dimmed">未读取到 config 快照。</Text>
+                      )}
+                    </Stack>
+
+                    <Stack gap={4}>
+                      <Text size="xs" fw={500}>env</Text>
+                      {redactedEnvRows.length > 0 ? redactedEnvRows.map((row) => (
+                        <Group key={`env:${row.label}`} gap={6} wrap="nowrap" align="flex-start">
+                          <Badge size="xs" variant="light" color="gray" style={{ flexShrink: 0 }}>
+                            {row.label}
+                          </Badge>
+                          <Text size="xs" style={{ wordBreak: 'break-word' }}>
+                            {row.value}
+                          </Text>
+                        </Group>
+                      )) : (
+                        <Text size="xs" c="dimmed">未读取到 env 快照。</Text>
+                      )}
+                    </Stack>
+                  </Group>
+                </Paper>
 
                 <Paper withBorder p="xs" radius="md" mt="sm">
                   <Text size="xs" fw={500}>当前会话语义</Text>

@@ -5,6 +5,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { registerIpcHandlers } from './ipc-handlers'
 import { runAppExitCleanup } from './app-exit-cleanup'
+import { startWatchdog } from './watchdog'
 import { isAllowedExternalOpenUrl } from '../../src/shared/desktop-url-policy'
 import {
   DESKTOP_WINDOW_POLICY,
@@ -22,6 +23,12 @@ import { mkdir } from 'node:fs/promises'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const OPEN_CONTACT_MODAL_CHANNEL = 'app:open-contact-modal'
 const OPEN_MODELS_PAGE_CHANNEL = 'app:open-models-page'
+const WATCHDOG_BOOT_DELAY_MS = 30_000
+const WATCHDOG_START_THRESHOLDS = {
+  healthCheckIntervalMs: 15_000,
+  maxConsecutiveFailures: 3,
+  circuitOpenDurationMs: 60_000,
+} as const
 
 function sanitizeNodeOptionsForElectronRuntime(): void {
   const sanitized = sanitizeNodeOptionsForElectron(process.env.NODE_OPTIONS)
@@ -55,6 +62,7 @@ let tray: Tray | null = null
 let appExitCleanupDone = false
 let appExitCleanupPromise: Promise<void> | null = null
 let isQuitting = false
+let watchdogStartupTimer: NodeJS.Timeout | null = null
 const preload = path.join(__dirname, '../preload/index.mjs')
 const indexHtml = path.join(RENDERER_DIST, 'index.html')
 const focusApp = process.platform === 'darwin'
@@ -281,13 +289,25 @@ function createTray() {
   })
 }
 
+function scheduleWatchdogStart(): void {
+  if (watchdogStartupTimer) {
+    clearTimeout(watchdogStartupTimer)
+  }
+
+  watchdogStartupTimer = setTimeout(() => {
+    watchdogStartupTimer = null
+    startWatchdog(WATCHDOG_START_THRESHOLDS)
+  }, WATCHDOG_BOOT_DELAY_MS)
+}
+
 app.whenReady().then(() => {
   return initializeManagedRuntimeEnvironment()
     .catch(() => undefined)
     .then(() => {
-  registerIpcHandlers()
-  createWindow()
-  createTray()
+      registerIpcHandlers()
+      createWindow()
+      createTray()
+      scheduleWatchdogStart()
     })
 })
 
@@ -298,6 +318,10 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', (event) => {
   isQuitting = true
+  if (watchdogStartupTimer) {
+    clearTimeout(watchdogStartupTimer)
+    watchdogStartupTimer = null
+  }
   if (appExitCleanupDone) return
   event.preventDefault()
 

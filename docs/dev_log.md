@@ -6684,3 +6684,99 @@
     - `cmd.exe /c npm test -- electron/main/__tests__/openclaw-chat-service.test.ts` passed (`1` file, `120` tests)
     - `cmd.exe /c npm run typecheck` passed
     - `cmd.exe /c npm run build:app` passed
+
+- Update 542
+  - Integrated the Phase 7 security module into the main process by copying `Phase7-Delivery/security/` into `electron/main/security/` and wiring the first safe enforcement points without touching the Direct Chat merge path or the screenshot recovery pipeline.
+  - Added CLI-output redaction in `electron/main/openclaw-command-output.ts`. The new `sanitizeCliOutput(...)` path now masks likely secret values before user-facing failure text is returned, while intentionally avoiding over-redaction of normal config variable names.
+  - Added a managed-plugin whitelist bootstrap in `electron/main/security/official-plugin-whitelist.ts` and enforced it from `electron/main/cli.ts` for official/expected plugin installs. This keeps the existing general plugin install path intact, but blocks auto-install of managed plugins when the source is not in the trusted allowlist.
+  - Added redacted diagnostic IPC reads in `electron/main/ipc-handlers.ts`:
+    - `config:read:redacted`
+    - `env:read:redacted`
+    The existing `config:read` / `env:read` handlers stay unchanged so current renderer edit flows do not regress by writing masked config values back to disk.
+  - Added validation coverage in:
+    - `electron/main/__tests__/openclaw-command-output.test.ts`
+    - `electron/main/security/__tests__/official-plugin-whitelist.test.ts`
+  - 2026-04-21 local validation:
+    - `cmd.exe /c npm run typecheck` passed
+    - escalated `vitest run electron/main/__tests__/openclaw-command-output.test.ts electron/main/__tests__/watchdog-service.test.ts electron/main/security/__tests__/redaction-service.test.ts electron/main/security/__tests__/whitelist-service.test.ts electron/main/security/__tests__/official-plugin-whitelist.test.ts` passed (`5` files, `50` tests)
+    - escalated `vitest run electron/main/__tests__/openclaw-chat-service.test.ts` still hit the existing temp-runtime cleanup issue on this machine (`EBUSY` while removing `qclaw-chat-service-*\\runtime` after the first timed-out case), so that suite was not used as the merge gate for this slice
+
+- Update 543
+  - Integrated the watchdog module by copying `M-claw-hizeys/electron/main/watchdog/` into `electron/main/watchdog/` and wiring it into the app lifecycle.
+  - `electron/main/index.ts` now schedules watchdog startup 30 seconds after app ready with the current thresholds:
+    - health check interval: `15000ms`
+    - consecutive failure threshold: `3`
+    - circuit-open cooldown: `60000ms`
+  - `electron/main/app-exit-cleanup.ts` now stops the watchdog during shutdown, and `electron/main/ipc-handlers.ts` now exposes:
+    - `watchdog:state`
+    - `watchdog:events`
+    - `watchdog:running`
+    - `watchdog:start`
+    - `watchdog:stop`
+  - Added `electron/main/__tests__/watchdog-service.test.ts` to cover start/stop state transitions, event emission, and double-start suppression.
+  - Built a fresh Windows unpacked artifact after the security + watchdog slice landed.
+  - 2026-04-21 packaging validation:
+    - escalated `cmd.exe /c npm run package:win:dir` passed
+    - unpacked artifact: `release/2026.4.21-v11/win-unpacked/Mclaw.exe`
+    - packaged bundle verification still passed with bundled `node v24.14.1`, bundled `npx 11.11.0`, and bundled `openclaw-lark` exposing `feishu`
+
+- Update 544
+  - Stabilized the Windows-local regression gate for `electron/main/__tests__/openclaw-chat-service.test.ts`, which had stopped being a reliable merge gate because multiple send-path cases were clustering around the default `5s` Vitest timeout and a single timeout then cascaded into `EBUSY` temp-runtime cleanup failures.
+  - Updated the chat-service test file to:
+    - raise the per-file Vitest runtime timeout to `15000ms`
+    - retry temp user-data directory cleanup on transient Windows `EBUSY` / `EPERM` / `ENOTEMPTY` errors before the next case starts
+    - keep the previously widened `records send trace entries for a successful local send flow` case covered under the higher suite timeout
+  - This was a test-harness stabilization only; no production chat-service behavior changed in this slice.
+  - 2026-04-21 local validation:
+    - `cmd.exe /c npm run typecheck` passed
+    - escalated `cmd.exe /c npx vitest run electron/main/__tests__/openclaw-chat-service.test.ts` passed (`1` file, `120` tests)
+    - escalated `cmd.exe /c npx vitest run electron/main/__tests__/openclaw-chat-service.test.ts electron/main/__tests__/gateway-lifecycle-controller.test.ts electron/main/__tests__/openclaw-command-output.test.ts electron/main/__tests__/watchdog-service.test.ts electron/main/security/__tests__/redaction-service.test.ts electron/main/security/__tests__/whitelist-service.test.ts electron/main/security/__tests__/official-plugin-whitelist.test.ts src/pages/__tests__/chat-availability-state.test.ts src/pages/__tests__/dashboard-entry-flow.test.tsx` passed (`9` files, `200` tests)
+
+- Update 545
+  - Completed `security-watchdog-integration-plan.md` Phase 8 packaging validation on the current working tree after the security/watchdog integration and the Windows-local regression-gate stabilization both landed.
+  - Built a fresh Windows unpacked artifact:
+    - `release/2026.4.21-v12/win-unpacked/Mclaw.exe`
+  - Packaged bundle verification still passed:
+    - bundled runtime: `openclaw-bundle/runtime/windows-x64`
+    - bundled `node`: `v24.14.1`
+    - bundled `npx`: `11.11.0`
+    - bundled managed plugin: `openclaw-lark`
+    - packaged channel exposure: `feishu`
+  - Packaging command also rotated the retained release directory from `2026.4.21-v11` to `2026.4.21-v12`.
+  - 2026-04-21 packaging validation:
+    - escalated `cmd.exe /c npm run package:win:dir` passed
+
+- Update 546
+  - Added a post-plan diagnostics follow-up for the security/watchdog lane so the renderer can read the new watchdog state and the safe redacted config/env snapshots through the existing desktop bridge.
+  - Extended `electron/preload/index.ts` and `src/types/electron.d.ts` with:
+    - `getWatchdogState()`
+    - `listWatchdogEvents()`
+    - `isWatchdogRunning()`
+    - `startWatchdog()`
+    - `stopWatchdog()`
+    - `readConfigRedacted()`
+    - `readEnvFileRedacted()`
+  - Added shared watchdog types in `src/shared/watchdog.ts` and aligned the main-process watchdog type module to re-export those shared contracts so the renderer and main process use the same state/event shape.
+  - Wired the hidden Dashboard Chat diagnostics panel to load and render:
+    - watchdog runtime state
+    - recent watchdog events
+    - redacted config snapshot preview
+    - redacted env snapshot preview
+  - Added focused regression coverage in:
+    - `electron/preload/index.test.ts`
+    - `src/components/dashboard/system-diagnostics.test.ts`
+  - 2026-04-22 local validation:
+    - `cmd.exe /c npm run typecheck` passed
+    - escalated `cmd.exe /c npx vitest run electron/preload/index.test.ts src/components/dashboard/system-diagnostics.test.ts` passed (`2` files, `6` tests)
+    - escalated `cmd.exe /c npm run build:app` passed
+
+- Update 547
+  - Re-ran the security/watchdog merge gate rigorously on the final working tree before release packaging, covering the original security/watchdog slice, the chat-service regression gate, the preload bridge, and the renderer diagnostics follow-up in one focused pass.
+  - 2026-04-22 regression validation:
+    - escalated `cmd.exe /c npx vitest run electron/main/__tests__/openclaw-chat-service.test.ts electron/main/__tests__/gateway-lifecycle-controller.test.ts electron/main/__tests__/openclaw-command-output.test.ts electron/main/__tests__/watchdog-service.test.ts electron/main/security/__tests__/redaction-service.test.ts electron/main/security/__tests__/whitelist-service.test.ts electron/main/security/__tests__/official-plugin-whitelist.test.ts electron/preload/index.test.ts src/components/dashboard/system-diagnostics.test.ts src/pages/__tests__/chat-availability-state.test.ts src/pages/__tests__/dashboard-entry-flow.test.tsx` passed (`11` files, `206` tests)
+  - Built a fresh signed-off Windows release package after that regression pass:
+    - installer: `release/2026.4.22-v0/Mclaw_2026.4.22-v0.exe`
+    - unpacked: `release/2026.4.22-v0/win-unpacked/Mclaw.exe`
+  - 2026-04-22 packaging validation:
+    - escalated `cmd.exe /c npm run package:win` passed
+    - packaged bundle verification still passed with bundled `node v24.14.1`, bundled `npx 11.11.0`, and bundled `openclaw-lark` exposing `feishu`

@@ -67,6 +67,8 @@ import {
 } from './plugin-install-safety'
 import { isOfficialManagedPluginId } from '../../src/shared/managed-channel-plugin-registry'
 import { repairKnownProviderConfigGaps, repairKnownProviderConfigGapsOnDisk } from './openclaw-provider-config-repair'
+import { ensureOfficialPluginWhitelistEntries } from './security/official-plugin-whitelist'
+import { verifyPlugin } from './security/whitelist'
 import {
   mutatePairingAllowFromInConfig,
   normalizePairingAllowFromList,
@@ -3945,8 +3947,74 @@ export async function pairingRemoveAllowFrom(
   }
 }
 
+function isLikelyLocalPluginSource(source: string): boolean {
+  const normalized = String(source || '').trim()
+  if (!normalized) return false
+  if (/^[A-Za-z]:[\\/]/.test(normalized)) return true
+  if (normalized.startsWith('\\\\')) return true
+  if (normalized.startsWith('./') || normalized.startsWith('.\\') || normalized.startsWith('/')) return true
+  if (normalized.includes('/') || normalized.includes('\\')) {
+    return /\.(?:tgz|tar\.gz|zip)$/i.test(normalized)
+  }
+  return false
+}
+
+function normalizePluginWhitelistTargets(source: string, expectedPluginIds: string[] = []): string[] {
+  const explicitIds = Array.from(
+    new Set(
+      (expectedPluginIds || [])
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)
+    )
+  )
+  if (explicitIds.length > 0) return explicitIds
+
+  const normalizedSource = String(source || '').trim()
+  if (isOfficialManagedPluginId(normalizedSource)) {
+    return [normalizedSource]
+  }
+
+  return []
+}
+
+async function runPluginWhitelistPreflight(
+  source: string,
+  expectedPluginIds: string[] = []
+): Promise<CliResult | null> {
+  const normalizedSource = String(source || '').trim()
+  const pluginIds = normalizePluginWhitelistTargets(normalizedSource, expectedPluginIds)
+  if (!normalizedSource || pluginIds.length === 0) return null
+  if (isLikelyLocalPluginSource(normalizedSource)) return null
+
+  ensureOfficialPluginWhitelistEntries()
+
+  const openClawPaths = await getOpenClawPaths().catch(() => null)
+  const extensionRoot = join(String(openClawPaths?.homeDir || '').trim() || homedir(), 'extensions')
+
+  for (const pluginId of pluginIds) {
+    const verdict = verifyPlugin(pluginId, normalizedSource, join(extensionRoot, pluginId))
+    if (verdict.allowed) continue
+
+    return {
+      ok: false,
+      stdout: '',
+      stderr: [
+        `插件安装已被安全白名单拦截：${pluginId}`,
+        `来源：${normalizedSource}`,
+        '当前自动安装链路仅允许官方托管插件从受信来源进入。',
+      ].join('\n'),
+      code: 1,
+    }
+  }
+
+  return null
+}
+
 /** Install a plugin: openclaw plugins install <name> */
 export async function installPlugin(name: string, expectedPluginIds: string[] = []): Promise<CliResult> {
+  const whitelistPreflight = await runPluginWhitelistPreflight(name, expectedPluginIds)
+  if (whitelistPreflight) return whitelistPreflight
+
   const npmEnv = await createPluginInstallNpmEnv()
   try {
     const result = await runCliStreaming(['plugins', 'install', name], {
@@ -4002,6 +4070,9 @@ export async function channelsAdd(channel: string, token: string): Promise<CliRe
 
 /** Install plugin via npx (for official plugins like feishu) */
 export async function installPluginNpx(url: string, expectedPluginIds: string[] = []): Promise<CliResult> {
+  const whitelistPreflight = await runPluginWhitelistPreflight(url, expectedPluginIds)
+  if (whitelistPreflight) return whitelistPreflight
+
   const capabilityError = await guardPlatformCommands(['npx'])
   if (capabilityError) return capabilityError
   const runNpxInstall = async (args: string[], registryUrl?: string | null) => {

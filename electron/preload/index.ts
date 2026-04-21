@@ -115,6 +115,11 @@ export const api = {
 
   // Gateway
   gatewayHealth: () => ipcRenderer.invoke('gateway:health'),
+  getWatchdogState: () => ipcRenderer.invoke('watchdog:state'),
+  listWatchdogEvents: () => ipcRenderer.invoke('watchdog:events'),
+  isWatchdogRunning: () => ipcRenderer.invoke('watchdog:running'),
+  startWatchdog: () => ipcRenderer.invoke('watchdog:start'),
+  stopWatchdog: () => ipcRenderer.invoke('watchdog:stop'),
   getOpenClawRuntimeReconcileState: () => ipcRenderer.invoke('gateway:runtime-reconcile:state:get'),
   gatewayForceRestart: () => ipcRenderer.invoke('gateway:force-restart'),
   reloadGatewayAfterModelChange: () => ipcRenderer.invoke('gateway:reload-after-model-change'),
@@ -130,7 +135,9 @@ export const api = {
 
   // Config
   readConfig: () => ipcRenderer.invoke('config:read'),
+  readConfigRedacted: () => ipcRenderer.invoke('config:read:redacted'),
   readEnvFile: () => ipcRenderer.invoke('env:read'),
+  readEnvFileRedacted: () => ipcRenderer.invoke('env:read:redacted'),
 
   // Doctor
   runDoctor: (options?: { fix?: boolean; nonInteractive?: boolean }) => ipcRenderer.invoke('doctor:run', options),

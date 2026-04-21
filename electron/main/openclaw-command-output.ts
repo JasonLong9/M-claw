@@ -1,6 +1,7 @@
 import type { CliCommandResult } from './openclaw-capabilities'
 import { buildGeminiCliMissingMessage } from './openclaw-oauth-dependencies'
 import { isConfigWarningLine } from './openclaw-config-warnings'
+import { redact } from './security/redaction'
 
 const ANSI_ESCAPE_SEQUENCE_REGEX =
   /\u001B(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001B\\)|[@-_])/g
@@ -22,6 +23,8 @@ const NETWORK_BLOCKED_REGEX =
 const MULTI_MODEL_FALLBACK_FAILURE_REGEX =
   /\b(all models failed|embedded agent failed before reply|followup agent failed before reply)\b/i
 const NOISY_LOG_BLOB_REGEX = /\b(config overwrite|workspace ok|sessions ok|sha256|gateway did not become reachable at ws:)\b/i
+const LIKELY_SECRET_VALUE_REGEX =
+  /\b(sk-(?:proj-)?[A-Za-z0-9_-]{8,}|eyJ[A-Za-z0-9._-]{10,}|bearer\s+[A-Za-z0-9._-]{8,}|(?:api[_ -]?key|token|secret|password)\s*[:=]\s*[^\s,;]{4,})/i
 
 function stripCliControlSequences(text: string): string {
   return String(text || '')
@@ -163,7 +166,20 @@ function classifyCliFailureOutput(output: string): { message: string; warningOnl
 }
 
 export function normalizeCliFailureMessage(output: string): string {
-  return classifyCliFailureOutput(output).message
+  return sanitizeCliOutput(classifyCliFailureOutput(output).message)
+}
+
+export function sanitizeCliOutput(raw: string, context: string[] = ['cli-output']): string {
+  const normalized = String(raw || '')
+  if (!normalized) return ''
+  if (!LIKELY_SECRET_VALUE_REGEX.test(normalized)) return normalized
+
+  try {
+    const result = redact(normalized, { context })
+    return typeof result.redacted === 'string' ? result.redacted : String(result.redacted || '')
+  } catch {
+    return normalized
+  }
 }
 
 export function getCliFailureMessage(
@@ -173,11 +189,11 @@ export function getCliFailureMessage(
   const stderr = classifyCliFailureOutput(result.stderr || '')
   const stdout = classifyCliFailureOutput(result.stdout || '')
 
-  if (stdout.message && stdout.priority > stderr.priority) return stdout.message
-  if (stderr.message) return stderr.message
-  if (stdout.message) return stdout.message
+  if (stdout.message && stdout.priority > stderr.priority) return sanitizeCliOutput(stdout.message)
+  if (stderr.message) return sanitizeCliOutput(stderr.message)
+  if (stdout.message) return sanitizeCliOutput(stdout.message)
 
-  return fallback
+  return sanitizeCliOutput(fallback)
 }
 
 function extractJsonBlockFromStart(text: string, start: number): string | null {

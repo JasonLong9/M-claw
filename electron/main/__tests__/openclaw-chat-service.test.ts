@@ -1,4 +1,4 @@
-﻿import { beforeEach, describe, expect, it, vi } from 'vitest'
+﻿import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 const {
   runCliMock,
   runCliStreamingMock,
@@ -104,6 +104,33 @@ const fs = process.getBuiltinModule('node:fs') as typeof import('node:fs')
 const os = process.getBuiltinModule('node:os') as typeof import('node:os')
 const path = process.getBuiltinModule('node:path') as typeof import('node:path')
 const { mkdtemp, mkdir, readFile, rm, writeFile } = fs.promises
+
+vi.setConfig({
+  testTimeout: 15_000,
+  hookTimeout: 15_000,
+})
+
+const RETRYABLE_RM_CODES = new Set(['EBUSY', 'ENOTEMPTY', 'EPERM'])
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function removeWithRetry(targetPath: string): Promise<void> {
+  const normalized = String(targetPath || '').trim()
+  if (!normalized) return
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      await rm(normalized, { recursive: true, force: true })
+      return
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? String((error.code || '')) : ''
+      if (!RETRYABLE_RM_CODES.has(code) || attempt === 9) throw error
+      await sleep(100 * (attempt + 1))
+    }
+  }
+}
 
 describe('openclaw chat service', () => {
   let userDataDir = ''
@@ -311,10 +338,14 @@ describe('openclaw chat service', () => {
       },
     })
     if (userDataDir) {
-      await rm(userDataDir, { recursive: true, force: true })
+      await removeWithRetry(userDataDir)
     }
     userDataDir = await mkdtemp(path.join(os.tmpdir(), 'qclaw-chat-service-'))
     process.env.QCLAW_USER_DATA_DIR = userDataDir
+  })
+
+  afterAll(() => {
+    vi.resetConfig()
   })
 
   it('marks chat unavailable when no configured model is connected', () => {
@@ -1004,7 +1035,7 @@ describe('openclaw chat service', () => {
         }),
       ])
     )
-  })
+  }, 10_000)
 
   it('rejects concurrent chat sends before spawning a second transport run', async () => {
     const discoverOpenClaw = createDiscovery('fingerprint-send-singleflight')

@@ -175,6 +175,14 @@ import {
   prepareManagedChannelPluginForSetup,
   repairManagedChannelPlugin,
 } from './managed-channel-plugin-lifecycle'
+import { redactObject } from './security/redaction'
+import {
+  getEventHistory as getWatchdogEventHistory,
+  getWatchdogState,
+  isWatchdogRunning,
+  startWatchdog,
+  stopWatchdog,
+} from './watchdog'
 import {
   clearChatTranscript,
   createChatSession,
@@ -242,6 +250,16 @@ const DEFAULT_CANCEL_DOMAINS = [
 ] as const
 
 let ipcHandlersRegistered = false
+
+function sanitizeRendererConfigSnapshot<T>(value: T): T {
+  if (!value || typeof value !== 'object') return value
+
+  try {
+    return redactObject(value as Record<string, unknown>, { context: ['config-read'] }).redacted as T
+  } catch {
+    return value
+  }
+}
 
 function normalizeSafeInstallPackageName(raw: string): string | null {
   const normalized = String(raw || '').trim()
@@ -657,6 +675,17 @@ export function registerIpcHandlers() {
 
   // Gateway
   ipcMain.handle('gateway:health', () => gatewayHealth())
+  ipcMain.handle('watchdog:state', () => getWatchdogState())
+  ipcMain.handle('watchdog:events', () => getWatchdogEventHistory())
+  ipcMain.handle('watchdog:running', () => isWatchdogRunning())
+  ipcMain.handle('watchdog:start', () => {
+    startWatchdog()
+    return { ok: true }
+  })
+  ipcMain.handle('watchdog:stop', () => {
+    stopWatchdog()
+    return { ok: true }
+  })
   ipcMain.handle('gateway:runtime-reconcile:state:get', () => readOpenClawRuntimeReconcileStoreForUi())
   ipcMain.handle('gateway:force-restart', () => gatewayForceRestart())
   ipcMain.handle('gateway:reload-after-model-change', () =>
@@ -696,9 +725,11 @@ export function registerIpcHandlers() {
 
   // Config
   ipcMain.handle('config:read', () => readConfig())
+  ipcMain.handle('config:read:redacted', async () => sanitizeRendererConfigSnapshot(await readConfig()))
 
   // Env file
   ipcMain.handle('env:read', () => readEnvFile())
+  ipcMain.handle('env:read:redacted', async () => sanitizeRendererConfigSnapshot(await readEnvFile()))
 
   // Doctor
   ipcMain.handle('doctor:run', (_e, options?: { fix?: boolean; nonInteractive?: boolean }) => runDoctor(options))

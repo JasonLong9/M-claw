@@ -16,6 +16,7 @@ import type {
   FeishuBotDiagnosticSendResult,
 } from '../shared/feishu-diagnostics'
 import type { OpenClawBackupRootInfo } from '../shared/openclaw-phase3'
+import type { WatchdogEvent, WatchdogState } from '../shared/watchdog'
 import type {
   OpenClawVersionEnforcement,
   OpenClawVersionPolicyState,
@@ -1748,6 +1749,11 @@ interface ElectronApi {
 
   // Gateway
   gatewayHealth: () => Promise<GatewayHealthCheckResult>
+  getWatchdogState: () => Promise<WatchdogState>
+  listWatchdogEvents: () => Promise<WatchdogEvent[]>
+  isWatchdogRunning: () => Promise<boolean>
+  startWatchdog: () => Promise<{ ok: boolean }>
+  stopWatchdog: () => Promise<{ ok: boolean }>
   getOpenClawRuntimeReconcileState: () => Promise<OpenClawRuntimeReconcileStore>
   gatewayForceRestart: () => Promise<CliResult>
   reloadGatewayAfterModelChange: () => Promise<GatewayReloadResult>
@@ -1764,9 +1770,11 @@ interface ElectronApi {
 
   // Config
   readConfig: () => Promise<Record<string, any> | null>
+  readConfigRedacted: () => Promise<Record<string, any> | null>
 
   // Env file
   readEnvFile: () => Promise<Record<string, string>>
+  readEnvFileRedacted: () => Promise<Record<string, string>>
 
   // Doctor
   runDoctor: (options?: { fix?: boolean; nonInteractive?: boolean }) => Promise<CliResult>

@@ -305,6 +305,21 @@ describe('preload api model channels', () => {
       requestId: 'req-bootstrap-1',
     })
 
+    await api.getWatchdogState()
+    expect(invokeMock).toHaveBeenLastCalledWith('watchdog:state')
+
+    await api.listWatchdogEvents()
+    expect(invokeMock).toHaveBeenLastCalledWith('watchdog:events')
+
+    await api.isWatchdogRunning()
+    expect(invokeMock).toHaveBeenLastCalledWith('watchdog:running')
+
+    await api.startWatchdog()
+    expect(invokeMock).toHaveBeenLastCalledWith('watchdog:start')
+
+    await api.stopWatchdog()
+    expect(invokeMock).toHaveBeenLastCalledWith('watchdog:stop')
+
     await api.reloadGatewayAfterModelChange()
     expect(invokeMock).toHaveBeenLastCalledWith('gateway:reload-after-model-change')
 
@@ -374,6 +389,18 @@ describe('preload api model channels', () => {
 
     await api.validateFeishuCredentials('cli_test', 'secret', 'feishu')
     expect(invokeMock).toHaveBeenLastCalledWith('feishu:credentials:validate', 'cli_test', 'secret', 'feishu')
+
+    await api.readConfig()
+    expect(invokeMock).toHaveBeenLastCalledWith('config:read')
+
+    await api.readConfigRedacted()
+    expect(invokeMock).toHaveBeenLastCalledWith('config:read:redacted')
+
+    await api.readEnvFile()
+    expect(invokeMock).toHaveBeenLastCalledWith('env:read')
+
+    await api.readEnvFileRedacted()
+    expect(invokeMock).toHaveBeenLastCalledWith('env:read:redacted')
 
     await api.cancelChatMessage()
     expect(invokeMock).toHaveBeenLastCalledWith('chat:cancel')

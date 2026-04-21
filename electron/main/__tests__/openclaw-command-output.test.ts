@@ -122,6 +122,17 @@ describe('getCliFailureMessage', () => {
       )
     ).toBe('请求超时，请稍后重试。若持续失败，请检查 Gateway 与当前模型服务状态。')
   })
+  it('redacts sensitive credentials from passthrough CLI messages', () => {
+    expect(
+      getCliFailureMessage(
+        {
+          stdout: 'request failed for key sk-proj-abc123def456ghi789',
+          stderr: RAW_STALE_PLUGIN_WARNING,
+        },
+        'fallback'
+      )
+    ).toContain('[OPENAI_API_KEY]')
+  })
 })
 
 describe('parseJsonFromCommandResult', () => {
