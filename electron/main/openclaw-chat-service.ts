@@ -4821,6 +4821,7 @@ function sanitizeExternalMetadataWrappedText(rawText: string): string {
 
   cleaned = cleaned
     .replace(/^\s*System:[^\n]*\n(?:\s*ou_[^\n]*\n)?(?:\s*\[msg:[^\n]*\]\n)?/i, '')
+    .replace(/^\s*\[[A-Za-z]{3}\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?\s+GMT[+-]\d+\]\s*/i, '')
     .trim()
 
   return cleaned

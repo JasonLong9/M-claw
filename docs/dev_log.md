@@ -6675,3 +6675,12 @@
     - installer artifact: `release/2026.4.21-v9/Mclaw_2026.4.21-v9.exe`
     - unpacked artifact: `release/2026.4.21-v9/win-unpacked/Mclaw.exe`
     - packaged bundle verification still passed with bundled `node v24.14.1`, bundled `npx 11.11.0`, and bundled `openclaw-lark` exposing `feishu`
+
+- Update 541
+  - Fixed the remaining Direct Chat duplicate-user replay path for Control UI initiated chats. Live inspection of the latest failing session showed the upstream user message still carried the control-ui timestamp prefix (`[Tue 2026-04-21 20:12 GMT+8] ...`) after metadata sanitization, while the local transcript cache stored only the plain user text. That text mismatch meant the merge layer still could not recognize the two user turns as the same message.
+  - Updated `electron/main/openclaw-chat-service.ts` so metadata-wrapped external user messages also strip the leading control-ui timestamp prefix after removing the untrusted metadata wrapper.
+  - Added regression coverage in `electron/main/__tests__/openclaw-chat-service.test.ts` for the control-ui timestamp-prefix case.
+  - 2026-04-21 local validation:
+    - `cmd.exe /c npm test -- electron/main/__tests__/openclaw-chat-service.test.ts` passed (`1` file, `120` tests)
+    - `cmd.exe /c npm run typecheck` passed
+    - `cmd.exe /c npm run build:app` passed

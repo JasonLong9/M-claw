@@ -6280,6 +6280,77 @@ Sender (untrusted metadata):
     expect(transcript.messages[0].text).not.toContain('System:')
   })
 
+  it('strips control-ui timestamp prefixes from metadata-wrapped external user messages', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-3meta-control-ui-prefix')
+    const transcript = await getChatTranscript('remote-session', {
+      discoverOpenClaw,
+      runCommand: async (args) => {
+        if (args[0] === 'sessions') {
+          return {
+            ok: true,
+            stdout: JSON.stringify({
+              sessions: [
+                {
+                  sessionId: 'remote-session',
+                  key: 'agent:main:dashboard:control-ui-prefix',
+                  agentId: 'main',
+                  model: 'deepseek-chat',
+                  updatedAt: 9_000,
+                  kind: 'direct',
+                },
+              ],
+            }),
+            stderr: '',
+            code: 0,
+          }
+        }
+
+        if (args[0] === 'gateway' && args[1] === 'call' && args[2] === 'sessions.get') {
+          return {
+            ok: true,
+            stdout: JSON.stringify({
+              messages: [
+                {
+                  id: 'user-meta-1',
+                  role: 'user',
+                  content: [
+                    {
+                      type: 'text',
+                      text: `Sender (untrusted metadata):
+\`\`\`json
+{
+  "label": "openclaw-control-ui",
+  "id": "openclaw-control-ui"
+}
+\`\`\`
+
+[Tue 2026-04-21 20:12 GMT+8] 列出当前cpu占用率最高的3个进程`,
+                    },
+                  ],
+                  createdAt: 9_001,
+                },
+              ],
+            }),
+            stderr: '',
+            code: 0,
+          }
+        }
+
+        return {
+          ok: false,
+          stdout: '',
+          stderr: 'unexpected command',
+          code: 1,
+        }
+      },
+    })
+
+    expect(transcript.messages).toHaveLength(1)
+    expect(transcript.messages[0].role).toBe('user')
+    expect(transcript.messages[0].text).toBe('列出当前cpu占用率最高的3个进程')
+    expect(transcript.messages[0].text).not.toContain('GMT+8')
+  })
+
   it('hides reply markers, message_id headers, and encrypted reasoning payloads', async () => {
     const discoverOpenClaw = createDiscovery('fingerprint-3meta-hidden')
     const transcript = await getChatTranscript('remote-session', {
