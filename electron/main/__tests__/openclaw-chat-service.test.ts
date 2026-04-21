@@ -5885,19 +5885,19 @@ describe('openclaw chat service', () => {
           id: 'local-user-1',
           role: 'user',
           text: 'List the top CPU processes',
-          createdAt: 9_124_000,
+          createdAt: 1_776_768_085_940,
           status: 'sent',
         },
         {
           id: 'local-assistant-1',
           role: 'assistant',
           text: 'I will inspect the top CPU processes. Top CPU processes:\n1. proc-a\n2. proc-b',
-          createdAt: 9_124_001,
+          createdAt: 1_776_768_085_941,
           status: 'sent',
           model: 'openai/gpt-5.4',
         },
       ],
-      updatedAt: 9_124_001,
+      updatedAt: 1_776_768_085_941,
     })
 
     const transcript = await getChatTranscript('remote-session', {

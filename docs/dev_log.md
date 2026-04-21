@@ -6654,3 +6654,24 @@
     - installer artifact: `release/2026.4.21-v8/Mclaw_2026.4.21-v8.exe`
     - unpacked artifact: `release/2026.4.21-v8/win-unpacked/Mclaw.exe`
     - packaged bundle verification still passed with bundled `node v24.14.1`, bundled `npx 11.11.0`, and bundled `openclaw-lark` exposing `feishu`
+
+- Update 539
+  - Tightened Direct Chat transcript merge dedupe in `electron/main/openclaw-chat-service.ts` after a live retest still showed the same user question replayed at the end of the thread.
+  - Root cause was more specific than the previous patch: upstream session history and local transcript cache do not always use the same timestamp basis. In the failing live path, upstream message timestamps and local cached message timestamps were far apart numerically even when the role/text were clearly the same turn, so the old timestamp-window guard still let the local replay leak into the merged transcript.
+  - Adjusted transcript merge behavior:
+    - exact transcript-merge fingerprint matches now dedupe regardless of timestamp skew
+    - composite assistant replay detection no longer depends on a narrow timestamp window
+    - paired local user replay suppression now keys off the upstream text match instead of the upstream timestamp window
+  - Added/updated regression coverage in `electron/main/__tests__/openclaw-chat-service.test.ts` to simulate the real mixed timestamp-basis case.
+  - 2026-04-21 local validation:
+    - `cmd.exe /c npm test -- electron/main/__tests__/openclaw-chat-service.test.ts` passed (`1` file, `119` tests)
+    - `cmd.exe /c npm run typecheck` passed
+    - `cmd.exe /c npm run build:app` passed
+
+- Update 540
+  - Built a fresh Windows packaged artifact after the mixed-timestamp transcript-merge dedupe fix.
+  - 2026-04-21 packaging validation:
+    - `cmd.exe /c npm run package:win` passed
+    - installer artifact: `release/2026.4.21-v9/Mclaw_2026.4.21-v9.exe`
+    - unpacked artifact: `release/2026.4.21-v9/win-unpacked/Mclaw.exe`
+    - packaged bundle verification still passed with bundled `node v24.14.1`, bundled `npx 11.11.0`, and bundled `openclaw-lark` exposing `feishu`

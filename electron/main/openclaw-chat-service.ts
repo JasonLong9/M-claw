@@ -2574,18 +2574,11 @@ function isCompositeLocalAssistantReplay(
   const localText = normalizeChatMessageCompositeText(localMessage.text)
   if (!localText) return false
 
-  const localCreatedAt = Number(localMessage.createdAt || 0)
   const normalizedExternalTexts = Array.from(
     new Set(
       (Array.isArray(externalMessages) ? externalMessages : [])
         .filter((message) => message.role === 'assistant')
-        .filter((message) => {
-          if (!Number.isFinite(localCreatedAt) || localCreatedAt <= 0) return true
-          const externalCreatedAt = Number(message.createdAt || 0)
-          if (!Number.isFinite(externalCreatedAt) || externalCreatedAt <= 0) return false
-          return externalCreatedAt >= localCreatedAt - 5 * 60_000 && externalCreatedAt <= localCreatedAt + 15_000
-        })
-        .slice(-6)
+        .slice(-8)
         .map((message) => normalizeChatMessageCompositeText(message.text))
         .filter((text) => text.length >= 8 && text.length < localText.length)
         .filter((text) => localText.includes(text))
@@ -2645,34 +2638,11 @@ function isLocalUserReplayForCompositeAssistantTurn(
     if (message.role !== 'user') return false
     return normalizeChatMessageCompositeText(message.text) === localText
   })
-  if (matchingExternalUsers.length === 0) return false
-
-  const localCreatedAt = Number(localMessage.createdAt || 0)
-  if (!Number.isFinite(localCreatedAt) || localCreatedAt <= 0) {
-    return true
-  }
-
-  return matchingExternalUsers.some((message) => {
-    const externalCreatedAt = Number(message.createdAt || 0)
-    if (!Number.isFinite(externalCreatedAt) || externalCreatedAt <= 0) {
-      return true
-    }
-    return externalCreatedAt >= localCreatedAt - 5 * 60_000 && externalCreatedAt <= localCreatedAt + 15_000
-  })
+  return matchingExternalUsers.length > 0
 }
 
 function areChatMessagesEquivalentForTranscriptMerge(left: ChatMessage, right: ChatMessage): boolean {
-  if (buildChatMessageMergeFingerprint(left) !== buildChatMessageMergeFingerprint(right)) {
-    return false
-  }
-
-  const leftCreatedAt = Number(left.createdAt || 0)
-  const rightCreatedAt = Number(right.createdAt || 0)
-  if (!Number.isFinite(leftCreatedAt) || !Number.isFinite(rightCreatedAt) || leftCreatedAt <= 0 || rightCreatedAt <= 0) {
-    return true
-  }
-
-  return Math.abs(leftCreatedAt - rightCreatedAt) <= 15_000
+  return buildChatMessageMergeFingerprint(left) === buildChatMessageMergeFingerprint(right)
 }
 
 function mergeExternalTranscriptWithLocalMessages(
