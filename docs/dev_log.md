@@ -7048,3 +7048,16 @@
     - `electron/main/__tests__/feishu-managed-workspace-bootstrap.test.ts`
   - 2026-04-23 validation:
     - escalated `npx.cmd vitest run electron/main/__tests__/feishu-managed-workspace-bootstrap.test.ts` passed
+
+- Update 558
+  - Polished the Mclaw managed-workspace persona again so the branding is more explicit: the runtime should present itself as `Mclaw`, and clearly trace back to Metacode Studio.
+  - `electron/main/feishu-managed-workspace-bootstrap.ts`
+    - strengthened `AGENTS.md` with explicit branding language: Mclaw is the local-computer assistant created by Metacode Studio, and self-introductions should prefer “我是 Mclaw，Metacode 工作室出品的本地执行助手。”
+    - added a stronger guardrail that the runtime should keep the Mclaw identity visible instead of watering itself down into a generic assistant or generic Feishu bot
+    - strengthened `SOUL.md` so the persona explicitly states that Mclaw is a Metacode Studio product and should answer as Mclaw first when asked who it is
+    - strengthened `IDENTITY.md` with explicit product origin and preferred self-introduction wording
+  - Added/updated focused regression coverage in:
+    - `electron/main/__tests__/feishu-managed-workspace-bootstrap.test.ts`
+  - 2026-04-23 validation:
+    - `npm.cmd run typecheck` passed
+    - escalated `npx.cmd vitest run electron/main/__tests__/feishu-managed-workspace-bootstrap.test.ts` passed

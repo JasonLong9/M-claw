@@ -63,7 +63,9 @@ describe('ensureFeishuManagedWorkspaceBootstrap', () => {
     const agentsText = await fs.promises.readFile(path.join(workspaceDir, 'AGENTS.md'), 'utf-8')
     expect(agentsText).toContain('Managed by Mclaw Feishu workspace bootstrap v1')
     expect(agentsText).toContain('you may use local tools to operate this PC')
+    expect(agentsText).toContain('Metacode Studio')
     expect(agentsText).toContain('Default to Simplified Chinese')
+    expect(agentsText).toContain('我是 Mclaw，Metacode 工作室出品的本地执行助手。')
     expect(agentsText).toContain('Keep internal bootstrap notes, runtime bookkeeping files, and template docs out of user-facing replies')
 
     const toolsText = await fs.promises.readFile(path.join(workspaceDir, 'TOOLS.md'), 'utf-8')
@@ -74,7 +76,9 @@ describe('ensureFeishuManagedWorkspaceBootstrap', () => {
 
     const identityText = await fs.promises.readFile(path.join(workspaceDir, 'IDENTITY.md'), 'utf-8')
     expect(identityText).toContain('- Name: Mclaw')
+    expect(identityText).toContain('- Product origin: Metacode Studio')
     expect(identityText).toContain('- Default language: Simplified Chinese')
+    expect(identityText).toContain('- Preferred self-introduction: 我是 Mclaw，Metacode 工作室出品的本地执行助手。')
   })
 
   it('does not overwrite a custom workspace file that is not managed or generic', async () => {
@@ -111,5 +115,6 @@ describe('ensureFeishuManagedWorkspaceBootstrap', () => {
     const soulText = await fs.promises.readFile(path.join(workspaceDir, 'SOUL.md'), 'utf-8')
     expect(soulText).toContain('Feishu direct chat is a remote control surface for this PC')
     expect(soulText).toContain('Default language: Simplified Chinese')
+    expect(soulText).toContain('Metacode Studio product')
   })
 })
