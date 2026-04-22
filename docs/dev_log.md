@@ -6780,3 +6780,117 @@
   - 2026-04-22 packaging validation:
     - escalated `cmd.exe /c npm run package:win` passed
     - packaged bundle verification still passed with bundled `node v24.14.1`, bundled `npx 11.11.0`, and bundled `openclaw-lark` exposing `feishu`
+
+- Update 548
+  - Fixed the first post-release acceptance slice for the latest desktop-chat/watchdog issues reported on the packaged Windows build.
+  - `src/App.tsx`
+    - startup plugin-repair is now treated as best-effort
+    - soft startup repair misses no longer persist or surface a false `插件环境修复失败` banner when nothing actually needed repair
+  - `electron/main/cli.ts` and `electron/main/openclaw-runtime-paths.ts`
+    - Windows CLI execution now prefers the resolved real OpenClaw runtime path instead of letting shell resolution bounce through wrappers
+    - runtime probing now uses `resolveOpenClawCommand(...)` with hidden windows, reducing the risk of idle watchdog checks spawning visible flashing terminals
+  - `src/shared/chat-visible-text.ts`, `src/components/dashboard/chat-panel-messages.ts`, and `src/components/dashboard/DashboardChatPanel.tsx`
+    - assistant tool noise / raw machine lines are filtered out of visible chat text
+    - assistant reasoning is split from final answer and rendered in a collapsible `思考过程` block
+    - Windows file-path extraction now scans full assistant content instead of relying on fragile line-tail matches, fixing truncated path/button labels such as `广州今天气.txt`
+    - current-session self-click in history now reloads the transcript instead of blanking the panel
+    - chat diagnostics entry is now visible from the main chat panel so watchdog state and redacted snapshots are easier to discover
+  - `electron/main/openclaw-chat-service.ts`
+    - transcript merge/dedupe now fingerprints normalized visible text, reducing duplicate replay artifacts after assistant-text sanitization
+  - Added/updated focused regression coverage in:
+    - `src/components/dashboard/chat-panel-messages.test.ts`
+    - `src/components/dashboard/dashboard-chat-panel-guardrails.test.ts`
+    - `electron/main/__tests__/openclaw-chat-service.test.ts`
+  - 2026-04-22 local validation:
+    - `cmd.exe /c npm run typecheck` passed
+    - `cmd.exe /c npx vitest run src/components/dashboard/chat-panel-messages.test.ts src/components/dashboard/dashboard-chat-panel-guardrails.test.ts` passed
+    - `cmd.exe /c npx vitest run electron/main/__tests__/openclaw-chat-service.test.ts` passed
+
+- Update 549
+  - Audited the Update 548 acceptance fixes against the actual code paths and tightened the parts that were still too optimistic.
+  - `src/shared/chat-visible-text.ts`
+    - Rebuilt the assistant-text cleanup heuristics so the reasoning/final splitter no longer depends on corrupted mojibake markers.
+    - The final-answer split now keeps the whole final block together instead of accidentally leaving early bullet lines inside `思考过程`.
+    - Embedded image/base64 stripping now also removes the dangling trailing colon that could remain after the payload is removed.
+    - Centralized Windows local-path extraction and path-label formatting here so the same raw-text parser can be reused consistently.
+  - `src/components/dashboard/DashboardChatPanel.tsx`
+    - File buttons now scan the raw assistant message text together with the rendered reasoning/final text instead of only scanning the already-cleaned display text.
+    - When a raw tool payload contains both `path` and its parent `workdir`, the UI now keeps the concrete file path and suppresses the redundant ancestor directory button.
+  - `electron/main/openclaw-chat-service.ts`
+    - Transcript merge fingerprints and composite-replay comparisons now use sanitized visible text per role, so a locally cached assistant turn with tool chatter no longer reappears beside the already-clean upstream turn.
+  - `src/App.tsx`
+    - Startup plugin repair now treats no-op / soft-miss results as silent best-effort cache entries, but it still persists and surfaces a startup failure when the result contains real incompatible-plugin evidence, failed plugin ids, or failed paths.
+  - Expanded focused regression coverage in:
+    - `src/components/dashboard/chat-panel-messages.test.ts`
+    - `src/components/dashboard/dashboard-chat-panel-guardrails.test.ts`
+    - `electron/main/__tests__/openclaw-chat-service.test.ts`
+  - 2026-04-22 validation:
+    - `cmd.exe /c npm run typecheck` passed
+    - escalated `cmd.exe /c npx vitest run src/components/dashboard/chat-panel-messages.test.ts electron/main/__tests__/openclaw-chat-service.test.ts` passed (`2` files, `129` tests)
+    - escalated `cmd.exe /c npx vitest run src/components/dashboard/dashboard-chat-panel-guardrails.test.ts electron/main/__tests__/openclaw-runtime-paths.test.ts` passed (`2` files, `13` tests)
+    - escalated `cmd.exe /c npm run build:app` passed
+    - escalated `cmd.exe /c npm run package:win:dir` passed
+  - Built a fresh Windows unpacked validation artifact with the tightened acceptance fixes:
+    - unpacked: `release/2026.4.22-v1/win-unpacked/Mclaw.exe`
+
+- Update 550
+  - Closed the remaining acceptance gaps from the `v1` user retest and rebuilt a new Windows validation package.
+  - `src/components/dashboard/chat-panel-messages.ts` and `src/components/dashboard/DashboardChatPanel.tsx`
+    - replaced the old per-message-only assistant splitter with message-level grouping across consecutive assistant/process bubbles
+    - the chat panel now merges fragmented `reasoning_content` / tool-process / path-only assistant bubbles into a single assistant turn
+    - `思考过程` is now rendered as a dedicated collapsible block with a Gemini-style left vertical guideline, while the final answer stays in the main bubble below
+    - file-button extraction now reads `rawText` from the grouped assistant turn so grouped transcripts still surface the real deliverable file
+  - `src/shared/chat-visible-text.ts`
+    - tightened machine-artifact filtering so marker-only lines such as `reasoning_content` no longer leak into the visible chat body
+    - stopped falling back to raw artifact lines when every line was machine noise; this prevents placeholder process markers from being rendered as user-facing content
+    - filtered internal runtime-managed files from assistant path buttons, including `HEARTBEAT.md`, `.openclaw` runtime workspaces, and internal browser-media files under `openclaw-state`
+  - `electron/main/openclaw-spawn.ts`
+    - extended Windows command resolution beyond the bundled runtime case: global/npm `openclaw.cmd` shims are now unwrapped to their package entrypoint and launched through a real `node.exe`
+    - this removes another visible-shell path on Windows that could still be hit when model switching or gateway reloads resolved to an npm shim instead of the bundled runtime
+  - `electron/main/command-capabilities.ts` and `electron/main/openclaw-package.ts`
+    - added `windowsHide: true` to command-path probing helpers so Windows lookup/probe subprocesses do not flash visible terminals during command discovery
+  - `electron/main/openclaw-chat-service.ts`
+    - kept explicit assistant JSON text fields parseable even when the content itself looks like a JSON object, while still suppressing true tool-payload blobs from non-assistant fields
+    - this preserves legitimate assistant replies and avoids regressing transcript parsing while the stricter chat cleanup is enabled
+  - Audited the current live plugin state on this machine after the startup-repair best-effort change:
+    - `C:\Users\James\AppData\Roaming\Mclaw\openclaw-state\.openclaw\openclaw.json` currently contains only the managed `openclaw-lark` install in `plugins.allow`
+    - the managed plugin directory exists with both `openclaw.plugin.json` and `package.json`
+    - no additional stale plugin ids or obviously broken plugin install records were found in the active managed config snapshot
+  - Added/updated focused regression coverage in:
+    - `src/components/dashboard/chat-panel-messages.test.ts`
+    - `src/components/dashboard/dashboard-chat-panel-guardrails.test.ts`
+    - `electron/main/__tests__/openclaw-spawn.test.ts`
+  - 2026-04-22 validation:
+    - `cmd.exe /c npm run typecheck` passed
+    - escalated `cmd.exe /c npx vitest run src/components/dashboard/chat-panel-messages.test.ts src/components/dashboard/dashboard-chat-panel-guardrails.test.ts electron/main/__tests__/openclaw-spawn.test.ts` passed (`3` files, `30` tests)
+    - escalated `cmd.exe /c npx vitest run electron/main/__tests__/openclaw-chat-service.test.ts` passed (`1` file, `121` tests)
+    - escalated `cmd.exe /c npm run build:app` passed
+    - escalated `cmd.exe /c npm run package:win:dir` passed
+  - Built a fresh Windows unpacked validation artifact containing the latest acceptance fixes:
+    - unpacked: `release/2026.4.22-v2/win-unpacked/Mclaw.exe`
+
+- Update 551
+  - Fixed the follow-up regressions reported after the `v2` unpacked retest and produced a new Windows validation build.
+  - `src/components/dashboard/chat-panel-messages.ts` and `src/components/dashboard/DashboardChatPanel.tsx`
+    - assistant file buttons now come from message-scoped `localPaths` computed during assistant-turn grouping, instead of rescanning the entire grouped raw transcript blob
+    - the path extractor now prefers the final-answer block and only falls back to the latest meaningful assistant path-bearing bubble when the final reply omits the full path
+    - this removes junk buttons such as stray `.html` / truncated fragments while still keeping the real deliverable file button
+    - chat image thumbnails are now filtered through a renderability guard so broken non-image artifacts no longer surface as clickable `聊天图片` previews
+  - `electron/main/openclaw-chat-service.ts`
+    - tightened image-attachment parsing so arbitrary remote URLs are no longer treated as chat images unless they are explicit image payloads, image-like local files, or remote URLs that clearly resolve to images
+    - this suppresses bogus screenshot/image attachments caused by upstream tool/search metadata carrying generic `url` fields
+  - `electron/main/cli.ts` and `electron/main/openclaw-runtime-paths.ts`
+    - Windows command resolution now passes the fully prepared runtime `env` into `resolveOpenClawCommand(...)`
+    - npm/global `openclaw.cmd` shims can therefore be unwrapped using the managed `node.exe` lookup path during model-status polling and gateway reload flows, reducing the remaining visible `timeout /t 1 /nobreak` shell popups during model switching
+  - Added/updated focused regression coverage in:
+    - `src/components/dashboard/chat-panel-messages.test.ts`
+    - `src/components/dashboard/dashboard-chat-panel-guardrails.test.ts`
+    - `electron/main/__tests__/openclaw-chat-service.test.ts`
+    - `electron/main/__tests__/cli-windows-spawn.test.ts`
+  - 2026-04-22 validation:
+    - `npm.cmd run typecheck` passed
+    - escalated `npx.cmd vitest run src/components/dashboard/chat-panel-messages.test.ts src/components/dashboard/dashboard-chat-panel-guardrails.test.ts electron/main/__tests__/openclaw-chat-service.test.ts electron/main/__tests__/cli-windows-spawn.test.ts` passed (`4` files, `140` tests)
+    - escalated `npm.cmd run build:app` passed
+    - escalated `npm.cmd run package:win:dir` passed
+  - Built a fresh Windows unpacked validation artifact containing this acceptance slice:
+    - unpacked: `release/2026.4.22-v3/win-unpacked/Mclaw.exe`

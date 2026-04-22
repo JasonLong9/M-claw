@@ -150,6 +150,7 @@ function runCommandPathLookup(commandName: string, runtime: CommandLookupRuntime
       shell: invocation.shell,
       env: runtime.env,
       cwd: resolveSafeWorkingDirectory({ env: runtime.env, platform: runtime.platform }),
+      windowsHide: true,
     })
 
     let stdout = ''
@@ -179,6 +180,7 @@ function runDirectCommand(command: string, args: string[], runtime: CommandLooku
       shell: false,
       env: runtime.env,
       cwd: resolveSafeWorkingDirectory({ env: runtime.env, platform: runtime.platform }),
+      windowsHide: true,
     })
 
     let stdout = ''

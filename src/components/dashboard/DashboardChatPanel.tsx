@@ -25,9 +25,10 @@ import { deriveChatPanelAvailabilityView } from './chat-panel-availability'
 import { advanceStreamingText } from './chat-stream-typing'
 import {
   buildRenderedChatMessages,
-  resolveChatMessageDisplayText,
+  type RenderedChatMessage,
   shouldShowFullscreenChatLoader,
 } from './chat-panel-messages'
+import { describeLocalPathLabel } from '../../shared/chat-visible-text'
 import {
   buildSessionModelOptions,
   resolveSessionModelIntentState,
@@ -82,6 +83,29 @@ interface ImagePreviewNaturalSize {
 
 type WatchdogStateSnapshot = Awaited<ReturnType<typeof window.api.getWatchdogState>>
 type WatchdogEventEntry = Awaited<ReturnType<typeof window.api.listWatchdogEvents>>[number]
+
+function inferChatImageMimeTypeFromUrl(url: string): string {
+  return String(/^data:([^;,]+)[;,]/i.exec(String(url || '').trim())?.[1] || '')
+    .trim()
+    .toLowerCase()
+}
+
+function isRenderableChatImageAttachment(image: ChatImageAttachment | null | undefined): boolean {
+  const url = String(image?.url || '').trim()
+  if (!url) return false
+
+  const mimeType = String(image?.mimeType || inferChatImageMimeTypeFromUrl(url) || '')
+    .trim()
+    .toLowerCase()
+  if (mimeType && !mimeType.startsWith('image/')) {
+    return false
+  }
+
+  if (/^data:image\//i.test(url)) return true
+  if (mimeType.startsWith('image/')) return true
+
+  return /^https?:\/\/[^\s]+\.(?:png|jpe?g|webp|gif|bmp|svg)(?:[?#][^\s]*)?$/i.test(url)
+}
 
 function clampImagePreviewScale(scale: number): number {
   if (!Number.isFinite(scale)) return 1
@@ -147,39 +171,6 @@ function formatSessionTime(updatedAt: number): string {
     hour: '2-digit',
     minute: '2-digit',
   })
-}
-
-function trimDetectedLocalPath(candidate: string): string {
-  return String(candidate || '')
-    .trim()
-    .replace(/^['"`(<{\[]+/, '')
-    .replace(/['"`)>}\]]+$/, '')
-    .replace(/[，。,；;：:!！?？]+$/, '')
-}
-
-function collectAssistantLocalPaths(text: string): string[] {
-  const normalizedText = String(text || '')
-  if (!normalizedText) return []
-
-  const paths: string[] = []
-  for (const line of normalizedText.split(/\r?\n/)) {
-    const normalizedLine = String(line || '').trim()
-    if (!normalizedLine) continue
-    const match = normalizedLine.match(/(?:^|[^a-z0-9+.-])([a-z]:[\\/].+)$/i)
-    if (!match) continue
-    const normalizedPath = trimDetectedLocalPath(match[1] || '')
-    if (!normalizedPath) continue
-    paths.push(normalizedPath)
-  }
-
-  return Array.from(new Set(paths))
-}
-
-function describeLocalPathLabel(targetPath: string): string {
-  const normalized = String(targetPath || '').trim().replace(/[\\/]+$/, '')
-  if (!normalized) return '文件'
-  const segments = normalized.split(/[\\/]/).filter(Boolean)
-  return segments[segments.length - 1] || normalized
 }
 
 function formatMessageTime(createdAt: number, fallback = ''): string {
@@ -377,7 +368,7 @@ export default function DashboardChatPanel({
   const [composerHeight, setComposerHeight] = useState(COMPOSER_DEFAULT_HEIGHT)
   const [showComposerModelPicker, setShowComposerModelPicker] = useState(false)
   const [inFlightPatchState, setInFlightPatchState] = useState<{ sessionId: string; targetModel: string } | null>(null)
-  const [showDiagnostics] = useState(false)
+  const [showDiagnostics, setShowDiagnostics] = useState(false)
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   const [diagnosticsError, setDiagnosticsError] = useState('')
   const [capabilitySnapshot, setCapabilitySnapshot] = useState<ChatCapabilitySnapshot | null>(null)
@@ -510,7 +501,7 @@ export default function DashboardChatPanel({
         ]
       : []),
   ]
-  const renderedMessages: ChatMessage[] = buildRenderedChatMessages({
+  const renderedMessages: RenderedChatMessage[] = buildRenderedChatMessages({
     baseMessages: activeTranscript?.messages || [],
     pendingUserText,
     pendingAssistant: {
@@ -1140,7 +1131,7 @@ export default function DashboardChatPanel({
     })
   }, [showDiagnostics, activeSessionId, activeTranscript?.updatedAt, activeSession?.updatedAt])
 
-  const handleCopyMessage = async (message: ChatMessage) => {
+  const handleCopyMessage = async (message: Pick<RenderedChatMessage, 'id' | 'text'>) => {
     const text = String(message.text || '').trim()
     if (!text) return
 
@@ -1376,6 +1367,20 @@ export default function DashboardChatPanel({
               <Text size="xs">{statusDetail}</Text>
             </Alert>
           )}
+
+          <Group mt="sm" gap="xs" justify="space-between">
+            <Text size="xs" c="dimmed">
+              诊断面板里可以查看 watchdog 状态、最近事件，以及脱敏后的 config/env 快照。
+            </Text>
+            <Button
+              variant="subtle"
+              color="gray"
+              size="compact-xs"
+              onClick={() => setShowDiagnostics((current) => !current)}
+            >
+              {showDiagnostics ? '收起诊断面板' : '展开诊断面板'}
+            </Button>
+          </Group>
 
           {showDiagnostics && (
             <Paper withBorder p="sm" mt="sm" radius="lg" style={{ flex: '0 0 auto' }}>
@@ -1633,8 +1638,17 @@ export default function DashboardChatPanel({
                           radius="md"
                           onClick={() => {
                             if (!canBrowseHistory) return
-                            setTranscript(buildEmptyTranscript(session.sessionId))
-                            setActiveSessionId(session.sessionId)
+                            const normalizedSessionId = String(session.sessionId || '').trim()
+                            if (!normalizedSessionId) return
+                            if (normalizedSessionId === String(activeSessionId || '').trim()) {
+                              void loadTranscript(normalizedSessionId, {
+                                preservePanelError: true,
+                              })
+                              setShowHistory(false)
+                              return
+                            }
+                            setTranscript(buildEmptyTranscript(normalizedSessionId))
+                            setActiveSessionId(normalizedSessionId)
                             setShowHistory(false)
                           }}
                           style={{
@@ -1804,16 +1818,16 @@ export default function DashboardChatPanel({
             ) : renderedMessages.length > 0 ? (
               <Stack gap="md">
                 {renderedMessages.map((message) => {
-                  const displayText = resolveChatMessageDisplayText(message.text)
-                  const messageText = displayText.body
+                  const messageText = String(message.text || '').trim()
+                  const reasoningText = String(message.reasoning || '').trim()
                   const localPathLinks =
                     message.role === 'assistant'
-                      ? collectAssistantLocalPaths(messageText)
+                      ? (Array.isArray(message.localPaths) ? message.localPaths : [])
                       : []
                   const imageAttachments = Array.isArray(message.images)
-                    ? message.images.filter((image) => String(image?.url || '').trim())
+                    ? message.images.filter(isRenderableChatImageAttachment)
                     : []
-                  if (!messageText && imageAttachments.length === 0 && localPathLinks.length === 0) return null
+                  if (!messageText && !reasoningText && imageAttachments.length === 0 && localPathLinks.length === 0) return null
                   const canCopyMessage = message.status !== 'pending' && Boolean(messageText.trim())
                   const usageLabel = formatUsageLabel(message.usage)
                   const statusLabel =
@@ -1825,7 +1839,7 @@ export default function DashboardChatPanel({
                         ? '发送失败'
                         : ''
                   const metaItems = [
-                    formatMessageTime(message.createdAt, displayText.embeddedTimestamp),
+                    formatMessageTime(message.createdAt, message.embeddedTimestamp),
                     statusLabel,
                     message.role === 'assistant' ? String(message.model || '').trim() : '',
                     message.role === 'assistant' ? usageLabel : '',
@@ -1884,6 +1898,43 @@ export default function DashboardChatPanel({
                               </button>
                             ))}
                           </Group>
+                        )}
+
+                        {reasoningText && message.role === 'assistant' && (
+                          <details
+                            style={{
+                              width: '100%',
+                              borderLeft: '3px solid var(--app-border-light)',
+                              paddingLeft: 12,
+                              marginLeft: 2,
+                            }}
+                          >
+                            <summary
+                              style={{
+                                cursor: 'pointer',
+                                color: 'var(--app-text-secondary)',
+                                fontSize: 12,
+                                lineHeight: 1.5,
+                                userSelect: 'none',
+                                listStylePosition: 'outside',
+                              }}
+                            >
+                              思考过程
+                            </summary>
+                            <Text
+                              size="xs"
+                              lh={1.7}
+                              mt={6}
+                              c="dimmed"
+                              style={{
+                                whiteSpace: 'pre-wrap',
+                                wordBreak: 'break-word',
+                                paddingBottom: 2,
+                              }}
+                            >
+                              {reasoningText}
+                            </Text>
+                          </details>
                         )}
 
                         {messageText && (

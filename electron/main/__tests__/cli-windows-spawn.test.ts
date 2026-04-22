@@ -10,5 +10,7 @@ describe('windows cli spawn visibility', () => {
     expect(cliSource).toContain("shell: resolvedCommand.shell,\n      windowsHide: true,")
     expect(cliSource).toContain("shell: forceOpenShell ? true : useShell,\n        timeout,\n        windowsHide: true,")
     expect(cliSource).toContain("cwd: resolveManagedSpawnCwd(),\n      timeout,\n      windowsHide: true,")
+    expect(cliSource).toMatch(/resolveOpenClawCommand\(args, \{[\s\S]*commandPath: explicitBinaryPath \|\| undefined,[\s\S]*env: mergedEnv,[\s\S]*\}\)/)
+    expect(cliSource).toMatch(/resolveOpenClawCommand\(args, \{[\s\S]*commandPath: binaryPath \|\| undefined,[\s\S]*env: mergedEnv,[\s\S]*\}\)/)
   })
 })

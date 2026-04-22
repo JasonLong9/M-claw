@@ -833,6 +833,12 @@ async function runCliStreamingOnce(args: string[], options: RunCliStreamOptions 
       }
       return runCliStreamingOnce(args, { ...options, binaryPath: fallbackPath })
     }
+    if (openClawCapability.resolvedPath) {
+      return runCliStreamingOnce(args, {
+        ...options,
+        binaryPath: openClawCapability.resolvedPath,
+      })
+    }
   }
   const needsPtyWrapper = shouldAutoOpenBrowserForArgs(args) && !isWin
   const needsGeminiExpectWrapper =
@@ -868,14 +874,6 @@ async function runCliStreamingOnce(args: string[], options: RunCliStreamOptions 
   })
   const managedCwd = resolveManagedSpawnCwd()
 
-  const resolvedCommand = resolveOpenClawCommand(args, {
-    platform: process.platform,
-    expectAvailable: expectCapability?.available,
-    expectWarning: expectCapability?.message,
-    scriptAvailable: scriptCapability?.available,
-    scriptWarning: scriptCapability?.message,
-    commandPath: explicitBinaryPath || undefined,
-  })
   let mergedEnv: NodeJS.ProcessEnv = {
     ...inheritedProcessEnv,
     ...envFromFile,
@@ -891,6 +889,15 @@ async function runCliStreamingOnce(args: string[], options: RunCliStreamOptions 
     }
   }
   mergedEnv = await buildManagedOpenClawRuntimeEnv(mergedEnv)
+  const resolvedCommand = resolveOpenClawCommand(args, {
+    platform: process.platform,
+    expectAvailable: expectCapability?.available,
+    expectWarning: expectCapability?.message,
+    scriptAvailable: scriptCapability?.available,
+    scriptWarning: scriptCapability?.message,
+    commandPath: explicitBinaryPath || undefined,
+    env: mergedEnv,
+  })
 
   return new Promise((resolve) => {
 
@@ -2919,6 +2926,7 @@ export async function gatewayRunInBackground(options: {
   const resolvedCommand = resolveOpenClawCommand(args, {
     platform: process.platform,
     commandPath: binaryPath || undefined,
+    env: mergedEnv,
   })
 
   const logDir = join(tmpdir(), 'qclaw-lite', 'gateway-run')

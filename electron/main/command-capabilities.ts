@@ -276,6 +276,7 @@ function runNamedCommandLookup(invocation: CommandLookupInvocation, env: NodeJS.
       shell: invocation.shell,
       env,
       cwd: resolveSafeWorkingDirectory({ env }),
+      windowsHide: true,
     })
 
     let stdout = ''

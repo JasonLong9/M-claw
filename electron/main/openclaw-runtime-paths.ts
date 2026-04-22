@@ -1,5 +1,6 @@
 import { parseJsonFromOutput } from './openclaw-command-output'
 import { resolveOpenClawBinaryPath } from './openclaw-package'
+import { resolveOpenClawCommand } from './openclaw-spawn'
 import {
   expandDisplayPath,
   resolveOpenClawPaths,
@@ -168,14 +169,19 @@ async function defaultRunCommand(
 ): Promise<RuntimePathCommandResult> {
   return new Promise((resolve) => {
     const runtimeEnv = options.env || process.env
-    const isWindowsCmd = (options.platform || process.platform) === 'win32' && /\.cmd$/i.test(binaryPath)
-    const proc = spawn(binaryPath, args, {
+    const resolvedCommand = resolveOpenClawCommand(args, {
+      platform: options.platform || process.platform,
+      commandPath: binaryPath,
+      env: runtimeEnv,
+    })
+    const proc = spawn(resolvedCommand.command, resolvedCommand.args, {
       cwd: resolveSafeWorkingDirectory({
         env: runtimeEnv,
         platform: options.platform || process.platform,
       }),
       env: runtimeEnv,
-      shell: isWindowsCmd,
+      shell: resolvedCommand.shell,
+      windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
 

@@ -141,6 +141,50 @@ describe('resolveOpenClawCommand', () => {
     }
   })
 
+  it('bypasses a global npm openclaw.cmd shim by invoking node with the package entrypoint on windows', () => {
+    const npmRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mclaw-openclaw-npm-shim-'))
+    const nodeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mclaw-openclaw-node-'))
+    try {
+      const packageRoot = path.join(npmRoot, 'node_modules', 'openclaw')
+      const entryPointPath = path.join(packageRoot, 'bin', 'openclaw.mjs')
+      const commandPath = path.join(npmRoot, 'openclaw.cmd')
+      const nodePath = path.join(nodeRoot, 'node.exe')
+
+      fs.mkdirSync(path.dirname(entryPointPath), { recursive: true })
+      fs.writeFileSync(
+        path.join(packageRoot, 'package.json'),
+        JSON.stringify({
+          name: 'openclaw',
+          version: '2026.4.22',
+          bin: {
+            openclaw: 'bin/openclaw.mjs',
+          },
+        })
+      )
+      fs.writeFileSync(entryPointPath, 'console.log("ok")\n')
+      fs.writeFileSync(commandPath, '@node "%~dp0\\node_modules\\openclaw\\bin\\openclaw.mjs" %*\r\n')
+      fs.writeFileSync(nodePath, '')
+
+      const args = ['gateway', 'restart']
+      const resolved = resolveOpenClawCommand(args, {
+        platform: 'win32',
+        commandPath,
+        env: {
+          PATH: nodeRoot,
+        } as unknown as NodeJS.ProcessEnv,
+      })
+
+      expect(resolved).toEqual({
+        command: nodePath,
+        args: [entryPointPath, ...args],
+        shell: false,
+      })
+    } finally {
+      fs.rmSync(npmRoot, { recursive: true, force: true })
+      fs.rmSync(nodeRoot, { recursive: true, force: true })
+    }
+  })
+
   it('keeps the legacy cmd execution path when bundled node files are not present', () => {
     const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mclaw-openclaw-runtime-fallback-'))
     try {

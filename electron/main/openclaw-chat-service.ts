@@ -27,6 +27,7 @@ import type { OpenClawRuntimeReconcileStore } from '../../src/shared/gateway-run
 import { resolveEffectiveGatewayRunning } from '../../src/shared/gateway-effective-running'
 import {
   CHAT_REPLY_REJECTED_PATH_PATTERN,
+  normalizeComparableVisibleChatText,
   sanitizeAssistantRawFallbackText,
   sanitizeAssistantVisibleText,
 } from '../../src/shared/chat-visible-text'
@@ -2549,7 +2550,7 @@ function normalizeChatMessageImageFingerprint(url: string): string {
 }
 
 function buildChatMessageMergeFingerprint(message: ChatMessage): string {
-  const text = String(message.text || '').trim()
+  const text = normalizeComparableVisibleChatText(message.text, message.role)
   const images = Array.isArray(message.images)
     ? message.images
         .map((image) => `${String(image?.mimeType || '').trim()}::${normalizeChatMessageImageFingerprint(String(image?.url || ''))}`)
@@ -2559,10 +2560,11 @@ function buildChatMessageMergeFingerprint(message: ChatMessage): string {
   return `${message.role}::${text}::${images}`
 }
 
-function normalizeChatMessageCompositeText(text: string): string {
-  return String(text || '')
-    .replace(/\s+/g, ' ')
-    .trim()
+function normalizeChatMessageCompositeText(
+  text: string,
+  role: ChatMessage['role'] = 'assistant'
+): string {
+  return normalizeComparableVisibleChatText(text, role)
 }
 
 function isCompositeLocalAssistantReplay(
@@ -2571,7 +2573,7 @@ function isCompositeLocalAssistantReplay(
 ): boolean {
   if (localMessage.role !== 'assistant') return false
 
-  const localText = normalizeChatMessageCompositeText(localMessage.text)
+  const localText = normalizeChatMessageCompositeText(localMessage.text, localMessage.role)
   if (!localText) return false
 
   const normalizedExternalTexts = Array.from(
@@ -2579,7 +2581,7 @@ function isCompositeLocalAssistantReplay(
       (Array.isArray(externalMessages) ? externalMessages : [])
         .filter((message) => message.role === 'assistant')
         .slice(-8)
-        .map((message) => normalizeChatMessageCompositeText(message.text))
+        .map((message) => normalizeChatMessageCompositeText(message.text, message.role))
         .filter((text) => text.length >= 8 && text.length < localText.length)
         .filter((text) => localText.includes(text))
     )
@@ -2617,7 +2619,7 @@ function isLocalUserReplayForCompositeAssistantTurn(
 ): boolean {
   if (localMessage.role !== 'user') return false
 
-  const localText = normalizeChatMessageCompositeText(localMessage.text)
+  const localText = normalizeChatMessageCompositeText(localMessage.text, localMessage.role)
   if (!localText) return false
 
   let pairedAssistant: ChatMessage | null = null
@@ -2636,7 +2638,7 @@ function isLocalUserReplayForCompositeAssistantTurn(
 
   const matchingExternalUsers = (Array.isArray(externalMessages) ? externalMessages : []).filter((message) => {
     if (message.role !== 'user') return false
-    return normalizeChatMessageCompositeText(message.text) === localText
+    return normalizeChatMessageCompositeText(message.text, message.role) === localText
   })
   return matchingExternalUsers.length > 0
 }
@@ -4022,22 +4024,39 @@ function isExplicitAssistantTextPath(path: string): boolean {
   return EXPLICIT_ASSISTANT_TEXT_PATHS.has(normalizeAssistantLeafPath(path))
 }
 
-function selectBestReplyLeaf(leaves: StringLeaf[]): string | null {
+function selectBestReplyLeafEntry(leaves: StringLeaf[]): {
+  leaf: StringLeaf
+  visibleValue: string
+  fallbackValue: string
+} | null {
   if (leaves.length === 0) return null
 
   const preferred = leaves
     .map((leaf) => ({
       leaf,
       visibleValue: sanitizeAssistantVisibleText(leaf.value),
+      fallbackValue: sanitizeAssistantRawFallbackText(leaf.value),
     }))
     .filter(
       (entry) =>
         isExplicitAssistantTextPath(entry.leaf.path) &&
         !CHAT_REPLY_REJECTED_PATH_PATTERN.test(entry.leaf.path) &&
-        Boolean(entry.visibleValue)
+        Boolean(String(entry.leaf.value || '').trim())
     )
-    .sort((left, right) => right.visibleValue.length - left.visibleValue.length)
-  if (preferred.length > 0) return preferred[0].leaf.value
+    .sort(
+      (left, right) =>
+        Math.max(
+          right.visibleValue.length,
+          right.fallbackValue.length,
+          String(right.leaf.value || '').trim().length
+        ) -
+        Math.max(
+          left.visibleValue.length,
+          left.fallbackValue.length,
+          String(left.leaf.value || '').trim().length
+        )
+    )
+  if (preferred.length > 0) return preferred[0]
 
   const fallback = leaves
     .map((leaf) => ({
@@ -4047,13 +4066,19 @@ function selectBestReplyLeaf(leaves: StringLeaf[]): string | null {
     }))
     .filter((entry) => {
       if (CHAT_REPLY_REJECTED_PATH_PATTERN.test(entry.leaf.path)) return false
-      if (isExplicitAssistantTextPath(entry.leaf.path)) return Boolean(entry.visibleValue)
+      if (isExplicitAssistantTextPath(entry.leaf.path)) {
+        return Boolean(String(entry.leaf.value || '').trim())
+      }
       return Boolean(entry.fallbackValue)
     })
     .sort((left, right) => right.fallbackValue.length - left.fallbackValue.length)
-  if (fallback.length > 0) return fallback[0].leaf.value
+  if (fallback.length > 0) return fallback[0]
 
   return null
+}
+
+function selectBestReplyLeaf(leaves: StringLeaf[]): string | null {
+  return selectBestReplyLeafEntry(leaves)?.leaf.value || null
 }
 
 function findFirstStringField(value: unknown, fieldNames: string[]): string | undefined {
@@ -4216,6 +4241,18 @@ function inferChatImageMimeType(filePath: string, explicitMimeType?: string): st
   return CHAT_IMAGE_MIME_TYPES_BY_EXTENSION[path.extname(filePath).toLowerCase()] || null
 }
 
+function isLikelyRemoteChatImageUrl(candidate: string, explicitMimeType?: string): boolean {
+  const normalized = String(candidate || '').trim()
+  if (!/^https?:\/\//i.test(normalized)) return false
+
+  const normalizedExplicitMimeType = String(explicitMimeType || '').trim().toLowerCase()
+  if (normalizedExplicitMimeType.startsWith('image/')) {
+    return true
+  }
+
+  return /\.(png|jpe?g|webp|gif|bmp|svg)(?:[?#][^\s]*)?$/i.test(normalized)
+}
+
 function tryReadChatImageAttachmentFromFile(
   candidatePath: string,
   explicitMimeType?: string,
@@ -4264,12 +4301,16 @@ function resolveChatImageAttachmentFromUrlOrPath(
   const fileAttachment = tryReadChatImageAttachmentFromFile(normalized, normalizedExplicitMimeType, options)
   if (fileAttachment) return fileAttachment
 
-  const looksLikeWindowsDrivePath = /^[a-z]:[\\/]/i.test(normalized)
-  if (!looksLikeWindowsDrivePath && /^[a-z][a-z0-9+.-]*:/i.test(normalized) && !/^file:/i.test(normalized)) {
+  if (isLikelyRemoteChatImageUrl(normalized, normalizedExplicitMimeType)) {
     return {
       url: normalized,
       mimeType: normalizedExplicitMimeType,
     }
+  }
+
+  const looksLikeWindowsDrivePath = /^[a-z]:[\\/]/i.test(normalized)
+  if (!looksLikeWindowsDrivePath && /^[a-z][a-z0-9+.-]*:/i.test(normalized) && !/^file:/i.test(normalized)) {
+    return null
   }
 
   return null
@@ -5143,13 +5184,18 @@ export function parseAgentReplyOutput(stdout: string): {
     }
 
     const leaves = collectStringLeaves(parsed, '')
-    const candidateText = selectBestReplyLeaf(leaves) || ''
+    const selectedReplyLeaf = selectBestReplyLeafEntry(leaves)
+    const candidateText = selectedReplyLeaf?.leaf.value || ''
     const images = dedupeChatImageAttachments([
       ...collectChatImageAttachments(parsed),
       ...collectChatImageAttachmentsFromText(candidateText),
     ])
+    const normalizedCandidateText =
+      selectedReplyLeaf && isExplicitAssistantTextPath(selectedReplyLeaf.leaf.path)
+        ? sanitizeAssistantVisibleText(candidateText) || String(candidateText || '').trim()
+        : sanitizeAssistantVisibleText(candidateText)
     const text = stripImageAttachmentUrlFromText(
-      sanitizeAssistantVisibleText(candidateText) || null,
+      normalizedCandidateText || null,
       images
     )
     const model =

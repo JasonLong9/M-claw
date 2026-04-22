@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
+﻿import { describe, expect, it } from 'vitest'
 import type { ChatMessage } from '../../shared/chat-panel'
+import { collectAssistantLocalPaths, describeLocalPathLabel } from '../../shared/chat-visible-text'
 import {
   buildRenderedChatMessages,
   resolveChatMessageDisplayText,
@@ -35,7 +36,7 @@ describe('chat panel message helpers', () => {
         sending: true,
         started: true,
         stopping: false,
-        text: '深圳今天晴转多云',
+        text: '深圳今天天气晴转多云',
         model: 'openai/gpt-5.1-codex',
       },
       now: () => 100,
@@ -48,7 +49,7 @@ describe('chat panel message helpers', () => {
     ])
     expect(messages.at(-1)).toMatchObject({
       role: 'assistant',
-      text: '深圳今天晴转多云',
+      text: '深圳今天天气晴转多云',
       status: 'pending',
       model: 'openai/gpt-5.1-codex',
     })
@@ -75,28 +76,166 @@ describe('chat panel message helpers', () => {
     })
   })
 
-  it('strips embedded timestamp prefixes from message bodies for display', () => {
-    expect(resolveChatMessageDisplayText('[Sat 2026-03-28 01:05 GMT+8] 你好')).toEqual({
+  it('strips embedded timestamp prefixes from user message bodies for display', () => {
+    expect(resolveChatMessageDisplayText('[Sat 2026-03-28 01:05 GMT+8] 你好', 'user')).toEqual({
       body: '你好',
       embeddedTimestamp: 'Sat 2026-03-28 01:05 GMT+8',
+      reasoning: '',
     })
   })
 
-  it('keeps explicit json message bodies visible in the chat surface', () => {
+  it('moves assistant execution chatter into a separate reasoning section', () => {
     expect(
       resolveChatMessageDisplayText(
-        '{"command":"curl -s \\"wttr.in/Shenzhen?format=%C\\"","workdir":"/Users/test/.openclaw/workspace","yieldMs":10000,"timeout":20}'
+        [
+          '我来帮你在桌面创建一个天气文件。',
+          '让我先获取广州天气：',
+          '{"command":"curl -s \\"wttr.in/Guangzhou?format=%C\\"","workdir":"C:\\\\Users\\\\James\\\\Desktop","yieldMs":10000,"timeout":20}',
+          '完成！我已经在桌面创建了 `广州天气.txt`。',
+        ].join('\n'),
+        'assistant'
       )
     ).toEqual({
-      body: '{"command":"curl -s \\"wttr.in/Shenzhen?format=%C\\"","workdir":"/Users/test/.openclaw/workspace","yieldMs":10000,"timeout":20}',
+      body: '完成！我已经在桌面创建了 `广州天气.txt`。',
       embeddedTimestamp: '',
+      reasoning: '我来帮你在桌面创建一个天气文件。\n让我先获取广州天气：',
     })
+  })
+
+  it('keeps the full final answer block together after stripping tool chatter', () => {
+    expect(
+      resolveChatMessageDisplayText(
+        [
+          '我来帮你整理结果。',
+          '让我先检查一下输出：',
+          '{"command":"cmd.exe /c dir","workdir":"C:\\\\Users\\\\James\\\\Desktop","yieldMs":10000,"timeout":20}',
+          '完成！我已经把结果写入桌面文件。',
+          '- 文件名：广州今天天气.txt',
+          '- 路径：C:\\Users\\James\\Desktop\\广州今天天气.txt',
+        ].join('\n'),
+        'assistant'
+      )
+    ).toEqual({
+      body: [
+        '完成！我已经把结果写入桌面文件。',
+        '- 文件名：广州今天天气.txt',
+        '- 路径：C:\\Users\\James\\Desktop\\广州今天天气.txt',
+      ].join('\n'),
+      embeddedTimestamp: '',
+      reasoning: '我来帮你整理结果。\n让我先检查一下输出：',
+    })
+  })
+
+  it('extracts full Windows file paths from raw assistant text without truncating Chinese filenames', () => {
+    const paths = collectAssistantLocalPaths(
+      [
+        '我先保存文件。',
+        '{"path":"C:\\\\Users\\\\James\\\\Desktop\\\\广州今天天气.txt","workdir":"C:\\\\Users\\\\James\\\\Desktop"}',
+      ].join('\n')
+    )
+
+    expect(paths).toEqual(['C:\\Users\\James\\Desktop\\广州今天天气.txt'])
+    expect(describeLocalPathLabel(paths[0])).toBe('广州今天天气.txt')
+  })
+
+  it('suppresses internal runtime-managed assistant files from user-facing file buttons', () => {
+    expect(
+      collectAssistantLocalPaths(
+        [
+          '已生成文件。',
+          'C:\\Users\\James\\Desktop\\广州今天天气.txt',
+          'C:\\Users\\James\\AppData\\Roaming\\Mclaw\\openclaw-state\\.openclaw\\workspace-feishu-bot-78dbc0\\HEARTBEAT.md',
+        ].join('\n')
+      )
+    ).toEqual(['C:\\Users\\James\\Desktop\\广州今天天气.txt'])
+  })
+
+  it('groups consecutive assistant process bubbles into one rendered assistant turn', () => {
+    const messages = buildRenderedChatMessages({
+      baseMessages: [
+        createMessage({
+          id: 'user-1',
+          role: 'user',
+          text: '帮我查询广州天气并保存到桌面',
+        }),
+        createMessage({
+          id: 'assistant-1',
+          role: 'assistant',
+          text: 'reasoning_content',
+        }),
+        createMessage({
+          id: 'assistant-2',
+          role: 'assistant',
+          text: '我先查询一下广州天气。',
+        }),
+        createMessage({
+          id: 'assistant-3',
+          role: 'assistant',
+          text: 'C:\\Users\\James\\Desktop\\广州今天天气.txt',
+        }),
+        createMessage({
+          id: 'assistant-4',
+          role: 'assistant',
+          text: '已完成，我已经把广州今天天气保存到桌面文件 `广州今天天气.txt`。',
+          model: 'openai/gpt-5.2',
+        }),
+      ],
+      pendingAssistant: {
+        sending: false,
+        started: false,
+        stopping: false,
+      },
+      now: () => 100,
+    })
+
+    expect(messages).toHaveLength(2)
+    expect(messages[1]).toMatchObject({
+      id: 'assistant-1::assistant-4',
+      role: 'assistant',
+      text: '已完成，我已经把广州今天天气保存到桌面文件 `广州今天天气.txt`。',
+      model: 'openai/gpt-5.2',
+      localPaths: ['C:\\Users\\James\\Desktop\\广州今天天气.txt'],
+    })
+    expect(messages[1].reasoning).toContain('我先查询一下广州天气。')
+    expect(messages[1].reasoning).not.toContain('reasoning_content')
+    expect(messages[1].reasoning).toContain('C:\\Users\\James\\Desktop\\广州今天天气.txt')
+  })
+
+  it('prefers final-answer file paths over noisy intermediate assistant artifacts', () => {
+    const messages = buildRenderedChatMessages({
+      baseMessages: [
+        createMessage({
+          id: 'assistant-1',
+          role: 'assistant',
+          text: '我先整理搜索结果。\nC:\\Users\\James\\Desktop\\guangzhou.html',
+        }),
+        createMessage({
+          id: 'assistant-2',
+          role: 'assistant',
+          text: [
+            '已完成，我已经把结果写入桌面文件。',
+            '- 文件：广州今天天气.txt',
+            '- 路径：C:\\Users\\James\\Desktop\\广州今天天气.txt',
+          ].join('\n'),
+        }),
+      ],
+      pendingAssistant: {
+        sending: false,
+        started: false,
+        stopping: false,
+      },
+      now: () => 200,
+    })
+
+    expect(messages).toHaveLength(1)
+    expect(messages[0]?.localPaths).toEqual(['C:\\Users\\James\\Desktop\\广州今天天气.txt'])
   })
 
   it('keeps the original body when an embedded timestamp prefix has no message text after it', () => {
-    expect(resolveChatMessageDisplayText('[Sat 2026-03-28 01:05 GMT+8]')).toEqual({
+    expect(resolveChatMessageDisplayText('[Sat 2026-03-28 01:05 GMT+8]', 'user')).toEqual({
       body: '[Sat 2026-03-28 01:05 GMT+8]',
       embeddedTimestamp: '',
+      reasoning: '',
     })
   })
 

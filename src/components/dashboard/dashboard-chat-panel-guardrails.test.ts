@@ -44,7 +44,7 @@ describe('dashboard chat panel guardrails', () => {
     const source = readDashboardChatPanelSource()
 
     expect(source).not.toContain("activeSessionStatus.willForkOnSend ? '")
-    expect(source).not.toContain('首次发送时自动创建会话')
+    expect(source).not.toContain('棣栨鍙戦€佹椂鑷姩鍒涘缓浼氳瘽')
   })
 
   it('renders chat images as clickable thumbnails with a preview modal', () => {
@@ -53,7 +53,9 @@ describe('dashboard chat panel guardrails', () => {
     expect(source).toContain('const [imagePreview, setImagePreview]')
     expect(source).toContain('const [imagePreviewScale, setImagePreviewScale]')
     expect(source).toContain("const [imagePreviewFitMode, setImagePreviewFitMode] = useState<ImagePreviewFitMode>('auto')")
+    expect(source).toContain('function isRenderableChatImageAttachment')
     expect(source).toContain('const imageAttachments = Array.isArray(message.images)')
+    expect(source).toContain('message.images.filter(isRenderableChatImageAttachment)')
     expect(source).toContain("cursor: 'zoom-in'")
     expect(source).toContain("objectFit: 'contain'")
     expect(source).toContain('opened={Boolean(imagePreview)}')
@@ -66,9 +68,9 @@ describe('dashboard chat panel guardrails', () => {
   it('renders assistant file paths as clickable open-file actions', () => {
     const source = readDashboardChatPanelSource()
 
-    expect(source).toContain('collectAssistantLocalPaths(messageText)')
-    expect(source).toContain('normalizedLine.match(/(?:^|[^a-z0-9+.-])([a-z]:[\\\\/].+)$/i)')
+    expect(source).toContain("Array.isArray(message.localPaths) ? message.localPaths : []")
     expect(source).toContain('window.api.openLocalPath(normalizedPath)')
-    expect(source).toContain('打开 {describeLocalPathLabel(targetPath)}')
+    expect(source).toContain('describeLocalPathLabel(targetPath)')
+    expect(source).not.toContain('collectAssistantLocalPaths([message.rawText, messageText, reasoningText].filter(Boolean).join(')
   })
 })

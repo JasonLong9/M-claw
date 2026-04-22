@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+﻿import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MantineThemeProvider } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
@@ -279,6 +279,37 @@ function buildPluginRepairRequestKey(options?: PluginRepairOptions): string {
     : `global${officialPolicyKey}${restorePolicyKey}`
 }
 
+function hasPluginRepairEvidence(result: PluginRepairResult): boolean {
+  return (
+    Boolean(result.repaired) ||
+    (Array.isArray(result.incompatiblePlugins) && result.incompatiblePlugins.length > 0) ||
+    (Array.isArray(result.quarantinedPluginIds) && result.quarantinedPluginIds.length > 0) ||
+    (Array.isArray(result.prunedPluginIds) && result.prunedPluginIds.length > 0) ||
+    (Array.isArray(result.failedPluginIds) && result.failedPluginIds.length > 0) ||
+    (Array.isArray(result.failedPaths) && result.failedPaths.length > 0)
+  )
+}
+
+function hasConcreteStartupPluginRepairFailure(result: PluginRepairResult): boolean {
+  return !result.ok && hasPluginRepairEvidence(result)
+}
+
+function shouldPersistPluginRepairResult(
+  trigger: 'startup' | 'manual',
+  result: PluginRepairResult
+): boolean {
+  if (trigger !== 'startup') return true
+  return hasPluginRepairEvidence(result) || hasConcreteStartupPluginRepairFailure(result)
+}
+
+function shouldNotifyPluginRepairFailure(
+  trigger: 'startup' | 'manual',
+  result: PluginRepairResult
+): boolean {
+  if (trigger !== 'startup') return true
+  return hasConcreteStartupPluginRepairFailure(result)
+}
+
 function App() {
   const [appState, setAppState] = useState<AppState>('welcome')
   const [setupStep, setSetupStep] = useState<SetupStep>('api-keys')
@@ -302,6 +333,7 @@ function App() {
     gatewayRunning: null,
   })
   const pluginRepairPromiseRef = useRef<ActivePluginRepairTask | null>(null)
+  const startupPluginRepairCacheRef = useRef(new Map<string, PluginRepairResult>())
   const startupRepairAttemptedRef = useRef(false)
 
   const applyEnvSummaryToDiscovery = (
@@ -424,7 +456,19 @@ function App() {
           }
     const requestKey = buildPluginRepairRequestKey(normalizedOptions)
 
-    if (trigger === 'startup' && requestKey === GLOBAL_PLUGIN_REPAIR_REQUEST_KEY && pluginRepairResult?.ok) {
+    if (trigger === 'startup') {
+      const cachedStartupResult = startupPluginRepairCacheRef.current.get(requestKey)
+      if (cachedStartupResult) {
+        return cachedStartupResult
+      }
+    }
+
+    if (
+      trigger === 'startup' &&
+      requestKey === GLOBAL_PLUGIN_REPAIR_REQUEST_KEY &&
+      pluginRepairResult?.ok &&
+      shouldPersistPluginRepairResult('startup', pluginRepairResult)
+    ) {
       return pluginRepairResult
     }
 
@@ -458,7 +502,12 @@ function App() {
     setPluginRepairRunning(true)
     const task = window.api.repairIncompatiblePlugins(normalizedOptions)
       .then((result) => {
-        setPluginRepairResult(result)
+        if (trigger === 'startup') {
+          startupPluginRepairCacheRef.current.set(requestKey, result)
+        }
+        if (shouldPersistPluginRepairResult(trigger, result)) {
+          setPluginRepairResult(result)
+        }
         if (loadingNotificationId) {
           notifications.hide(loadingNotificationId)
         }
@@ -470,7 +519,7 @@ function App() {
             message: result.summary,
             autoClose: 6000,
           })
-        } else if (!result.ok) {
+        } else if (!result.ok && shouldNotifyPluginRepairFailure(trigger, result)) {
           notifications.show({
             color: 'red',
             title: trigger === 'startup' ? '启动时插件环境修复失败' : '插件环境修复失败',

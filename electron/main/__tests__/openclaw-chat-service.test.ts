@@ -2141,6 +2141,33 @@ describe('openclaw chat service', () => {
     ])
   })
 
+  it('ignores non-image urls that are mislabeled as chat image blocks', () => {
+    const parsed = parseAgentReplyOutput(
+      JSON.stringify({
+        messages: [
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'image',
+                props: {
+                  url: 'https://example.com/search/guangzhou.html',
+                  alt: 'search result page',
+                },
+              },
+            ],
+          },
+        ],
+        response: {
+          text: '已完成整理。',
+        },
+      })
+    )
+
+    expect(parsed.text).toBe('已完成整理。')
+    expect(parsed.images).toBeUndefined()
+  })
+
   it('extracts embedded raw image payloads from assistant text without leaking base64', () => {
     const jpegPayload = `/9j/${'A'.repeat(640)}`
     const parsed = parseAgentReplyOutput(
@@ -5795,6 +5822,104 @@ describe('openclaw chat service', () => {
       '这是当前页面。',
       '再来一张当前可见区域截图',
       '好的，已重新截图。',
+    ])
+  })
+
+  it('dedupes assistant turns by sanitized visible text when the local cache still contains tool chatter', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-external-transcript-visible-dedupe')
+
+    await appendLocalChatMessages({
+      scopeKey: 'fingerprint-external-transcript-visible-dedupe',
+      sessionId: 'remote-session',
+      sessionKey: 'agent:main:history-direct-session',
+      upstreamConfirmed: true,
+      agentId: 'main',
+      model: 'openai/gpt-5.4',
+      transportSessionId: 'transport-remote-session',
+      messages: [
+        {
+          id: 'local-user-1',
+          role: 'user',
+          text: '帮我把结果写到桌面文件里',
+          createdAt: 9_100_000,
+          status: 'sent',
+        },
+        {
+          id: 'local-assistant-1',
+          role: 'assistant',
+          text: [
+            '我来帮你处理。',
+            '{"command":"cmd.exe /c dir","workdir":"C:\\\\Users\\\\James\\\\Desktop","yieldMs":10000,"timeout":20}',
+            '完成！我已经把结果写入桌面文件。',
+          ].join('\n'),
+          createdAt: 9_101_000,
+          status: 'sent',
+          model: 'openai/gpt-5.4',
+        },
+      ],
+      updatedAt: 9_101_000,
+    })
+
+    const transcript = await getChatTranscript('remote-session', {
+      discoverOpenClaw,
+      runCommand: async (args) => {
+        if (args[0] === 'sessions') {
+          return {
+            ok: true,
+            stdout: JSON.stringify({
+              sessions: [
+                {
+                  sessionId: 'remote-session',
+                  key: 'agent:main:history-direct-session',
+                  agentId: 'main',
+                  model: 'openai/gpt-5.4',
+                  updatedAt: 9_101,
+                  kind: 'direct',
+                },
+              ],
+            }),
+            stderr: '',
+            code: 0,
+          }
+        }
+
+        if (args[0] === 'gateway' && args[1] === 'call' && args[2] === 'sessions.get') {
+          return {
+            ok: true,
+            stdout: JSON.stringify({
+              messages: [
+                {
+                  id: 'user-1',
+                  role: 'user',
+                  content: [{ type: 'text', text: '帮我把结果写到桌面文件里' }],
+                  createdAt: 9_100,
+                },
+                {
+                  id: 'assistant-1',
+                  role: 'assistant',
+                  content: [{ type: 'text', text: '我来帮你处理。\n完成！我已经把结果写入桌面文件。' }],
+                  createdAt: 9_101,
+                  model: 'openai/gpt-5.4',
+                },
+              ],
+            }),
+            stderr: '',
+            code: 0,
+          }
+        }
+
+        return {
+          ok: false,
+          stdout: '',
+          stderr: 'unexpected command',
+          code: 1,
+        }
+      },
+    })
+
+    expect(transcript.messages.map((message) => `${message.role}:${message.text}`)).toEqual([
+      'user:帮我把结果写到桌面文件里',
+      'assistant:我来帮你处理。\n完成！我已经把结果写入桌面文件。',
     ])
   })
 
