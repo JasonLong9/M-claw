@@ -234,6 +234,9 @@ export const api = {
   sendChatMessage: (request: Record<string, any>) => ipcRenderer.invoke('chat:send', request),
   cancelChatMessage: () => ipcRenderer.invoke('chat:cancel'),
   clearChatTranscript: (sessionId: string) => ipcRenderer.invoke('chat:transcript:clear', sessionId),
+  listChatMemories: (request?: Record<string, any>) => ipcRenderer.invoke('chat:memory:list', request),
+  saveChatMemory: (request: Record<string, any>) => ipcRenderer.invoke('chat:memory:save', request),
+  deleteChatMemory: (memoryId: string) => ipcRenderer.invoke('chat:memory:delete', memoryId),
   onChatStream: (listener: (payload: Record<string, any>) => void) => subscribeToChannel('chat:stream', listener),
 
   // WeChat Work QR binding

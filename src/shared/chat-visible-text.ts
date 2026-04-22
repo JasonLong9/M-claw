@@ -53,6 +53,45 @@ const EMBEDDED_RAW_IMAGE_BASE64_PATTERNS = [
 const EMBEDDED_MESSAGE_TIMESTAMP_PATTERN =
   /^\[((?:[A-Za-z]{3}\s+)?\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?\s+GMT[+-]\d{1,2})\]\s*/
 
+const INTERNAL_ASSISTANT_BOOTSTRAP_WRITE_PATTERN =
+  /^successfully wrote \d+ bytes to memory\/\d{4}-\d{2}-\d{2}\.md$/i
+
+const INTERNAL_ASSISTANT_BOOTSTRAP_TRIGGER_PATTERNS = [
+  /^#\s*(?:identity|user|soul|bootstrap|agents|tools)\.md\b/i,
+  /fill this in during your first conversation/i,
+  /you just woke up\. time to figure out who you are\./i,
+  /you're not a chatbot\. you're becoming someone\./i,
+  /learn about the person you're helping\./i,
+  /this isn't just metadata\./i,
+  /good luck out there\. make it count\./i,
+  /be genuinely helpful, not performatively helpful\./i,
+  /each session, you wake up fresh\./i,
+]
+
+const INTERNAL_ASSISTANT_BOOTSTRAP_LINE_PATTERNS = [
+  ...INTERNAL_ASSISTANT_BOOTSTRAP_TRIGGER_PATTERNS,
+  /^#{1,3}\s*(?:the conversation|after you know who you are|connect \(optional\)|when you are done|core truths|boundaries|vibe|continuity)\b/i,
+  /^notes:\s*$/i,
+  /^update these files with what you learned/i,
+  /^then open `?soul\.md`? together and talk about:/i,
+  /^ask how they want to reach you:/i,
+  /^guide them through whichever they pick\./i,
+  /^write it down\. make it real\./i,
+  /^for avatars, use a workspace-relative path like `avatars\/openclaw\.png`\./i,
+  /^save this file at the workspace root as `identity\.md`\./i,
+  /^[_*`-]*this file is yours to evolve\./i,
+  /^[_*`-]*good luck out there\./i,
+  /^[-*]\s*\*\*(?:name|creature|vibe|emoji|avatar|pronouns|timezone|notes|what to call them|just here|whatsapp|telegram)\*\*/i,
+  /^[-*]\s*`?(?:identity|user)\.md`?\b/i,
+  /^[-*]\s*(?:what matters to them|how they want you to behave|any boundaries or preferences|private things stay private|when in doubt, ask before acting externally|never send half-baked replies to messaging surfaces|you're not the user's voice)\b/i,
+  /^_?\((?:pick something you like|ai\?|how do you come across\?|your signature|workspace-relative path|optional)/i,
+]
+
+const USER_FACING_RESPONSE_START_PATTERNS = [
+  /^(?:hello|hi|hey)\b/i,
+  /^(?:\u4f60\u597d|\u597d\u7684|\u660e\u767d\u4e86|\u53ef\u4ee5|\u6ca1\u95ee\u9898|\u6211\u4f1a|\u6211\u662f|\u5f53\u7136|\u63a5\u4e0b\u6765|\u522b\u62c5\u5fc3)/u,
+]
+
 const MACHINE_ARTIFACT_LINE_PATTERNS = [
   /^\s*(?:reasoning(?:_content)?|thinking(?:_content)?|analysis|tool(?:_result|_call)?|assistant_response)\s*:?\s*$/i,
   /^\s*(?:stdout|stderr)\(\d+chars\)=/i,
@@ -176,6 +215,66 @@ function stripEmbeddedImagePayloads(text: string): string {
     .trim()
 }
 
+function looksLikeUserFacingResponseStart(line: string): boolean {
+  const normalized = String(line || '').trim()
+  if (!normalized) return false
+  if (/^(?:[#*_`-]|>)/.test(normalized)) return false
+  if (USER_FACING_RESPONSE_START_PATTERNS.some((pattern) => pattern.test(normalized))) return true
+  return /[\u4e00-\u9fff]/u.test(normalized)
+}
+
+function stripKnownAssistantBootstrapNoise(text: string): string {
+  const normalizedText = String(text || '').replace(/\r\n?/g, '\n').trim()
+  if (!normalizedText) return ''
+
+  let bootstrapMode = false
+  let removedAny = false
+  const cleanedLines: string[] = []
+
+  for (const rawLine of normalizedText.split('\n')) {
+    const line = rawLine.trim()
+    if (!line) {
+      if (!bootstrapMode) cleanedLines.push('')
+      continue
+    }
+
+    if (INTERNAL_ASSISTANT_BOOTSTRAP_WRITE_PATTERN.test(line)) {
+      bootstrapMode = true
+      removedAny = true
+      continue
+    }
+
+    if (INTERNAL_ASSISTANT_BOOTSTRAP_TRIGGER_PATTERNS.some((pattern) => pattern.test(line))) {
+      bootstrapMode = true
+      removedAny = true
+      continue
+    }
+
+    if (bootstrapMode) {
+      if (
+        looksLikeUserFacingResponseStart(line) &&
+        !INTERNAL_ASSISTANT_BOOTSTRAP_LINE_PATTERNS.some((pattern) => pattern.test(line))
+      ) {
+        bootstrapMode = false
+        cleanedLines.push(line)
+        continue
+      }
+
+      removedAny = true
+      continue
+    }
+
+    cleanedLines.push(line)
+  }
+
+  if (!removedAny) return normalizedText
+
+  return cleanedLines
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 function looksLikeToolPayloadJson(text: string): boolean {
   const normalized = String(text || '').trim()
   if (!normalized || !/^[\[{]/.test(normalized)) return false
@@ -205,8 +304,14 @@ function looksLikeToolPayloadJson(text: string): boolean {
 function isMachineArtifactLine(line: string): boolean {
   const normalized = String(line || '').trim()
   if (!normalized) return false
+  const normalizedLower = normalized.toLowerCase()
   if (MACHINE_ARTIFACT_LINE_PATTERNS.some((pattern) => pattern.test(normalized))) return true
   if (looksLikeToolPayloadJson(normalized)) return true
+  if (normalizedLower.includes('heartbeat.md')) return true
+  if (normalizedLower.includes('\\mclaw\\openclaw-state\\')) return true
+  if (normalizedLower.includes('/mclaw/openclaw-state/')) return true
+  if (normalizedLower.includes('\\.openclaw\\workspace-')) return true
+  if (normalizedLower.includes('/.openclaw/workspace-')) return true
 
   if (/^(?:\{|\[).+(?:\}|\])$/.test(normalized)) {
     const keyHits = (
@@ -221,7 +326,7 @@ function isMachineArtifactLine(line: string): boolean {
 }
 
 function buildMeaningfulAssistantLines(text: string): string[] {
-  const normalizedLines = String(text || '')
+  const normalizedLines = stripKnownAssistantBootstrapNoise(String(text || ''))
     .replace(/\r\n?/g, '\n')
     .split('\n')
     .map((line) => line.trim())
@@ -451,7 +556,7 @@ export function isInvisibleAssistantToolPayload(value: unknown): boolean {
 }
 
 export function sanitizeAssistantVisibleText(text: string): string {
-  const normalized = stripEmbeddedImagePayloads(text)
+  const normalized = stripKnownAssistantBootstrapNoise(stripEmbeddedImagePayloads(text))
   if (!normalized) return ''
   const meaningfulLines = buildMeaningfulAssistantLines(normalized)
   return meaningfulLines.join('\n').trim()
@@ -470,7 +575,7 @@ export function sanitizeAssistantRawFallbackText(text: string): string {
     }
   }
 
-  return stripEmbeddedImagePayloads(normalized)
+  return stripKnownAssistantBootstrapNoise(stripEmbeddedImagePayloads(normalized))
 }
 
 export function collectAssistantLocalPaths(text: string): string[] {

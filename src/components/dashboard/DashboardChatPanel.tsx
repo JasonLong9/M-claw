@@ -2,6 +2,7 @@
 import { Alert, ActionIcon, Badge, Button, Card, Group, Modal, Paper, ScrollArea, Select, Stack, Text, Textarea, Tooltip, Transition, useComputedColorScheme, useMantineColorScheme } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { IconChevronDown, IconChevronUp, IconExternalLink, IconPlayerStop, IconRefresh, IconSend, IconTrash } from '@tabler/icons-react'
+import type { ChatMemoryEntry, ChatMemoryScope } from '../../shared/chat-memory'
 import type {
   ChatCapabilitySnapshot,
   ChatImageAttachment,
@@ -200,6 +201,14 @@ function buildComposerHint(params: {
   return '模型切换仅影响当前会话 · Enter 发送 · Shift+Enter 换行'
 }
 
+function formatMemoryScopeLabel(scope: ChatMemoryScope): string {
+  return scope === 'session' ? '当前会话' : '全局偏好'
+}
+
+function formatMemorySourceLabel(source: ChatMemoryEntry['source']): string {
+  return source === 'manual' ? '手动添加' : '自动学习'
+}
+
 function buildEmptyTranscript(sessionId: string): ChatTranscript {
   return {
     sessionId,
@@ -379,11 +388,20 @@ export default function DashboardChatPanel({
   const [watchdogEvents, setWatchdogEvents] = useState<WatchdogEventEntry[]>([])
   const [redactedConfigSnapshot, setRedactedConfigSnapshot] = useState<Record<string, unknown> | null>(null)
   const [redactedEnvSnapshot, setRedactedEnvSnapshot] = useState<Record<string, string>>({})
+  const [showMemoryManager, setShowMemoryManager] = useState(false)
+  const [memoryEntries, setMemoryEntries] = useState<ChatMemoryEntry[]>([])
+  const [memoryLoading, setMemoryLoading] = useState(false)
+  const [memorySaving, setMemorySaving] = useState(false)
+  const [memoryError, setMemoryError] = useState('')
+  const [memoryDraft, setMemoryDraft] = useState('')
+  const [memoryScope, setMemoryScope] = useState<ChatMemoryScope>('user')
+  const [editingMemoryId, setEditingMemoryId] = useState('')
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const activeSendSessionIdRef = useRef('')
   const sessionsRequestIdRef = useRef(0)
   const transcriptRequestIdRef = useRef(0)
   const diagnosticsRequestIdRef = useRef(0)
+  const memoryRequestIdRef = useRef(0)
   const lastAutoSelectedModelRef = useRef('')
   const lastModelSelectionContextRef = useRef('')
   const composerResizeStateRef = useRef<{ startY: number; startHeight: number } | null>(null)
@@ -536,6 +554,16 @@ export default function DashboardChatPanel({
   const watchdogRows = buildWatchdogRows(watchdogState)
   const redactedConfigRows = buildRedactedPreviewRows(redactedConfigSnapshot)
   const redactedEnvRows = buildRedactedPreviewRows(redactedEnvSnapshot)
+  const userMemoryEntries = memoryEntries.filter((entry) => entry.scope === 'user')
+  const sessionMemoryEntries = activeSessionId
+    ? memoryEntries.filter((entry) => entry.scope === 'session' && entry.sessionId === activeSessionId)
+    : []
+  const memoryScopeOptions = activeSessionId
+    ? [
+        { value: 'user', label: '全局偏好' },
+        { value: 'session', label: '当前会话' },
+      ]
+    : [{ value: 'user', label: '全局偏好' }]
 
   const stopComposerResize = () => {
     composerResizeStateRef.current = null
@@ -571,6 +599,50 @@ export default function DashboardChatPanel({
     composerResizeCleanupRef.current = () => {
       window.removeEventListener('pointermove', handlePointerMove)
       window.removeEventListener('pointerup', handlePointerUp)
+    }
+  }
+
+  const resetMemoryEditor = (preferredScope?: ChatMemoryScope) => {
+    const nextScope =
+      preferredScope === 'session' && !activeSessionId
+        ? 'user'
+        : preferredScope || (activeSessionId && memoryScope === 'session' ? 'session' : 'user')
+    setEditingMemoryId('')
+    setMemoryDraft('')
+    setMemoryScope(nextScope)
+  }
+
+  const loadMemories = async (
+    sessionId: string | undefined,
+    options: { silent?: boolean; preserveError?: boolean } = {}
+  ) => {
+    const normalizedSessionId = String(sessionId || '').trim()
+    const requestId = memoryRequestIdRef.current + 1
+    memoryRequestIdRef.current = requestId
+    if (!options.silent) {
+      setMemoryLoading(true)
+    }
+    if (!options.preserveError) {
+      setMemoryError('')
+    }
+
+    try {
+      const nextEntries = await window.api.listChatMemories(
+        normalizedSessionId ? { sessionId: normalizedSessionId } : undefined
+      )
+      if (requestId !== memoryRequestIdRef.current) return
+      setMemoryEntries(Array.isArray(nextEntries) ? nextEntries : [])
+      if (editingMemoryId && !nextEntries.some((entry) => entry.id === editingMemoryId)) {
+        resetMemoryEditor()
+      }
+    } catch (error) {
+      if (requestId !== memoryRequestIdRef.current) return
+      if (!options.preserveError) {
+        setMemoryError(error instanceof Error ? error.message : String(error))
+      }
+    } finally {
+      if (requestId !== memoryRequestIdRef.current) return
+      setMemoryLoading(false)
     }
   }
 
@@ -781,6 +853,19 @@ export default function DashboardChatPanel({
     }
   }
 
+  const handleOpenMemoryManager = async () => {
+    setShowMemoryManager(true)
+    setMemoryError('')
+    resetMemoryEditor(memoryScope)
+    await loadMemories(activeSessionId || undefined)
+  }
+
+  const handleCloseMemoryManager = () => {
+    setShowMemoryManager(false)
+    setMemoryError('')
+    resetMemoryEditor(memoryScope)
+  }
+
   const reconcileSessionView = async (sessionId: string) => {
     const normalizedSessionId = String(sessionId || '').trim()
     if (!normalizedSessionId) return
@@ -927,6 +1012,95 @@ export default function DashboardChatPanel({
     }
   }
 
+  const handleSaveMemory = async () => {
+    const content = String(memoryDraft || '').trim()
+    const effectiveScope = memoryScope === 'session' && activeSessionId ? 'session' : 'user'
+    if (!content) {
+      setMemoryError('记忆内容不能为空')
+      return
+    }
+    if (effectiveScope === 'session' && !activeSessionId) {
+      setMemoryError('请先选择一个会话，再保存当前会话记忆')
+      return
+    }
+
+    setMemorySaving(true)
+    setMemoryError('')
+    try {
+      const result = await window.api.saveChatMemory({
+        id: editingMemoryId || undefined,
+        scope: effectiveScope,
+        content,
+        sessionId: effectiveScope === 'session' ? activeSessionId : undefined,
+      })
+      if (!result.ok) {
+        setMemoryError(result.messageText || '保存记忆失败')
+        return
+      }
+
+      notifications.show({
+        color: result.action === 'unchanged' ? 'gray' : 'teal',
+        title: result.action === 'updated' ? '记忆已更新' : '记忆已保存',
+        message:
+          result.action === 'unchanged'
+            ? '内容没有变化，本地记忆保持不变。'
+            : effectiveScope === 'session'
+              ? '当前会话记忆已更新。'
+              : '全局偏好已更新。',
+        autoClose: 2600,
+      })
+
+      await loadMemories(activeSessionId || undefined, {
+        preserveError: true,
+      })
+      resetMemoryEditor(effectiveScope)
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setMemorySaving(false)
+    }
+  }
+
+  const handleEditMemory = (entry: ChatMemoryEntry) => {
+    setEditingMemoryId(entry.id)
+    setMemoryScope(entry.scope)
+    setMemoryDraft(entry.content)
+    setMemoryError('')
+  }
+
+  const handleDeleteMemory = async (entry: ChatMemoryEntry) => {
+    const confirmed = window.confirm(`确认删除这条${formatMemoryScopeLabel(entry.scope)}记忆吗？`)
+    if (!confirmed) return
+
+    setMemorySaving(true)
+    setMemoryError('')
+    try {
+      const result = await window.api.deleteChatMemory(entry.id)
+      if (!result.ok) {
+        setMemoryError(result.messageText || '删除记忆失败')
+        return
+      }
+
+      notifications.show({
+        color: 'teal',
+        title: '记忆已删除',
+        message: '这条本地记忆已从 Mclaw 中移除。',
+        autoClose: 2200,
+      })
+
+      await loadMemories(activeSessionId || undefined, {
+        preserveError: true,
+      })
+      if (editingMemoryId === entry.id) {
+        resetMemoryEditor(memoryScope)
+      }
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setMemorySaving(false)
+    }
+  }
+
   const handleSessionModelChange = async (value: string | null) => {
     const nextModel = String(value || '').trim()
     if (!nextModel) return
@@ -1066,6 +1240,22 @@ export default function DashboardChatPanel({
 
   useEffect(() => {
     const unsubscribe = window.api.onChatStream((payload) => {
+      if (payload.type === 'memory-saved') {
+        notifications.show({
+          color: 'teal',
+          title: '本地记忆已更新',
+          message: payload.messageText || '已更新本地记忆。',
+          autoClose: 2600,
+        })
+        if (showMemoryManager) {
+          void loadMemories(activeSessionId || payload.sessionId || undefined, {
+            silent: true,
+            preserveError: true,
+          })
+        }
+        return
+      }
+
       const nextTrackedSessionId = resolveChatStreamSessionBinding({
         trackedSessionId: activeSendSessionIdRef.current,
         incomingSessionId: payload.sessionId,
@@ -1111,7 +1301,7 @@ export default function DashboardChatPanel({
     return () => {
       unsubscribe()
     }
-  }, [])
+  }, [activeSessionId, showMemoryManager])
 
   useEffect(() => {
     if (!copiedMessageId) return
@@ -1130,6 +1320,20 @@ export default function DashboardChatPanel({
       preserveError: true,
     })
   }, [showDiagnostics, activeSessionId, activeTranscript?.updatedAt, activeSession?.updatedAt])
+
+  useEffect(() => {
+    if (memoryScope === 'session' && !activeSessionId) {
+      setMemoryScope('user')
+    }
+  }, [activeSessionId, memoryScope])
+
+  useEffect(() => {
+    if (!showMemoryManager) return
+    void loadMemories(activeSessionId || undefined, {
+      silent: true,
+      preserveError: true,
+    })
+  }, [showMemoryManager, activeSessionId])
 
   const handleCopyMessage = async (message: Pick<RenderedChatMessage, 'id' | 'text'>) => {
     const text = String(message.text || '').trim()
@@ -1370,16 +1574,26 @@ export default function DashboardChatPanel({
 
           <Group mt="sm" gap="xs" justify="space-between">
             <Text size="xs" c="dimmed">
-              诊断面板里可以查看 watchdog 状态、最近事件，以及脱敏后的 config/env 快照。
+              诊断面板里可以查看 watchdog 状态、最近事件，以及脱敏后的 config/env 快照；记忆管理里可查看和维护本地记忆。
             </Text>
-            <Button
-              variant="subtle"
-              color="gray"
-              size="compact-xs"
-              onClick={() => setShowDiagnostics((current) => !current)}
-            >
-              {showDiagnostics ? '收起诊断面板' : '展开诊断面板'}
-            </Button>
+            <Group gap="xs">
+              <Button
+                variant="light"
+                color="brand"
+                size="compact-xs"
+                onClick={() => void handleOpenMemoryManager()}
+              >
+                记忆管理
+              </Button>
+              <Button
+                variant="subtle"
+                color="gray"
+                size="compact-xs"
+                onClick={() => setShowDiagnostics((current) => !current)}
+              >
+                {showDiagnostics ? '收起诊断面板' : '展开诊断面板'}
+              </Button>
+            </Group>
           </Group>
 
           {showDiagnostics && (
@@ -2251,6 +2465,242 @@ export default function DashboardChatPanel({
           </div>
       </div>
       </Card>
+
+      <Modal
+        opened={showMemoryManager}
+        onClose={handleCloseMemoryManager}
+        size="lg"
+        centered
+        title={(
+          <Group justify="space-between" wrap="wrap" gap="xs">
+            <div>
+              <Text fw={600} size="sm">
+                记忆管理
+              </Text>
+              <Text size="xs" c="dimmed" mt={2}>
+                基础记忆已启用：可在这里管理全局偏好，也可以直接发送“请记住：以后默认用中文回复”。
+              </Text>
+            </div>
+            <Button
+              size="compact-sm"
+              variant="light"
+              color="gray"
+              leftSection={<IconRefresh size={14} />}
+              onClick={() => void loadMemories(activeSessionId || undefined)}
+              loading={memoryLoading}
+            >
+              刷新
+            </Button>
+          </Group>
+        )}
+      >
+        <Stack gap="sm">
+          <Alert color="blue" variant="light">
+            <Text size="xs">
+              {activeSessionId
+                ? '当前面板会同时显示全局偏好和当前会话记忆；删除后不会影响聊天记录本身。同类格式记忆若有多条，系统会优先采用最新一条。'
+                : '当前还没有选中会话；现在可以先维护全局偏好，等进入具体会话后再保存会话级记忆。同类格式记忆若有多条，系统会优先采用最新一条。'}
+            </Text>
+          </Alert>
+
+          {memoryError && (
+            <Alert color="warning" variant="light">
+              <Text size="xs">{memoryError}</Text>
+            </Alert>
+          )}
+
+          <Paper withBorder p="sm" radius="md">
+            <Stack gap="xs">
+              <Group justify="space-between" gap="sm" align="flex-start">
+                <div>
+                  <Text size="sm" fw={600}>
+                    {editingMemoryId ? '编辑记忆' : '新增记忆'}
+                  </Text>
+                  <Text size="xs" c="dimmed" mt={4}>
+                    {editingMemoryId
+                      ? '可以修正文案、删除错误记忆，或把自动学习到的内容改成更清晰的描述。'
+                      : '建议把稳定偏好写成一句明确的话，例如“以后默认用中文回复，并附上验证步骤”。'}
+                  </Text>
+                </div>
+                {editingMemoryId && (
+                  <Button
+                    size="compact-sm"
+                    variant="subtle"
+                    color="gray"
+                    onClick={() => resetMemoryEditor(memoryScope)}
+                  >
+                    取消编辑
+                  </Button>
+                )}
+              </Group>
+
+              <Select
+                label="记忆范围"
+                value={memoryScope}
+                data={memoryScopeOptions}
+                onChange={(value) => setMemoryScope((value as ChatMemoryScope) || 'user')}
+                disabled={Boolean(editingMemoryId) || memorySaving}
+              />
+
+              <Textarea
+                label="记忆内容"
+                placeholder={
+                  memoryScope === 'session'
+                    ? '例如：本次会话先只做基础版本，不要提前推进 Claude Code 模式。'
+                    : '例如：以后默认用中文回复；涉及修改时附上测试步骤。'
+                }
+                autosize
+                minRows={3}
+                maxRows={8}
+                value={memoryDraft}
+                onChange={(event) => setMemoryDraft(event.currentTarget.value)}
+                disabled={memorySaving}
+              />
+
+              <Group justify="flex-end" gap="xs">
+                <Button
+                  variant="light"
+                  color="brand"
+                  onClick={() => void handleSaveMemory()}
+                  loading={memorySaving}
+                >
+                  {editingMemoryId ? '保存修改' : '添加记忆'}
+                </Button>
+              </Group>
+            </Stack>
+          </Paper>
+
+          <ScrollArea.Autosize mah="min(50vh, 560px)" type="auto" offsetScrollbars>
+            <Stack gap="sm">
+              <Paper withBorder p="sm" radius="md">
+                <Group justify="space-between" gap="sm">
+                  <Text size="sm" fw={600}>
+                    全局偏好
+                  </Text>
+                  <Badge size="sm" variant="light" color="brand">
+                    {userMemoryEntries.length} 条
+                  </Badge>
+                </Group>
+                {userMemoryEntries.length === 0 ? (
+                  <Text size="xs" c="dimmed" mt="sm">
+                    还没有全局偏好。你可以直接在这里添加，也可以在聊天里发送“请记住：以后默认用中文回复”。
+                  </Text>
+                ) : (
+                  <Stack gap="xs" mt="sm">
+                    {userMemoryEntries.map((entry) => (
+                      <Paper key={entry.id} withBorder p="sm" radius="md">
+                        <Group justify="space-between" gap="sm" align="flex-start" wrap="nowrap">
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <Group gap={6} wrap="wrap">
+                              <Badge size="xs" variant="light" color="brand">
+                                {formatMemoryScopeLabel(entry.scope)}
+                              </Badge>
+                              <Badge size="xs" variant="light" color={entry.source === 'manual' ? 'teal' : 'gray'}>
+                                {formatMemorySourceLabel(entry.source)}
+                              </Badge>
+                              <Text size="xs" c="dimmed">
+                                {formatMessageTime(entry.updatedAt, '刚刚')}
+                              </Text>
+                            </Group>
+                            <Text size="sm" mt={6} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                              {entry.content}
+                            </Text>
+                          </div>
+                          <Group gap="xs" wrap="nowrap">
+                            <Button
+                              size="compact-xs"
+                              variant="subtle"
+                              color="gray"
+                              onClick={() => handleEditMemory(entry)}
+                              disabled={memorySaving}
+                            >
+                              编辑
+                            </Button>
+                            <ActionIcon
+                              variant="subtle"
+                              color="red"
+                              onClick={() => void handleDeleteMemory(entry)}
+                              disabled={memorySaving}
+                              aria-label="删除记忆"
+                            >
+                              <IconTrash size={15} />
+                            </ActionIcon>
+                          </Group>
+                        </Group>
+                      </Paper>
+                    ))}
+                  </Stack>
+                )}
+              </Paper>
+
+              <Paper withBorder p="sm" radius="md">
+                <Group justify="space-between" gap="sm">
+                  <Text size="sm" fw={600}>
+                    当前会话记忆
+                  </Text>
+                  <Badge size="sm" variant="light" color="cyan">
+                    {sessionMemoryEntries.length} 条
+                  </Badge>
+                </Group>
+                {!activeSessionId ? (
+                  <Text size="xs" c="dimmed" mt="sm">
+                    先进入一个具体会话后，这里才会显示和保存“当前会话记忆”。
+                  </Text>
+                ) : sessionMemoryEntries.length === 0 ? (
+                  <Text size="xs" c="dimmed" mt="sm">
+                    当前会话还没有额外记忆。适合记录这轮任务的临时约束、阶段目标或后续待办。
+                  </Text>
+                ) : (
+                  <Stack gap="xs" mt="sm">
+                    {sessionMemoryEntries.map((entry) => (
+                      <Paper key={entry.id} withBorder p="sm" radius="md">
+                        <Group justify="space-between" gap="sm" align="flex-start" wrap="nowrap">
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <Group gap={6} wrap="wrap">
+                              <Badge size="xs" variant="light" color="cyan">
+                                {formatMemoryScopeLabel(entry.scope)}
+                              </Badge>
+                              <Badge size="xs" variant="light" color={entry.source === 'manual' ? 'teal' : 'gray'}>
+                                {formatMemorySourceLabel(entry.source)}
+                              </Badge>
+                              <Text size="xs" c="dimmed">
+                                {formatMessageTime(entry.updatedAt, '刚刚')}
+                              </Text>
+                            </Group>
+                            <Text size="sm" mt={6} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                              {entry.content}
+                            </Text>
+                          </div>
+                          <Group gap="xs" wrap="nowrap">
+                            <Button
+                              size="compact-xs"
+                              variant="subtle"
+                              color="gray"
+                              onClick={() => handleEditMemory(entry)}
+                              disabled={memorySaving}
+                            >
+                              编辑
+                            </Button>
+                            <ActionIcon
+                              variant="subtle"
+                              color="red"
+                              onClick={() => void handleDeleteMemory(entry)}
+                              disabled={memorySaving}
+                              aria-label="删除记忆"
+                            >
+                              <IconTrash size={15} />
+                            </ActionIcon>
+                          </Group>
+                        </Group>
+                      </Paper>
+                    ))}
+                  </Stack>
+                )}
+              </Paper>
+            </Stack>
+          </ScrollArea.Autosize>
+        </Stack>
+      </Modal>
 
       <Modal
         opened={Boolean(imagePreview)}

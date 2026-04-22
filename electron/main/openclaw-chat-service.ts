@@ -93,6 +93,7 @@ import {
   readLocalChatSessionState,
   readLocalChatTranscript,
 } from './qclaw-chat-store'
+import { buildChatMemoryContext, captureChatMemoriesFromTurn, isExplicitMemoryInstructionText } from './memory'
 import { setActiveAbortController as trackActiveAbortController } from './command-control'
 
 const { randomUUID } = process.getBuiltinModule('node:crypto') as typeof import('node:crypto')
@@ -380,6 +381,24 @@ function buildLegacyInlineScreenshotGuidanceMessage(
     'User request:',
     normalizedMessageText,
   ].join('\n')
+}
+
+function combineExtraSystemPrompt(...sections: Array<string | undefined>): string | undefined {
+  const normalized = sections
+    .map((section) => String(section || '').trim())
+    .filter(Boolean)
+  if (normalized.length === 0) return undefined
+  return normalized.join('\n\n')
+}
+
+function buildMemorySavedMessage(entries: Array<{ scope: 'user' | 'session' }>): string {
+  if (entries.length === 0) return ''
+  const userCount = entries.filter((entry) => entry.scope === 'user').length
+  const sessionCount = entries.filter((entry) => entry.scope === 'session').length
+  const parts: string[] = []
+  if (userCount > 0) parts.push(`全局偏好 ${userCount} 条`)
+  if (sessionCount > 0) parts.push(`当前会话记忆 ${sessionCount} 条`)
+  return `已记住 ${parts.join('，')}。`
 }
 
 function hasChatImageAttachments(images: ChatImageAttachment[] | undefined | null): boolean {
@@ -4024,6 +4043,22 @@ function isExplicitAssistantTextPath(path: string): boolean {
   return EXPLICIT_ASSISTANT_TEXT_PATHS.has(normalizeAssistantLeafPath(path))
 }
 
+function resolveSelectableAssistantLeafFallback(leaf: StringLeaf): string {
+  const sanitizedFallback = sanitizeAssistantRawFallbackText(leaf.value)
+  if (sanitizedFallback) return sanitizedFallback
+  if (!isExplicitAssistantTextPath(leaf.path)) return ''
+
+  const rawValue = String(leaf.value || '').trim()
+  if (!rawValue || !/^[\[{]/.test(rawValue)) return ''
+
+  try {
+    JSON.parse(rawValue)
+    return rawValue
+  } catch {
+    return ''
+  }
+}
+
 function selectBestReplyLeafEntry(leaves: StringLeaf[]): {
   leaf: StringLeaf
   visibleValue: string
@@ -4035,26 +4070,18 @@ function selectBestReplyLeafEntry(leaves: StringLeaf[]): {
     .map((leaf) => ({
       leaf,
       visibleValue: sanitizeAssistantVisibleText(leaf.value),
-      fallbackValue: sanitizeAssistantRawFallbackText(leaf.value),
+      fallbackValue: resolveSelectableAssistantLeafFallback(leaf),
     }))
     .filter(
       (entry) =>
         isExplicitAssistantTextPath(entry.leaf.path) &&
         !CHAT_REPLY_REJECTED_PATH_PATTERN.test(entry.leaf.path) &&
-        Boolean(String(entry.leaf.value || '').trim())
+        Boolean(entry.visibleValue || entry.fallbackValue)
     )
     .sort(
       (left, right) =>
-        Math.max(
-          right.visibleValue.length,
-          right.fallbackValue.length,
-          String(right.leaf.value || '').trim().length
-        ) -
-        Math.max(
-          left.visibleValue.length,
-          left.fallbackValue.length,
-          String(left.leaf.value || '').trim().length
-        )
+        Math.max(right.visibleValue.length, right.fallbackValue.length) -
+        Math.max(left.visibleValue.length, left.fallbackValue.length)
     )
   if (preferred.length > 0) return preferred[0]
 
@@ -4062,12 +4089,12 @@ function selectBestReplyLeafEntry(leaves: StringLeaf[]): {
     .map((leaf) => ({
       leaf,
       visibleValue: sanitizeAssistantVisibleText(leaf.value),
-      fallbackValue: sanitizeAssistantRawFallbackText(leaf.value),
+      fallbackValue: resolveSelectableAssistantLeafFallback(leaf),
     }))
     .filter((entry) => {
       if (CHAT_REPLY_REJECTED_PATH_PATTERN.test(entry.leaf.path)) return false
       if (isExplicitAssistantTextPath(entry.leaf.path)) {
-        return Boolean(String(entry.leaf.value || '').trim())
+        return Boolean(entry.visibleValue || entry.fallbackValue)
       }
       return Boolean(entry.fallbackValue)
     })
@@ -5246,18 +5273,61 @@ function buildChatMessage(params: {
   }
 }
 
-function formatSeedMessageEntry(message: ChatMessage): string {
+function resolveSeedableMessageText(message: ChatMessage): string {
+  const rawText = String(message.text || '').trim()
+  if (!rawText) return ''
+  if (message.role !== 'assistant') return rawText
+  return sanitizeAssistantVisibleText(rawText) || sanitizeAssistantRawFallbackText(rawText)
+}
+
+function shouldSkipSeededHistoryMessage(messages: ChatMessage[], index: number): boolean {
+  const message = messages[index]
+  if (!message) return true
+
+  const seedText = resolveSeedableMessageText(message)
+  if (!seedText) return true
+
+  if (message.role === 'user') {
+    return isExplicitMemoryInstructionText(String(message.text || ''))
+  }
+
+  if (message.role !== 'assistant') return false
+
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const previousMessage = messages[cursor]
+    if (!previousMessage) continue
+    if (previousMessage.role === 'assistant') continue
+    if (previousMessage.role === 'user') {
+      return isExplicitMemoryInstructionText(String(previousMessage.text || ''))
+    }
+    break
+  }
+
+  return false
+}
+
+function formatSeedMessageEntry(message: ChatMessage, resolvedText?: string): string {
   const roleLabel = message.role === 'assistant' ? '助手' : message.role === 'system' ? '系统' : '用户'
   const modelSuffix =
     message.role === 'assistant' && message.model ? `（模型：${message.model}）` : ''
-  return `${roleLabel}${modelSuffix}：${message.text}`
+  return `${roleLabel}${modelSuffix}：${resolvedText ?? message.text}`
 }
 
 function buildSeededTurnMessage(messages: ChatMessage[], nextUserText: string): string {
-  const recentMessages = messages.filter((message) => String(message.text || '').trim()).slice(-8)
+  const recentMessages = messages
+    .map((message, index) => ({
+      message,
+      seedText: resolveSeedableMessageText(message),
+      skip: shouldSkipSeededHistoryMessage(messages, index),
+    }))
+    .filter((entry) => entry.seedText && !entry.skip)
+    .slice(-8)
   if (recentMessages.length === 0) return nextUserText
 
-  const historyText = recentMessages.map(formatSeedMessageEntry).join('\n\n').slice(-6_000)
+  const historyText = recentMessages
+    .map((entry) => formatSeedMessageEntry(entry.message, entry.seedText))
+    .join('\n\n')
+    .slice(-6_000)
   return [
     '以下是当前对话最近的上下文，请直接延续回答，不要重复总结规则。',
     '',
@@ -6424,6 +6494,13 @@ async function sendChatMessageImpl(
   const screenshotExtraSystemPrompt = isMclawScreenshotSpecialHandlingEnabled()
     ? buildChatScreenshotExtraSystemPrompt(text)
     : undefined
+  const memoryContextResult = await buildChatMemoryContext({
+    sessionId: requestedSessionId,
+    messageText: text,
+  }).catch(() => ({
+    prompt: '',
+    entries: [],
+  }))
   const shouldInlineScreenshotGuidance =
     shouldInlineLegacyScreenshotGuidance(runtimeStoreSnapshot, screenshotExtraSystemPrompt)
   const effectiveMessageText = shouldInlineScreenshotGuidance
@@ -6432,7 +6509,19 @@ async function sendChatMessageImpl(
         screenshotExtraSystemPrompt || ''
       )
     : baseEffectiveMessageText
-  const extraSystemPrompt = shouldInlineScreenshotGuidance ? undefined : screenshotExtraSystemPrompt
+  const extraSystemPrompt = shouldInlineScreenshotGuidance
+    ? memoryContextResult.prompt || undefined
+    : combineExtraSystemPrompt(screenshotExtraSystemPrompt, memoryContextResult.prompt)
+  if (memoryContextResult.entries.length > 0) {
+    appendChatTrace({
+      operation: 'send',
+      stage: 'memory-context',
+      sessionId: requestedSessionId,
+      sessionKey: trustedSessionKey || undefined,
+      failureClass: 'none',
+      message: `Injected ${memoryContextResult.entries.length} local memory entr${memoryContextResult.entries.length === 1 ? 'y' : 'ies'} into extraSystemPrompt.`,
+    })
+  }
   let persistedSessionKey =
     continueWithExternalSessionKey ||
     (!shouldForkVisibleConversation ? trustedSessionKey : '') ||
@@ -7262,6 +7351,33 @@ async function sendChatMessageImpl(
     messages: [userMessage, assistantMessage],
     updatedAt: createdAt,
   })
+
+  const savedMemories = await captureChatMemoriesFromTurn({
+    sessionId,
+    userMessage: text,
+  }).catch(() => [])
+  if (savedMemories.length > 0) {
+    const memorySavedMessage = buildMemorySavedMessage(savedMemories.map((item) => item.entry))
+    appendChatTrace({
+      operation: 'send',
+      stage: 'memory-saved',
+      sessionId,
+      sessionKey: persistedSessionKey || undefined,
+      historySource: traceHistorySource,
+      confirmedModel: String(finalModel || targetModel || '').trim() || undefined,
+      intentSelectedModel:
+        String(localSessionState?.selectedModel || matchedSession?.selectedModel || finalModel || targetModel || '').trim() ||
+        undefined,
+      failureClass: 'none',
+      message: memorySavedMessage || `Saved ${savedMemories.length} local memory entr${savedMemories.length === 1 ? 'y' : 'ies'}.`,
+    })
+    emit({
+      type: 'memory-saved',
+      sessionId,
+      entries: savedMemories.map((item) => item.entry),
+      messageText: memorySavedMessage || '已更新本地记忆。',
+    })
+  }
 
   emit({
     type: 'assistant-complete',

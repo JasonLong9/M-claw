@@ -2085,6 +2085,27 @@ describe('openclaw chat service', () => {
     expect(parsed.images).toBeUndefined()
   })
 
+  it('prefers explicit assistant text that remains meaningful after stripping bootstrap noise', () => {
+    const parsed = parseAgentReplyOutput(
+      JSON.stringify({
+        response: {
+          text: [
+            'Successfully wrote 74 bytes to memory/2026-04-23.md',
+            '# IDENTITY.md - Who Am I?',
+            '_Fill this in during your first conversation. Make it yours._',
+            '- **Name:**',
+            '_(pick something you like)_',
+          ].join('\n'),
+        },
+        message: {
+          text: '你好，我是你的助手。',
+        },
+      })
+    )
+
+    expect(parsed.text).toBe('你好，我是你的助手。')
+  })
+
   it('keeps image-only assistant payloads from structured tool messages', () => {
     const parsed = parseAgentReplyOutput(
       JSON.stringify({

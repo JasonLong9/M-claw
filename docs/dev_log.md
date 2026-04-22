@@ -6920,3 +6920,131 @@
     - `npm.cmd run package:win:dir` passed
   - Built a fresh Windows unpacked validation artifact containing this dashboard-entry Gateway auto-start fix:
     - unpacked: `release/2026.4.22-v4/win-unpacked/Mclaw.exe`
+
+- Update 553
+  - Before starting the memory lane, pushed a backup baseline to `origin/main`:
+    - commit: `1efc8b6`
+    - message: `docs: add memory and Claude Code analysis baseline`
+  - Landed the Mclaw-native memory v1 baseline described in `docs/memory-and-claude-code-analysis.md`, keeping the first version local-first and dependency-free instead of blocking on MemOS / Mem0 integration.
+  - Added shared memory contracts in `src/shared/chat-memory.ts` and exposed them through:
+    - `src/shared/chat-panel.ts`
+    - `src/types/electron.d.ts`
+    - `electron/preload/index.ts`
+    - `electron/main/ipc-handlers.ts`
+  - Added a local JSON memory backend under `electron/main/memory/`:
+    - `memory-types.ts`
+    - `local-memory-provider.ts`
+    - `memory-retriever.ts`
+    - `memory-extractor.ts`
+    - `index.ts`
+  - Memory v1 backend behavior:
+    - stores memories under `memory/memories.json`, separate from `chat/transcripts.json`
+    - supports `user` and `session` scopes
+    - injects matched memories into `extraSystemPrompt` before send
+    - captures explicit “请记住…” / “在这个会话里记住…” instructions and a small set of stable preference rules after send
+    - emits a renderer-facing `memory-saved` stream event after successful capture
+  - Tightened the initial implementation after code review:
+    - session manager listing without an active session now only returns global memories instead of leaking all session memories together
+    - comparable-memory normalization now dedupes near-equivalent preference text such as `以后默认用中文回复` vs `默认使用中文回复。`
+    - auto-learned preference text no longer overwrites equivalent user-manual wording when the manual memory should win
+  - Added the first renderer memory-management entry in `src/components/dashboard/DashboardChatPanel.tsx`:
+    - visible `记忆管理` button beside the diagnostics entry
+    - modal for listing, adding, editing, and deleting local memories
+    - separates `全局偏好` and `当前会话记忆`
+    - surfaces `memory-saved` notifications so users can see when Mclaw has learned something locally
+  - Added focused regression coverage in:
+    - `electron/main/__tests__/chat-memory-store.test.ts`
+    - `electron/main/__tests__/chat-memory-integration.test.ts`
+    - `src/components/dashboard/dashboard-chat-panel-guardrails.test.ts`
+  - 2026-04-23 validation:
+    - `npm.cmd run typecheck` passed
+    - escalated `npx.cmd vitest run electron/main/__tests__/chat-memory-store.test.ts electron/main/__tests__/chat-memory-integration.test.ts src/components/dashboard/dashboard-chat-panel-guardrails.test.ts` passed (`3` files, `14` tests)
+    - `npm.cmd run build:app` passed
+
+- Update 554
+  - Built a fresh Windows acceptance package for the memory v1 baseline while explicitly preserving the previous `v4` validation artifact per request.
+  - To avoid the packaging script's normal old-release pruning from deleting the retained baseline, I temporarily moved `release/2026.4.22-v4` out of `release/`, ran the new package build, then restored `v4` after packaging completed.
+  - 2026-04-23 packaging validation:
+    - `npm.cmd run package:win:dir` passed
+    - packaged bundle verification passed inside the build for `release/2026.4.23-v0/win-unpacked`
+  - Current retained Windows unpacked artifacts:
+    - previous retained baseline: `release/2026.4.22-v4/win-unpacked/Mclaw.exe`
+    - new memory-v1 acceptance build: `release/2026.4.23-v0/win-unpacked/Mclaw.exe`
+
+- Update 555
+  - Closed the first round of memory-v1 acceptance regressions reported against `release/2026.4.23-v0`, and produced a refreshed Windows validation build.
+  - Verified the suspected “坏插件 / 插件修复失败” direction against the live local state on this machine:
+    - inspected `C:\Users\James\AppData\Roaming\Mclaw\openclaw-state\.openclaw\openclaw.json`
+    - `plugins.allow` still only contains the managed `openclaw-lark`
+    - no extra broken plugin ids or stale managed-plugin records were found in the active state snapshot
+    - conclusion: the current memory / dashboard regressions were not caused by a bad plugin install
+  - `src/shared/chat-visible-text.ts`
+    - now suppresses internal runtime artifact lines such as `HEARTBEAT.md`, `.openclaw\workspace-*`, and `Mclaw\openclaw-state\...` paths from visible assistant text
+    - this keeps runtime bookkeeping files out of user-facing chat bubbles even when the upstream transcript contains them
+  - `electron/main/memory/memory-retriever.ts` and `electron/main/memory/local-memory-provider.ts`
+    - strengthened memory injection wording so matched memories are treated as high-priority local instructions instead of soft reminders
+    - expanded retrieval to a larger candidate pool, while capping the final injected prompt size
+    - collapse conflicting format-style memories by semantic group, so overlapping entries like multiple “第一行先输出 …” rules only inject the newest relevant one
+    - when scores tie, manual memories now outrank auto-learned memories
+    - on this machine I also confirmed the local store already contained multiple overlapping global format memories, which explains why manual save/edit looked wrong even though persistence itself had already succeeded
+  - `electron/main/watchdog/watchdog-service.ts`
+    - deferred self-healing on the very first startup health-check failure when Gateway has never been healthy yet
+    - this reduces the false-positive restart chain where the OpenClaw terminal disappears shortly after dashboard entry and then relaunches a moment later
+  - `src/components/dashboard/DashboardChatPanel.tsx`
+    - clarified in the memory manager that when multiple same-type format memories exist, the system will prefer the newest one
+  - Added/updated focused regression coverage in:
+    - `src/components/dashboard/chat-panel-messages.test.ts`
+    - `electron/main/__tests__/chat-memory-store.test.ts`
+    - `electron/main/__tests__/chat-memory-integration.test.ts`
+    - `electron/main/__tests__/watchdog-service.test.ts`
+  - 2026-04-23 validation:
+    - `npm.cmd run typecheck` passed
+    - `npx.cmd vitest run src/components/dashboard/chat-panel-messages.test.ts src/components/dashboard/dashboard-chat-panel-guardrails.test.ts electron/main/__tests__/chat-memory-store.test.ts electron/main/__tests__/chat-memory-integration.test.ts electron/main/__tests__/watchdog-service.test.ts` passed (`5` files, `31` tests)
+    - `npm.cmd run build:app` passed
+    - escalated `npm.cmd run package:win:dir` passed
+  - Built and retained Windows unpacked validation artifacts:
+    - previous retained baseline: `release/2026.4.22-v4/win-unpacked/Mclaw.exe`
+    - previous memory-v1 build: `release/2026.4.23-v0/win-unpacked/Mclaw.exe`
+    - refreshed acceptance build: `release/2026.4.23-v1/win-unpacked/Mclaw.exe`
+
+- Update 556
+  - Closed the second round of memory/chat acceptance regressions reported against `release/2026.4.23-v1`, then produced a new Windows validation build.
+  - Root-cause clarification for the latest “坏插件 / 记忆异常 / 聊天内容串脏数据” reports:
+    - the newly reported junk text was not a broken plugin installation
+    - it came from internal bootstrap / persona template content and local seeded-history pollution being surfaced as assistant-visible text
+    - representative leaked lines included `Successfully wrote ... to memory/...`, `IDENTITY.md`, `BOOTSTRAP.md`, and `SOUL.md`
+  - `src/shared/chat-visible-text.ts`
+    - now strips known internal bootstrap/persona/template blocks from assistant-visible text before the final bubble and the `思考过程` block are rendered
+    - the cleaner still keeps the later user-facing final reply when the upstream payload contains both internal bootstrap text and a normal answer
+  - `electron/main/memory/memory-extractor.ts` and `electron/main/memory/index.ts`
+    - exported explicit memory-instruction detection so the chat send pipeline can recognize turns like “请记住…” / “在这个会话里记住…”
+  - `electron/main/openclaw-chat-service.ts`
+    - seeded local-history sends now reuse sanitized assistant text instead of replaying raw polluted transcript content
+    - explicit memory-instruction user turns, and the immediate assistant acknowledgements that follow them, are no longer re-seeded into forked local sends
+    - reply-leaf selection now prefers cleaned assistant text leaves instead of accidentally preferring a longer but polluted bootstrap leaf
+    - explicit assistant JSON reply bodies are still preserved when they are the intended final answer, so structured developer replies are not lost by the new cleanup pass
+  - Added/updated focused regression coverage in:
+    - `src/components/dashboard/chat-panel-messages.test.ts`
+    - `electron/main/__tests__/chat-memory-integration.test.ts`
+    - `electron/main/__tests__/openclaw-chat-service.test.ts`
+  - 2026-04-23 validation:
+    - `npm.cmd run typecheck` passed
+    - escalated `npx.cmd vitest run src/components/dashboard/chat-panel-messages.test.ts electron/main/__tests__/chat-memory-integration.test.ts electron/main/__tests__/openclaw-chat-service.test.ts` passed (`3` files, `141` tests)
+    - escalated `npx.cmd vitest run electron/main/__tests__/chat-memory-store.test.ts src/components/dashboard/dashboard-chat-panel-guardrails.test.ts electron/main/__tests__/watchdog-service.test.ts` passed (`3` files, `17` tests)
+    - escalated `npm.cmd run package:win:dir` passed
+  - Built and retained Windows unpacked validation artifacts:
+    - retained baseline: `release/2026.4.22-v4/win-unpacked/Mclaw.exe`
+    - previous memory acceptance build: `release/2026.4.23-v1/win-unpacked/Mclaw.exe`
+    - refreshed acceptance build: `release/2026.4.23-v2/win-unpacked/Mclaw.exe`
+
+- Update 557
+  - Refined the managed-workspace persona markdown templates that Mclaw writes for paired Feishu workspaces, so the runtime character is clearer and more Chinese-first.
+  - `electron/main/feishu-managed-workspace-bootstrap.ts`
+    - strengthened `AGENTS.md` with a clearer local-computer role, Simplified Chinese default-language rule, verification-first work style, and explicit guidance to keep internal bootstrap/runtime files out of user-facing replies
+    - strengthened `SOUL.md` with a sharper Mclaw persona: Chinese-first, practical, calm, execution-oriented, and honest about tool failures
+    - strengthened `TOOLS.md` so internal files such as `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, heartbeat files, and state snapshots are treated as internal context unless the user explicitly asks for them
+    - strengthened `IDENTITY.md` and `USER.md` so Mclaw's identity, communication defaults, and user-language expectations are more explicit
+  - Added focused regression coverage in:
+    - `electron/main/__tests__/feishu-managed-workspace-bootstrap.test.ts`
+  - 2026-04-23 validation:
+    - escalated `npx.cmd vitest run electron/main/__tests__/feishu-managed-workspace-bootstrap.test.ts` passed

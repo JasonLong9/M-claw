@@ -21,6 +21,8 @@ export type ChatMessageRole = 'user' | 'assistant' | 'system'
 
 export type ChatMessageStatus = 'pending' | 'sent' | 'error'
 
+import type { ChatMemoryEntry } from './chat-memory'
+
 export type ChatThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high'
 
 export type ChatSendErrorCode =
@@ -251,5 +253,11 @@ export type ChatStreamEvent =
       type: 'assistant-error'
       sessionId: string
       errorCode: ChatSendErrorCode
+      messageText: string
+    }
+  | {
+      type: 'memory-saved'
+      sessionId: string
+      entries: ChatMemoryEntry[]
       messageText: string
     }

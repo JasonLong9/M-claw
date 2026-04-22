@@ -196,6 +196,7 @@ import {
   patchChatSessionModel,
   sendChatMessage,
 } from './openclaw-chat-service'
+import { deleteChatMemory, listChatMemories, saveChatMemory } from './memory'
 import { parseJsonFromCommandResult, parseJsonFromOutput } from './openclaw-command-output'
 import {
   buildBundledFallbackSkillsPayload,
@@ -846,6 +847,9 @@ export function registerIpcHandlers() {
   )
   ipcMain.handle('chat:cancel', () => cancelActiveCommand('chat'))
   ipcMain.handle('chat:transcript:clear', (_e, sessionId: string) => clearChatTranscript(sessionId))
+  ipcMain.handle('chat:memory:list', (_e, request) => listChatMemories(request))
+  ipcMain.handle('chat:memory:save', (_e, request) => saveChatMemory(request))
+  ipcMain.handle('chat:memory:delete', (_e, memoryId: string) => deleteChatMemory(memoryId))
 
   // Uninstall
   ipcMain.handle('uninstall:all', () => uninstallAll())

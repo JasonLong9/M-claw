@@ -73,4 +73,13 @@ describe('dashboard chat panel guardrails', () => {
     expect(source).toContain('describeLocalPathLabel(targetPath)')
     expect(source).not.toContain('collectAssistantLocalPaths([message.rawText, messageText, reasoningText].filter(Boolean).join(')
   })
+
+  it('keeps the local memory manager discoverable from the chat panel', () => {
+    const source = readDashboardChatPanelSource()
+
+    expect(source).toContain('记忆管理')
+    expect(source).toContain('window.api.listChatMemories')
+    expect(source).toContain('window.api.saveChatMemory')
+    expect(source).toContain("type === 'memory-saved'")
+  })
 })

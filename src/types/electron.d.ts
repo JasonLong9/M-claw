@@ -1458,6 +1458,42 @@ type ChatMessageRole = 'user' | 'assistant' | 'system'
 type ChatMessageStatus = 'pending' | 'sent' | 'error'
 
 type ChatThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high'
+type ChatMemoryScope = 'user' | 'session'
+type ChatMemorySource = 'auto' | 'manual'
+
+interface ChatMemoryEntry {
+  id: string
+  scope: ChatMemoryScope
+  content: string
+  source: ChatMemorySource
+  createdAt: number
+  updatedAt: number
+  sessionId?: string
+}
+
+interface ChatMemoryListRequest {
+  sessionId?: string
+}
+
+interface ChatMemorySaveRequest {
+  id?: string
+  scope: ChatMemoryScope
+  content: string
+  sessionId?: string
+}
+
+interface ChatMemorySaveResult {
+  ok: boolean
+  action?: 'created' | 'updated' | 'unchanged'
+  entry?: ChatMemoryEntry
+  messageText?: string
+}
+
+interface ChatMemoryDeleteResult {
+  ok: boolean
+  memoryId: string
+  messageText?: string
+}
 
 type ChatSendErrorCode =
   | 'gateway-offline'
@@ -1669,6 +1705,12 @@ type ChatStreamEvent =
       errorCode: ChatSendErrorCode
       messageText: string
     }
+  | {
+      type: 'memory-saved'
+      sessionId: string
+      entries: ChatMemoryEntry[]
+      messageText: string
+    }
 
 interface ElectronApi {
   // Platform
@@ -1846,6 +1888,9 @@ interface ElectronApi {
   sendChatMessage: (request: ChatSendRequest) => Promise<ChatSendResult>
   cancelChatMessage: () => Promise<boolean>
   clearChatTranscript: (sessionId: string) => Promise<ChatClearLocalTranscriptResult>
+  listChatMemories: (request?: ChatMemoryListRequest) => Promise<ChatMemoryEntry[]>
+  saveChatMemory: (request: ChatMemorySaveRequest) => Promise<ChatMemorySaveResult>
+  deleteChatMemory: (memoryId: string) => Promise<ChatMemoryDeleteResult>
   onChatStream: (listener: (payload: ChatStreamEvent) => void) => () => void
 
   // Uninstall

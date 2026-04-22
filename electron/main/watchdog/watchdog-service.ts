@@ -152,6 +152,19 @@ async function handleHealthFailure(result: HealthCheckResult): Promise<void> {
   })
 
   const updatedState = getWatchdogState()
+  const shouldDeferInitialRecovery =
+    updatedState.lastHealthyTime === null &&
+    newConsecutiveFailures < 2
+
+  // On app/dashboard entry the gateway may still be settling for a short moment.
+  // Deferring the very first recovery avoids false-positive restarts that make
+  // the OpenClaw terminal disappear and relaunch shortly after startup.
+  if (shouldDeferInitialRecovery) {
+    setWatchdogState({
+      stateCode: 'monitoring',
+    })
+    return
+  }
 
   if (shouldOpenCircuit(updatedState, thresholds)) {
     openCircuit(thresholds, `Consecutive failures reached ${thresholds.maxConsecutiveFailures}`)

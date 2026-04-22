@@ -150,6 +150,68 @@ describe('chat panel message helpers', () => {
     ).toEqual(['C:\\Users\\James\\Desktop\\广州今天天气.txt'])
   })
 
+  it('hides internal HEARTBEAT runtime lines from visible assistant text', () => {
+    expect(
+      resolveChatMessageDisplayText(
+        [
+          '你好！我是 OpenClaw 的助手，很高兴见到你。',
+          '已保存到 C:\\Users\\James\\AppData\\Roaming\\Mclaw\\openclaw-state\\.openclaw\\workspace-feishu-bot-78dbc0\\HEARTBEAT.md',
+        ].join('\n'),
+        'assistant'
+      )
+    ).toMatchObject({
+      body: '你好！我是 OpenClaw 的助手，很高兴见到你。',
+      reasoning: '',
+    })
+  })
+
+  it('strips internal bootstrap templates and keeps only the user-facing reply', () => {
+    expect(
+      resolveChatMessageDisplayText(
+        [
+          'Successfully wrote 74 bytes to memory/2026-04-23.md',
+          '# IDENTITY.md - Who Am I?',
+          '_Fill this in during your first conversation. Make it yours._',
+          '- **Name:**',
+          '_(pick something you like)_',
+          '- **Avatar:**',
+          '_(workspace-relative path, http(s) URL, or data URI)_',
+          'Notes:',
+          '- Save this file at the workspace root as `IDENTITY.md`.',
+          '- For avatars, use a workspace-relative path like `avatars/openclaw.png`.',
+          '',
+          '你好。我是你的助手，刚刚启动。也请告诉我你的名字和偏好，这样我就能更好地为你服务。',
+        ].join('\n'),
+        'assistant'
+      )
+    ).toEqual({
+      body: '你好。我是你的助手，刚刚启动。也请告诉我你的名字和偏好，这样我就能更好地为你服务。',
+      embeddedTimestamp: '',
+      reasoning: '',
+    })
+  })
+
+  it('drops bootstrap-style reasoning blocks before the final assistant answer', () => {
+    expect(
+      resolveChatMessageDisplayText(
+        [
+          '# BOOTSTRAP.md - Hello, World',
+          'You just woke up. Time to figure out who you are.',
+          '## The Conversation',
+          "Don't interrogate. Don't be robotic. Just... talk.",
+          'Good luck out there. Make it count.',
+          '',
+          '明白了，我会在本会话后续回复末尾加上【会话A】。',
+        ].join('\n'),
+        'assistant'
+      )
+    ).toEqual({
+      body: '明白了，我会在本会话后续回复末尾加上【会话A】。',
+      embeddedTimestamp: '',
+      reasoning: '',
+    })
+  })
+
   it('groups consecutive assistant process bubbles into one rendered assistant turn', () => {
     const messages = buildRenderedChatMessages({
       baseMessages: [
