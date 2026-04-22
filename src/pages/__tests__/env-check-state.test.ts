@@ -80,8 +80,8 @@ describe('createEnvCheckRestartState', () => {
     ).toEqual({
       gatewayStep: {
         status: 'ok',
-        version: '后续确认',
-        description: '完成认证和渠道配置后再确认 Gateway 可用性',
+        version: '自动启动',
+        description: '进入控制面板时会自动启动 Gateway 并确认本地对话可用，无需手动打开终端。',
         progress: 100,
       },
       progress: 100,
@@ -384,14 +384,14 @@ describe('createEnvCheckRestartState', () => {
       ])
     )
     expect(resolveGatewayBehavior()).toMatchObject({
-      deferredCheckingDescription: '当前阶段先跳过 Gateway 运行态检查，完成后续配置后会再次自动确认...',
-      deferredStepVersion: '后续确认',
-      deferredReadyDescription: '完成认证和渠道配置后再确认 Gateway 可用性',
+      deferredCheckingDescription: '当前先完成模型配置；点击进入控制面板后，Mclaw 会先自动启动并确认 Gateway，再进入主界面。',
+      deferredStepVersion: '自动启动',
+      deferredReadyDescription: '进入控制面板时会自动启动 Gateway 并确认本地对话可用，无需手动打开终端。',
     })
     expect(resolveGatewayDeferredStepState(resolveGatewayBehavior())).toEqual({
       status: 'ok',
-      version: '后续确认',
-      description: '完成认证和渠道配置后再确认 Gateway 可用性',
+      version: '自动启动',
+      description: '进入控制面板时会自动启动 Gateway 并确认本地对话可用，无需手动打开终端。',
       progress: 100,
     })
     expect(resolveGatewayBehavior().resolveContinueLabel(true)).toBe('进入控制面板')
@@ -989,7 +989,7 @@ describe('createEnvCheckRestartState', () => {
       })
     ).toEqual({
       label: '自定义安装',
-      title: '当前使用的是用户自定义路径中的 OpenClaw。',
+      title: '当前使用的是用户自定义路径中的 OpenClaw 运行环境。',
     })
 
     expect(

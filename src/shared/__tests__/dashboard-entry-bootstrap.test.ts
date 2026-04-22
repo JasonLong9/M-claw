@@ -36,15 +36,15 @@ describe('dashboard-entry-bootstrap', () => {
     expect(copy.detail).toContain('配对')
   })
 
-  it('describes gateway work as a soft snapshot instead of a hard gate', () => {
+  it('describes gateway work as an automatic startup gate before entering dashboard', () => {
     const copy = resolveDashboardEntryBootstrapCopy({
       gateway: 'active',
       config: 'pending',
       pairing: 'pending',
     })
 
-    expect(copy.title).toBe('读取 Gateway 状态')
-    expect(copy.detail).toContain('运行快照')
+    expect(copy.title).toBe('启动并确认 Gateway')
+    expect(copy.detail).toContain('自动启动')
   })
 
   it('returns a completion message after all tasks finish or degrade softly', () => {

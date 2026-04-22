@@ -11,7 +11,10 @@ import {
   type DashboardEntryBootstrapTaskKey,
   type DashboardEntryBootstrapTaskStatus,
 } from '../shared/dashboard-entry-bootstrap'
-import { type GatewayBootstrapFailureView } from '../shared/gateway-bootstrap-diagnostics'
+import {
+  resolveGatewayBootstrapFailureView,
+  type GatewayBootstrapFailureView,
+} from '../shared/gateway-bootstrap-diagnostics'
 import {
   getUpstreamModelStatusLike,
   readOpenClawUpstreamModelState,
@@ -26,7 +29,13 @@ interface FeishuRuntimeStatusSummary {
   issues: string[]
 }
 
+type DashboardChatAvailabilityResult = Awaited<ReturnType<typeof window.api.getChatAvailability>>
+type GatewayEnsureRunningResult = Awaited<ReturnType<typeof window.api.ensureGatewayRunning>>
+
 export interface DashboardEntryBootstrapApi {
+  ensureGatewayRunning: (
+    options?: { skipRuntimePrecheck?: boolean; requestId?: string }
+  ) => Promise<GatewayEnsureRunningResult>
   getChatAvailability: () => Promise<Awaited<ReturnType<typeof window.api.getChatAvailability>>>
   gatewayHealth: () => Promise<GatewayHealthCheckResult>
   getOpenClawRuntimeReconcileState: () => Promise<OpenClawRuntimeReconcileStore>
@@ -40,6 +49,10 @@ export interface DashboardEntryBootstrapApi {
 interface GatewayHealthCheckResult {
   running: boolean
   summary?: string
+  raw?: string
+  stderr?: string
+  code?: number | null
+  stateCode?: GatewayEnsureRunningResult['stateCode']
 }
 
 export interface DashboardEntryBootstrapFlowResult {
@@ -52,7 +65,7 @@ type TaskDetailState = Record<DashboardEntryBootstrapTaskKey, string>
 const INITIAL_TASK_STATE = createDashboardEntryBootstrapState()
 
 const INITIAL_TASK_DETAILS: TaskDetailState = {
-  gateway: '读取当前 Gateway 运行快照，运行态问题会在控制面板内继续处理。',
+  gateway: '进入控制面板前先自动启动并确认 Gateway 已就绪，避免首屏仍显示离线。',
   config: '读取控制面板首屏所需的共享配置快照。',
   pairing: '汇总渠道接通、飞书运行态和配对摘要。',
 }
@@ -81,6 +94,91 @@ function summarizeConfig(config: Record<string, any> | null): string {
 
 function formatProbeErrorMessage(prefix: string, error: unknown): string {
   return `${prefix}${error instanceof Error && error.message ? `：${error.message}` : ''}`
+}
+
+function normalizeGatewayFailureInput(error: unknown): unknown {
+  if (error instanceof Error) {
+    return {
+      ok: false,
+      running: false,
+      stdout: '',
+      stderr: error.message,
+      code: 1,
+      summary: error.message,
+    }
+  }
+
+  if (typeof error === 'string') {
+    return {
+      ok: false,
+      running: false,
+      stdout: '',
+      stderr: error,
+      code: 1,
+      summary: error,
+    }
+  }
+
+  return error
+}
+
+function buildGatewayReadyDetail(
+  ensureResult: GatewayEnsureRunningResult,
+  health: GatewayHealthCheckResult | null,
+  chatAvailability: DashboardChatAvailabilityResult | null,
+  runtimeStore: OpenClawRuntimeReconcileStore | null
+): string {
+  const parts: string[] = []
+  const summary =
+    String(health?.summary || chatAvailability?.message || ensureResult.summary || '').trim()
+    || String(runtimeStore?.runtime.lastReconcileSummary || '').trim()
+
+  if (summary) {
+    parts.push(summary)
+  }
+  if (ensureResult.autoInstalledGatewayService) {
+    parts.push('已自动补齐 Gateway 服务')
+  }
+  if (
+    ensureResult.autoPortMigrated === true
+    && Number.isFinite(ensureResult.effectivePort)
+    && ensureResult.effectivePort > 0
+  ) {
+    parts.push(`当前使用端口 ${ensureResult.effectivePort}`)
+  }
+
+  return parts.join('；') || 'Gateway 已启动并确认可用。'
+}
+
+function buildGatewayHealthFailureInput(
+  ensureResult: GatewayEnsureRunningResult,
+  health: GatewayHealthCheckResult,
+  chatAvailability: DashboardChatAvailabilityResult | null
+): GatewayEnsureRunningResult {
+  const summary =
+    String(health.summary || chatAvailability?.message || ensureResult.summary || '').trim()
+    || 'Gateway 启动后仍未通过健康确认。'
+
+  return {
+    ...ensureResult,
+    ok: false,
+    running: false,
+    summary,
+    stateCode: health.stateCode || ensureResult.stateCode,
+    stderr: String(health.stderr || ensureResult.stderr || summary).trim(),
+    stdout: String(health.raw || ensureResult.stdout || '').trim(),
+    code: health.code ?? ensureResult.code,
+    diagnostics: {
+      doctor: ensureResult.diagnostics?.doctor ?? null,
+      lastHealth: health,
+      ...(ensureResult.diagnostics?.portOwner !== undefined
+        ? { portOwner: ensureResult.diagnostics.portOwner }
+        : {}),
+      ...(ensureResult.diagnostics?.controlUiApp !== undefined
+        ? { controlUiApp: ensureResult.diagnostics.controlUiApp }
+        : {}),
+    },
+  }
 }
 
 async function summarizePairing(
@@ -178,42 +276,52 @@ export async function runDashboardEntryBootstrapFlow(
   notify('config', 'done', summarizeConfig(config))
 
   const softWarnings: string[] = []
-  notify('gateway', 'active', '正在读取当前 Gateway 状态快照...')
+  notify('gateway', 'active', '正在自动启动并确认 Gateway...')
+  const ensureResult = await api.ensureGatewayRunning({
+    skipRuntimePrecheck: true,
+    requestId: 'dashboard-entry-bootstrap',
+  }).catch((error) => {
+    const failureView = resolveGatewayBootstrapFailureView(normalizeGatewayFailureInput(error))
+    notify('gateway', 'error', failureView.detail)
+    throw failureView
+  })
+  if (!ensureResult.ok || ensureResult.running !== true) {
+    const failureView = resolveGatewayBootstrapFailureView(ensureResult)
+    notify('gateway', 'error', failureView.detail)
+    throw failureView
+  }
+
+  notify('gateway', 'active', 'Gateway 已启动，正在读取控制面板首屏状态...')
+  const gatewayWarningCountBeforeProbe = softWarnings.length
   const [chatAvailability, health, runtimeStore] = await Promise.all([
     api.getChatAvailability().catch(() => null),
     api.gatewayHealth().catch((error) => {
-      softWarnings.push(formatProbeErrorMessage('Gateway 状态读取失败，控制面板将先按离线快照进入', error))
+      softWarnings.push(formatProbeErrorMessage('Gateway 健康确认读取失败，控制面板会按已启动状态继续', error))
       return null
     }),
     api.getOpenClawRuntimeReconcileState().catch(() => null),
   ])
-  const gatewayRunning =
-    typeof chatAvailability?.gatewayRunning === 'boolean'
-      ? chatAvailability.gatewayRunning
-      : resolveEffectiveGatewayRunning({
-          healthRunning: health?.running === true,
-          runtimeStore,
-        })
-  if (gatewayRunning) {
-    const availabilitySummary = String(chatAvailability?.message || '').trim()
-    const runtimeSummary =
-      runtimeStore && health?.running !== true
-        ? String(runtimeStore.runtime.lastReconcileSummary || '').trim()
-        : ''
-    notify(
-      'gateway',
-      'done',
-      availabilitySummary || String(health?.summary || runtimeSummary).trim() || 'Gateway 运行快照已就绪。'
+  const runtimeHintsRunning = resolveEffectiveGatewayRunning({
+    healthRunning: health?.running === true,
+    runtimeStore,
+  })
+  if (health?.running === false) {
+    const failureView = resolveGatewayBootstrapFailureView(
+      buildGatewayHealthFailureInput(ensureResult, health, chatAvailability)
     )
-  } else {
-    const gatewayWarning =
-      String(chatAvailability?.message || health?.summary || '').trim() ||
-      'Gateway 当前未就绪，进入控制面板后可继续处理。'
-    if (health) {
-      softWarnings.push(`Gateway 当前未就绪：${gatewayWarning}`)
-    }
-    notify('gateway', 'warning', gatewayWarning)
+    notify('gateway', 'error', failureView.detail)
+    throw failureView
   }
+  if (
+    health === null
+    && chatAvailability?.gatewayRunning !== true
+    && !runtimeHintsRunning
+    && softWarnings.length === gatewayWarningCountBeforeProbe
+  ) {
+    softWarnings.push('Gateway 已自动启动，但实时状态快照还未刷新完成，控制面板会按已启动状态继续。')
+  }
+  const gatewayRunning = true
+  notify('gateway', 'done', buildGatewayReadyDetail(ensureResult, health, chatAvailability, runtimeStore))
 
   const upstreamModelState = await readOpenClawUpstreamModelState(api.getModelUpstreamState)
   const upstreamModelStatus = getUpstreamModelStatusLike(upstreamModelState)

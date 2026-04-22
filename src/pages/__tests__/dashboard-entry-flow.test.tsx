@@ -8,24 +8,51 @@ import {
   type DashboardEntryBootstrapApi,
 } from '../GatewayBootstrapGate'
 
+function createEnsureResult(
+  overrides: Partial<Awaited<ReturnType<typeof window.api.ensureGatewayRunning>>> = {}
+): Awaited<ReturnType<typeof window.api.ensureGatewayRunning>> {
+  return {
+    ok: true,
+    stdout: '',
+    stderr: '',
+    code: 0,
+    running: true,
+    autoInstalledNode: false,
+    autoInstalledOpenClaw: false,
+    autoInstalledGatewayService: false,
+    autoPortMigrated: false,
+    effectivePort: 18789,
+    stateCode: 'healthy',
+    summary: 'Gateway ready',
+    attemptedCommands: [],
+    evidence: [],
+    repairActionsTried: [],
+    repairOutcome: 'not-needed',
+    safeToRetry: true,
+    ...overrides,
+  }
+}
+
 function createBootstrapApi(
   overrides: Partial<DashboardEntryBootstrapApi> = {}
 ): DashboardEntryBootstrapApi {
   return {
+    ensureGatewayRunning: vi.fn().mockResolvedValue(createEnsureResult()),
     getChatAvailability: vi.fn().mockResolvedValue({
-      state: 'offline',
-      ready: false,
-      canSend: false,
-      reason: 'gateway-offline',
-      gatewayRunning: false,
+      state: 'ready',
+      ready: true,
+      canSend: true,
+      reason: 'ready',
+      gatewayRunning: true,
       connectedModels: ['openai/gpt-5.4-pro'],
       defaultModel: 'openai/gpt-5.4-pro',
       agentId: 'main',
-      message: 'Gateway not running',
+      message: 'Gateway ready',
     }),
     gatewayHealth: vi.fn().mockResolvedValue({
-      running: false,
-      summary: 'Gateway not running',
+      running: true,
+      summary: 'Gateway ready',
+      stateCode: 'healthy',
     }),
     getOpenClawRuntimeReconcileState: vi
       .fn()
@@ -168,10 +195,14 @@ describe('dashboard entry bootstrap flow', () => {
     expect(html).toContain('飞书')
     expect(html).toContain('Telegram Bot')
     expect(html).toContain('openai/gpt-5.4-pro')
+    expect(api.ensureGatewayRunning).toHaveBeenCalledWith({
+      skipRuntimePrecheck: true,
+      requestId: 'dashboard-entry-bootstrap',
+    })
     expect(api.getModelStatus).not.toHaveBeenCalled()
   })
 
-  it('prefers chat availability over stale runtime-compatible gateway snapshots on dashboard entry', async () => {
+  it('lets post-start gateway health override stale availability snapshots on dashboard entry', async () => {
     const runtimeStore = createDefaultOpenClawRuntimeReconcileStore()
     runtimeStore.lastSeenVersionBand = 'openclaw_2026_3_23_to_2026_3_24'
     runtimeStore.runtime.stateCode = 'degraded'
@@ -180,29 +211,52 @@ describe('dashboard entry bootstrap flow', () => {
     runtimeStore.runtime.lastReconcileSummary = 'compat runtime confirmed'
 
     const api = createBootstrapApi({
+      getChatAvailability: vi.fn().mockResolvedValue({
+        state: 'offline',
+        ready: false,
+        canSend: false,
+        reason: 'gateway-offline',
+        gatewayRunning: false,
+        connectedModels: ['openai/gpt-5.4-pro'],
+        defaultModel: 'openai/gpt-5.4-pro',
+        agentId: 'main',
+        message: 'Gateway availability snapshot stale',
+      }),
       gatewayHealth: vi.fn().mockResolvedValue({
-        running: false,
-        summary: 'Gateway health stale',
+        running: true,
+        summary: 'Gateway ready after ensure',
+        stateCode: 'healthy',
       }),
       getOpenClawRuntimeReconcileState: vi.fn().mockResolvedValue(runtimeStore),
     })
 
     const result = await runDashboardEntryBootstrapFlow(api)
 
-    expect(result.snapshot.gatewayRunning).toBe(false)
-    expect(result.softWarnings).toContain('Gateway 当前未就绪：Gateway not running')
+    expect(result.snapshot.gatewayRunning).toBe(true)
+    expect(result.softWarnings).toEqual([])
   })
 
-  it('allows dashboard entry when gateway probes fail and keeps gatewayRunning false', async () => {
+  it('keeps dashboard entry unblocked when health confirmation cannot be read after ensure succeeds', async () => {
     const api = createBootstrapApi({
+      getChatAvailability: vi.fn().mockResolvedValue({
+        state: 'offline',
+        ready: false,
+        canSend: false,
+        reason: 'gateway-offline',
+        gatewayRunning: false,
+        connectedModels: ['openai/gpt-5.4-pro'],
+        defaultModel: 'openai/gpt-5.4-pro',
+        agentId: 'main',
+        message: 'availability snapshot still warming',
+      }),
       gatewayHealth: vi.fn().mockRejectedValue(new Error('health down')),
     })
 
     const result = await runDashboardEntryBootstrapFlow(api)
 
-    expect(result.snapshot.gatewayRunning).toBe(false)
+    expect(result.snapshot.gatewayRunning).toBe(true)
     expect(result.softWarnings).toContain(
-      'Gateway 状态读取失败，控制面板将先按离线快照进入：health down'
+      'Gateway 健康确认读取失败，控制面板会按已启动状态继续：health down'
     )
 
     const html = renderToStaticMarkup(
@@ -211,7 +265,7 @@ describe('dashboard entry bootstrap flow', () => {
       </MantineProvider>
     )
 
-    expect(html).toContain('已停止')
+    expect(html).toContain('运行中')
   })
 
   it('keeps pairing reads as soft-blocking warnings without blocking dashboard entry', async () => {
@@ -320,7 +374,7 @@ describe('dashboard entry bootstrap flow', () => {
     expect(api.getModelStatus).toHaveBeenCalledTimes(1)
   })
 
-  it('keeps gatewayRunning false when gateway health reports not ready', async () => {
+  it('treats explicit post-start gateway health failures as a hard block', async () => {
     const api = createBootstrapApi({
       getChatAvailability: vi.fn().mockResolvedValue({
         state: 'offline',
@@ -336,13 +390,32 @@ describe('dashboard entry bootstrap flow', () => {
       gatewayHealth: vi.fn().mockResolvedValue({
         running: false,
         summary: 'Gateway not ready',
+        stateCode: 'gateway_not_running',
       }),
     })
 
-    const result = await runDashboardEntryBootstrapFlow(api)
+    await expect(runDashboardEntryBootstrapFlow(api)).rejects.toMatchObject({
+      title: expect.any(String),
+    })
+  })
 
-    expect(result.snapshot.gatewayRunning).toBe(false)
-    expect(result.softWarnings).toContain('Gateway 当前未就绪：Gateway not ready')
+  it('treats ensure-gateway failures as a hard block', async () => {
+    const api = createBootstrapApi({
+      ensureGatewayRunning: vi.fn().mockResolvedValue(
+        createEnsureResult({
+          ok: false,
+          running: false,
+          code: 1,
+          stateCode: 'gateway_not_running',
+          summary: 'Gateway start failed',
+          stderr: 'Gateway start failed',
+        })
+      ),
+    })
+
+    await expect(runDashboardEntryBootstrapFlow(api)).rejects.toMatchObject({
+      title: expect.any(String),
+    })
   })
 
   it('treats config reads as a hard block', async () => {

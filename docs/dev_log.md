@@ -6894,3 +6894,29 @@
     - escalated `npm.cmd run package:win:dir` passed
   - Built a fresh Windows unpacked validation artifact containing this acceptance slice:
     - unpacked: `release/2026.4.22-v3/win-unpacked/Mclaw.exe`
+
+- Update 552
+  - Fixed the dashboard-entry gap where users could land in the control panel before Gateway / OpenClaw had actually been started on this machine.
+  - Root cause:
+    - `EnvCheck` already routed shared-config-ready users through `GatewayBootstrapGate`, but `runDashboardEntryBootstrapFlow(...)` only read Gateway snapshots.
+    - It never called `ensureGatewayRunning(...)`, so Dashboard could render while Gateway was still offline or before the OpenClaw terminal had fully come up.
+  - `src/pages/GatewayBootstrapGate.tsx`
+    - dashboard entry bootstrap now calls `ensureGatewayRunning({ skipRuntimePrecheck: true, requestId: 'dashboard-entry-bootstrap' })` before allowing Dashboard entry
+    - explicit Gateway start / health failures are now promoted to a blocking failure view via `resolveGatewayBootstrapFailureView(...)` instead of silently entering Dashboard offline
+    - if Gateway start succeeded but the follow-up health snapshot is temporarily unreadable, the gate now continues with a soft warning and still treats entry as already started instead of regressing to an offline first screen
+  - `src/shared/dashboard-entry-bootstrap.ts`
+    - Gateway task copy now describes the real behavior: “启动并确认 Gateway”, instead of the old “读取 Gateway 状态” snapshot wording
+  - `src/pages/EnvCheck.tsx`
+    - the final env-check handoff copy now tells users that entering the control panel will automatically start and confirm Gateway
+    - removed the misleading manual-start wording so users are no longer told to launch Gateway themselves before using chat
+  - Added/updated focused regression coverage in:
+    - `src/pages/__tests__/dashboard-entry-flow.test.tsx`
+    - `src/pages/__tests__/env-check-state.test.ts`
+    - `src/shared/__tests__/dashboard-entry-bootstrap.test.ts`
+  - 2026-04-22 validation:
+    - `npm.cmd run typecheck` passed
+    - escalated `npx.cmd vitest run src/pages/__tests__/dashboard-entry-flow.test.tsx src/pages/__tests__/env-check-state.test.ts src/shared/__tests__/dashboard-entry-bootstrap.test.ts` passed (`3` files, `45` tests)
+    - `npm.cmd run build:app` passed
+    - `npm.cmd run package:win:dir` passed
+  - Built a fresh Windows unpacked validation artifact containing this dashboard-entry Gateway auto-start fix:
+    - unpacked: `release/2026.4.22-v4/win-unpacked/Mclaw.exe`

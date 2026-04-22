@@ -362,9 +362,9 @@ export function resolveOpenClawInstallBehavior(): EnvCheckOpenClawInstallBehavio
 
 export function resolveGatewayBehavior(): EnvCheckGatewayBehavior {
   return {
-    deferredCheckingDescription: '当前先完成模型配置；进入控制面板后启动 Gateway，再验证本地对话是否可用。',
-    deferredStepVersion: '待启动',
-    deferredReadyDescription: '完成模型配置后，请先启动 Gateway，再进入对话页面验证本地直聊。',
+    deferredCheckingDescription: '当前先完成模型配置；点击进入控制面板后，Mclaw 会先自动启动并确认 Gateway，再进入主界面。',
+    deferredStepVersion: '自动启动',
+    deferredReadyDescription: '进入控制面板时会自动启动 Gateway 并确认本地对话可用，无需手动打开终端。',
     resolveContinueLabel: (sharedConfigInitialized: boolean) =>
       sharedConfigInitialized ? '进入控制面板' : '开始配置',
   }

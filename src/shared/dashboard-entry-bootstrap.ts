@@ -43,8 +43,8 @@ export interface DashboardEntrySnapshot {
 export const DASHBOARD_ENTRY_TASKS: DashboardEntryBootstrapTaskDefinition[] = [
   {
     key: 'gateway',
-    label: '读取 Gateway 状态',
-    pendingDescription: '读取当前 Gateway 运行快照，运行态问题会在控制面板内继续处理。',
+    label: '启动并确认 Gateway',
+    pendingDescription: '进入控制面板前先自动启动并确认 Gateway 已就绪，避免首屏仍显示离线。',
   },
   {
     key: 'config',
@@ -110,8 +110,8 @@ export function resolveDashboardEntryBootstrapCopy(
 
   if (state.gateway === 'active') {
     return {
-      title: '读取 Gateway 状态',
-      detail: '正在读取当前 Gateway 运行快照，运行态问题会在控制面板内继续处理。',
+      title: '启动并确认 Gateway',
+      detail: '正在自动启动 Gateway，并确认本地对话入口已经就绪。',
     }
   }
 
