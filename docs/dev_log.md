@@ -7061,3 +7061,840 @@
   - 2026-04-23 validation:
     - `npm.cmd run typecheck` passed
     - escalated `npx.cmd vitest run electron/main/__tests__/feishu-managed-workspace-bootstrap.test.ts` passed
+
+- Update 559
+  - Landed the first usable Claude Code development-task slice for Dashboard chat, keeping it explicit/manual instead of auto-routing so Mclaw can ship a safe v1.5 baseline quickly.
+  - `src/shared/chat-panel.ts` and `src/types/electron.d.ts`
+    - extended `ChatSendRequest` with `taskMode` and `workspacePath`
+    - added the shared `ChatTaskMode` contract so renderer/main stay aligned for the new dev-task path
+  - `electron/main/chat-task-router.ts`
+    - added a local-first task router for `coding-executor`
+    - requires an explicit workspace path
+    - validates that the path exists and looks like a real dev project (`.git`, `package.json`, `pyproject.toml`, `go.mod`, etc.)
+    - rejects channel / upstream-direct sessions so Claude Code does not silently run against non-local chat contexts
+  - `electron/main/coding/coding-executor-types.ts` and `electron/main/coding/claude-code-cli-executor.ts`
+    - added the first Claude Code CLI executor abstraction
+    - uses headless `claude -p ... --output-format stream-json`
+    - now also passes `--permission-mode acceptEdits` and optional `--append-system-prompt`
+    - on Windows, explicitly targets `claude.cmd` so local execution does not get tripped by the PowerShell `claude.ps1` execution-policy path
+    - tightened stream-json parsing so user/system noise is ignored and assistant/result text is preferred
+    - reuses existing `command-control` cancellation wiring under the `chat` domain
+  - `electron/main/openclaw-chat-service.ts`
+    - inserted the new task router before the normal OpenClaw gateway send path
+    - when `taskMode === 'coding-executor'`, the send now routes to Claude Code instead of requiring the Gateway chat transport
+    - coding-mode sends now:
+      - inject existing local memory context into Claude Code's system prompt
+      - stream deltas back through the existing `assistant-start` / `assistant-delta` / `assistant-complete` event flow
+      - persist the user + assistant turn into the local transcript
+      - keep memory auto-capture after successful turns
+      - fail closed with clear messages when the workspace or session is invalid
+  - `src/components/dashboard/DashboardChatPanel.tsx`
+    - added an explicit `开发任务模式` block in the composer
+    - added a `项目目录` input for the local project path
+    - when dev mode is enabled, Mclaw now auto-creates a local chat session for the send if the current session is missing or not local-direct
+    - dev mode no longer forces a Gateway startup before sending, and the normal session-model picker is hidden while the mode is active
+    - remembers the user's latest dev-mode toggle and workspace path in local storage for convenience
+  - Added/updated focused regression coverage in:
+    - `electron/main/__tests__/chat-task-router.test.ts`
+    - `electron/main/__tests__/openclaw-chat-service.test.ts`
+    - `src/components/dashboard/dashboard-chat-panel-guardrails.test.ts`
+  - 2026-04-23 validation:
+    - `npm.cmd run typecheck` passed
+    - escalated `npx.cmd vitest run electron/main/__tests__/chat-task-router.test.ts src/components/dashboard/dashboard-chat-panel-guardrails.test.ts electron/main/__tests__/openclaw-chat-service.test.ts` passed (`3` files, `136` tests)
+    - `npm.cmd run build:app` passed
+
+- Update 560
+  - Completed the next Claude Code v1.5 slice for new-user readiness and on-demand onboarding, without bundling Claude Code into Mclaw.
+  - Product-direction alignment:
+    - normal chat remains completely unaffected
+    - Mclaw now checks Claude Code only after the user explicitly turns on `开发任务模式`
+    - Claude Code still stays external / user-installed, which keeps the path compatible with future macOS builds
+    - future Mclaw middleware coding backends are now represented in the UI as placeholders instead of being silently omitted
+  - `src/shared/coding-mode.ts`
+    - kept the shared readiness contract for Claude Code status / setup state / backend profile options
+    - the renderer and main process now share one Chinese-first status schema for install-required / login-required / prerequisite-required / ready
+  - `electron/main/coding/claude-code-readiness.ts`
+    - finalized the backend readiness probe for Claude Code CLI presence, Windows Git prerequisite checks, and `claude auth status --json`
+    - returns install / login guidance, verification commands, docs links, and future backend profile metadata in one snapshot
+  - `electron/main/ipc-handlers.ts`, `electron/preload/index.ts`, and `src/types/electron.d.ts`
+    - added the new `window.api.getClaudeCodeStatus()` bridge so the Dashboard renderer can query Claude Code readiness on demand
+  - `src/components/dashboard/DashboardChatPanel.tsx`
+    - added an on-demand `开发后端` selector inside `开发任务模式`
+    - keeps `Claude Code（本地安装）` as the only currently-available backend
+    - surfaces `中台 Kimi` / `中台 GLM` as explicit “即将接入” placeholders so the roadmap is visible without pretending the feature already exists
+    - added local persistence for the selected coding backend
+    - added install/login/readiness guidance cards, refresh checks, copy-command actions, and doc-opening actions
+    - tightened send guardrails so dev-mode sends now re-check Claude Code readiness right before dispatch; if install / Git / login is not ready, the send fails closed with a Chinese-first panel message instead of dropping into a raw CLI failure
+  - Added/updated focused regression coverage in:
+    - `electron/main/__tests__/claude-code-readiness.test.ts`
+    - `src/components/dashboard/dashboard-chat-panel-guardrails.test.ts`
+  - 2026-04-23 validation:
+    - `npm.cmd run typecheck` passed
+    - escalated `npx.cmd vitest run electron/main/__tests__/claude-code-readiness.test.ts src/components/dashboard/dashboard-chat-panel-guardrails.test.ts electron/main/__tests__/chat-task-router.test.ts electron/main/__tests__/openclaw-chat-service.test.ts` passed (`4` files, `141` tests)
+    - `npm.cmd run build:app` passed
+
+- Update 561
+  - Corrected the product semantics of Claude Code dev mode based on the latest requirement clarification: this area is now framed as an Mclaw-owned development-mode management panel, and the placeholders represent future coding models from the Mclaw middleware platform instead of fake “middleware backends”.
+  - Requirement correction captured in this pass:
+    - “开发模式” should read as Mclaw’s own dev-task management area
+    - future placeholders should represent upcoming coding models such as `GLM / Kimi / Qwen / DeepSeek / MiniMax`
+    - they should not be mislabeled as if Kimi / GLM themselves were alternate execution backends today
+  - `src/shared/coding-mode.ts`
+    - refactored the shared option schema from backend profiles to coding-model profiles
+    - current available option is now `Claude Code 当前模型（可用）`
+    - added explicit coming-soon placeholders for `GLM / Kimi / Qwen / DeepSeek / MiniMax`
+  - `electron/main/coding/claude-code-readiness.ts`
+    - updated readiness payloads to return `modelProfiles` instead of `backendProfiles`
+    - this keeps the main/renderer contract aligned with the corrected product model
+  - `src/components/dashboard/DashboardChatPanel.tsx`
+    - renamed the in-panel management wording from “开发后端” to `开发模型`
+    - reframed the section title to `Mclaw 开发模式`
+    - updated the guidance copy so users see this as an Mclaw-managed dev-mode console rather than a raw backend switcher
+    - tightened the unavailable-option guard so choosing a future placeholder model now clearly tells the user that the model is not yet connected to Mclaw dev mode, and asks them to switch back to the current Claude Code model
+  - `src/components/dashboard/dashboard-chat-panel-guardrails.test.ts`
+    - updated source guardrails to assert the corrected UI semantics and future model placeholder wording
+  - 2026-04-23 validation:
+    - `npm.cmd run typecheck` passed
+    - escalated `npx.cmd vitest run electron/main/__tests__/claude-code-readiness.test.ts src/components/dashboard/dashboard-chat-panel-guardrails.test.ts electron/main/__tests__/chat-task-router.test.ts electron/main/__tests__/openclaw-chat-service.test.ts` passed (`4` files, `141` tests)
+    - `npm.cmd run build:app` passed
+
+- Update 562
+  - Continued tightening the Mclaw development-mode management experience so you can do one more complete acceptance pass later instead of many fragmented checks.
+  - `electron/main/chat-task-router.ts`
+    - extracted `inspectCodingWorkspacePath(...)` so Mclaw can inspect a project path before the user sends a dev task
+    - now distinguishes `missing / not-found / not-directory / not-project / ready`
+    - reuses the same workspace verdict inside the actual chat-task router, so the UI-side check and the send-time guard stay aligned
+  - `electron/main/ipc-handlers.ts`, `electron/preload/index.ts`, and `src/types/electron.d.ts`
+    - added `window.api.inspectCodingWorkspacePath(...)` so the renderer can proactively validate the project directory while the user configures dev mode
+  - `src/shared/coding-mode.ts`
+    - added a shared `CodingWorkspaceStatusSnapshot` contract for the new workspace-readiness checks
+  - `src/components/dashboard/DashboardChatPanel.tsx`
+    - added automatic project-directory inspection while `Mclaw 开发模式` is open
+    - dev mode now shows both Claude Code readiness and project-directory readiness, instead of only checking install/login
+    - added a clearer first-run checklist card (`首次使用流程`) covering install, login, project directory, and final send readiness
+    - added `检查目录` and `打开目录` actions so the management area is more usable as a real dev-task control panel
+    - send-time guardrails now fail closed earlier if the chosen workspace is not a real project directory, instead of waiting for a later backend rejection
+  - Added/updated focused regression coverage in:
+    - `electron/main/__tests__/chat-task-router.test.ts`
+    - `src/components/dashboard/dashboard-chat-panel-guardrails.test.ts`
+  - 2026-04-23 validation:
+    - `npm.cmd run typecheck` passed
+    - escalated `npx.cmd vitest run electron/main/__tests__/claude-code-readiness.test.ts src/components/dashboard/dashboard-chat-panel-guardrails.test.ts electron/main/__tests__/chat-task-router.test.ts electron/main/__tests__/openclaw-chat-service.test.ts` passed (`4` files, `143` tests)
+    - `npm.cmd run build:app` passed
+
+- Update 563
+  - Added one more fail-closed safety slice so the current “future coding model placeholders” cannot accidentally fall through to the live Claude Code path if the renderer ever sends an unexpected request.
+  - `src/shared/coding-mode.ts`
+    - added shared helpers for coding-model profile resolution / availability checks
+    - this makes the current available-vs-placeholder contract reusable across renderer and main
+  - `src/shared/chat-panel.ts` and `src/types/electron.d.ts`
+    - extended `ChatSendRequest` with `codingModelProfileId`
+    - the selected dev-model choice now becomes part of the request contract instead of being a renderer-only detail
+  - `electron/main/chat-task-router.ts`
+    - now validates `codingModelProfileId` on the main-process side
+    - if the request asks for a coming-soon model such as `Kimi / Qwen / GLM / DeepSeek / MiniMax`, the router now rejects it with a Chinese-first “not yet connected to Mclaw dev mode” reason
+    - this prevents future placeholder options from silently executing against the wrong backend/model
+  - `electron/main/openclaw-chat-service.ts`
+    - now passes the selected coding-model profile through the routing decision path
+    - coding-mode rejection behavior is therefore aligned between renderer guardrails and backend enforcement
+  - `src/components/dashboard/DashboardChatPanel.tsx`
+    - the send request now includes the selected coding-model profile id
+    - added a stronger new-user reminder that ordinary chat does not require installing Claude Code
+  - Added/updated focused regression coverage in:
+    - `electron/main/__tests__/chat-task-router.test.ts`
+    - `electron/main/__tests__/openclaw-chat-service.test.ts`
+    - `src/components/dashboard/dashboard-chat-panel-guardrails.test.ts`
+  - 2026-04-23 validation:
+    - `npm.cmd run typecheck` passed
+    - escalated `npx.cmd vitest run electron/main/__tests__/claude-code-readiness.test.ts src/components/dashboard/dashboard-chat-panel-guardrails.test.ts electron/main/__tests__/chat-task-router.test.ts electron/main/__tests__/openclaw-chat-service.test.ts` passed (`4` files, `145` tests)
+    - `npm.cmd run build:app` passed
+    - escalated `npm.cmd run package:win:dir` passed
+  - Built and retained Windows unpacked acceptance artifact:
+    - `release/2026.4.23-v3/win-unpacked/Mclaw.exe`
+
+- Update 564
+  - Tightened the Windows packaging retention path after confirming that `scripts/run-electron-builder.mjs` still pruned old `release/` folders too aggressively for the current acceptance workflow.
+  - `scripts/run-electron-builder.mjs`
+    - added explicit retained-release parsing via `QCLAW_RELEASE_RETAIN` / `QCLAW_RELEASE_KEEP`
+    - retained entries can now be passed as comma / semicolon / newline separated version names, and `release/<version>` style inputs are normalized automatically
+    - the post-package cleanup now skips any explicitly retained directories instead of deleting everything except the newest build
+    - the script now logs both:
+      - which older release directories were intentionally kept
+      - which requested retained directories were already missing, so retention failures are no longer silent
+  - 2026-04-23 validation:
+    - `npm.cmd run typecheck` passed
+    - `npx.cmd vitest run electron/main/__tests__/claude-code-readiness.test.ts src/components/dashboard/dashboard-chat-panel-guardrails.test.ts electron/main/__tests__/chat-task-router.test.ts electron/main/__tests__/openclaw-chat-service.test.ts` passed (`4` files, `145` tests)
+    - escalated `QCLAW_RELEASE_RETAIN='2026.4.22-v4,2026.4.23-v3' npm.cmd run package:win:dir` passed and produced `release/2026.4.23-v4/win-unpacked`
+  - Current packaging result:
+    - retained previous acceptance build: `release/2026.4.23-v3/win-unpacked/Mclaw.exe`
+    - new acceptance build: `release/2026.4.23-v4/win-unpacked/Mclaw.exe`
+  - Important note:
+    - the previously requested retained baseline `release/2026.4.22-v4` was already absent before this fix landed, so this pass could only surface that gap explicitly (`已请求保留但当前未找到以下打包目录：2026.4.22-v4`) rather than restore it automatically
+
+- Update 565
+  - Closed the next acceptance round around dashboard entry warmup and Mclaw 开发模式 presentation after the new user screenshots exposed three concrete issues: the dashboard could still hard-fail on the very first gateway/auth warmup race, the dev-mode toolbar entry was not discoverable enough, and the expanded dev-mode content could overflow below the visible chat panel area.
+  - `src/pages/GatewayBootstrapGate.tsx`
+    - added a short post-start warmup retry window after `ensureGatewayRunning(...)` succeeds but the first immediate health probe still reports `running: false`
+    - dashboard entry now waits through the common “gateway just started but first model/auth handshake snapshot is still stale” race instead of immediately showing the red fatal block
+    - kept the fail-closed behavior for real persistent failures; this only softens the transient first-start mismatch window
+  - `src/pages/__tests__/dashboard-entry-flow.test.tsx`
+    - added a regression proving dashboard entry now retries through the first post-start health mismatch and only continues once the second probe turns healthy
+  - `electron/main/coding/claude-code-readiness.ts`
+    - revised the Claude Code readiness semantics so the current基础版 only requires the local CLI + platform prerequisites, not a separate in-app Claude login step
+    - readiness summaries and install notes now clearly state that later model-service auth is expected to be unified through the Mclaw 中台 instead of forcing the user to do a local Claude Code login here
+  - `src/shared/coding-mode.ts`
+    - updated the current Claude Code profile description so it no longer claims Mclaw depends on the locally logged-in Claude account model
+  - `src/components/dashboard/DashboardChatPanel.tsx`
+    - added a more discoverable top-level `开发模式` button and placed it to the left of `记忆管理`, matching the requested toolbar priority
+    - changed that shortcut to open/focus the dev-mode area quickly instead of making users hunt for the lower switch first
+    - removed the explicit “登录 Claude Code / 复制登录命令 / 登录说明” onboarding path from the visible dev-mode UI
+    - rewrote the dev-mode explanatory copy to emphasize:
+      - normal chat does not require Claude Code
+      - dev mode currently checks CLI install + prerequisites
+      - later model services will be connected through the Mclaw 中台
+    - reduced the first-run checklist from 4 steps to 3 steps
+    - wrapped the expanded dev-mode details in an internal autosized scroll area so the lower part no longer gets clipped off-screen in the chat composer area
+  - `src/components/dashboard/dashboard-chat-panel-guardrails.test.ts` and `electron/main/__tests__/claude-code-readiness.test.ts`
+    - updated focused guardrails to match the new non-login onboarding semantics and the new dev-mode panel structure
+  - 2026-04-23 validation:
+    - `npm.cmd run typecheck` passed
+    - escalated `npx.cmd vitest run src/pages/__tests__/dashboard-entry-flow.test.tsx electron/main/__tests__/claude-code-readiness.test.ts src/components/dashboard/dashboard-chat-panel-guardrails.test.ts electron/main/__tests__/chat-task-router.test.ts electron/main/__tests__/openclaw-chat-service.test.ts` passed (`5` files, `156` tests)
+    - escalated `QCLAW_RELEASE_RETAIN='2026.4.23-v4' npm.cmd run package:win:dir` passed and produced `release/2026.4.23-v5/win-unpacked`
+  - Current acceptance artifacts:
+    - retained previous build: `release/2026.4.23-v4/win-unpacked/Mclaw.exe`
+    - new build for this fix round: `release/2026.4.23-v5/win-unpacked/Mclaw.exe`
+
+- Update 566
+  - Closed the next dev-mode acceptance slice around three fresh issues from the latest screenshots and repro steps: the lower composer still duplicated the development-mode entry after the top toolbar button already existed, quoted Windows project paths such as `"C:\Users\James\Desktop\学习"` were still being misclassified as nonexistent directories, and Claude Code onboarding still leaned too heavily on manual install commands instead of an in-product one-click path.
+  - `src/shared/coding-mode.ts`
+    - added shared `normalizeCodingWorkspacePathInput(...)` so renderer and main now normalize pasted project paths consistently before inspect / send / open-path flows
+    - extended the shared Claude Code contract with:
+      - one-click-install metadata (`supportsOneClickInstall`, install-mode label, network/offline hints)
+      - install result typing for the new renderer <-> main IPC path
+  - `electron/main/chat-task-router.ts`
+    - now normalizes the incoming workspace path before filesystem inspection and routing
+    - this fixes the false “目录不存在” case when users paste a quoted Windows path from Explorer / PowerShell
+  - `electron/main/coding/claude-code-runtime.ts`
+    - added a shared runtime helper for Claude Code command resolution
+    - command env now prepends:
+      - Mclaw-managed Claude Code bin directory
+      - bundled OpenClaw runtime Node/NPM bin when available
+      - the local dev Node 24 bin fallback in source-tree validation runs
+    - also added the first offline-bundle probe hook so later packaged Claude Code artifacts can drop into a predictable `claude-code-offline` layout without changing the renderer contract again
+  - `electron/main/coding/claude-code-readiness.ts`
+    - readiness checks now see the Mclaw-managed Claude Code install location instead of only looking for a system-global `claude`
+    - upgraded the install-guide payload to Chinese-first one-click semantics:
+      - whether this build currently has an offline bundle
+      - whether online network is still required
+      - that Mclaw’s one-click install prefers an app-managed directory
+    - added a stricter `check-failed` branch for broken CLI/version probes instead of treating every non-not-found result as usable
+  - `electron/main/coding/claude-code-install.ts`
+    - added the first dedicated Claude Code one-click installer for Mclaw
+    - current behavior:
+      - installs into an app-managed prefix under Mclaw user data instead of requiring a system-global install
+      - prefers an offline bundle when a packaged Claude Code artifact exists
+      - otherwise falls back through `npm` official registry -> `npmmirror`
+      - returns a structured result with install/ready state, summary, attempts, and refreshed status snapshot
+    - this keeps ordinary chat untouched while making dev-mode onboarding much closer to a real product flow for Chinese users
+  - `electron/main/ipc-handlers.ts`, `electron/preload/index.ts`, and `src/types/electron.d.ts`
+    - added the new `window.api.installClaudeCode()` bridge
+  - `electron/main/coding/claude-code-cli-executor.ts`
+    - execution now shares the same managed command env as readiness/install, so a Claude Code CLI installed by Mclaw can be executed immediately without requiring the user to hand-edit PATH
+  - `src/components/dashboard/DashboardChatPanel.tsx`
+    - added `showCodingModePanel` so the lower `Mclaw 开发模式` card only renders when:
+      - the user explicitly opens it from the top toolbar, or
+      - dev-task mode is already active
+    - this removes the redundant always-visible lower development entry that the user called out
+    - the top toolbar `开发模式` button now opens/collapses the management panel instead of forcing the lower panel to stay permanently visible
+    - added project-path normalization on blur / inspect / send / open actions so quoted Windows paths no longer stay “脏” in the UI
+    - replaced the old manual-first Claude Code onboarding with:
+      - primary `一键安装 Claude Code` / `修复 Claude Code`
+      - secondary docs / Git for Windows links
+      - manual command copy only as an advanced fallback
+    - surfaced install-mode text (`Mclaw 内置离线安装` vs `Mclaw 一键安装（在线）`) so users can understand whether the current build still needs network
+  - Added/updated focused regression coverage in:
+    - `electron/main/__tests__/chat-task-router.test.ts`
+      - added quoted-path normalization coverage
+    - `electron/main/__tests__/claude-code-readiness.test.ts`
+      - updated readiness assertions for the one-click-install semantics
+    - `electron/main/__tests__/claude-code-install.test.ts`
+      - added coverage for npm registry fallback, prerequisite-blocked post-install state, and missing npm runtime failures
+    - `src/components/dashboard/dashboard-chat-panel-guardrails.test.ts`
+      - now guards the top-button-only panel entry, one-click install action, and workspace-path normalization wiring
+  - 2026-04-23 validation:
+    - `npm.cmd run typecheck` passed
+    - escalated `npx.cmd vitest run src/pages/__tests__/dashboard-entry-flow.test.tsx electron/main/__tests__/claude-code-readiness.test.ts electron/main/__tests__/claude-code-install.test.ts src/components/dashboard/dashboard-chat-panel-guardrails.test.ts electron/main/__tests__/chat-task-router.test.ts electron/main/__tests__/openclaw-chat-service.test.ts` passed (`6` files, `160` tests)
+    - escalated `QCLAW_RELEASE_RETAIN='2026.4.23-v4,2026.4.23-v5' npm.cmd run package:win:dir` passed and produced `release/2026.4.23-v6/win-unpacked`
+  - Current acceptance artifacts:
+    - retained previous builds:
+      - `release/2026.4.23-v4/win-unpacked/Mclaw.exe`
+      - `release/2026.4.23-v5/win-unpacked/Mclaw.exe`
+    - new build for this fix round:
+      - `release/2026.4.23-v6/win-unpacked/Mclaw.exe`
+
+- Update 567
+  - Promoted the Windows-side Claude Code development mode from “app-managed / online fallback first” to a real Mclaw-internal runtime path, so the acceptance build can now carry both Claude Code and Git for Windows inside the packaged app instead of asking end users to install them manually.
+  - `electron/main/coding/claude-code-runtime.ts`
+    - added bundled `dev-tools-bundle` probing with `windows-x64` support and path alias compatibility (`win32-x64` / `windows-x64`)
+    - Claude Code command resolution now prefers, in order:
+      - Mclaw bundled runtime
+      - Mclaw managed install
+      - system-existing CLI
+    - Git resolution now prefers bundled Git for Windows and exports the matching `bash.exe` path for Claude Code
+    - command env construction now prepends:
+      - bundled Claude Code shim dir
+      - bundled OpenClaw Node runtime bin
+      - bundled Git `cmd` / `bin` / `usr/bin`
+      - managed Claude Code bin dir
+    - offline install probing now also recognizes the bundled Claude Code package inside the internal runtime tree, so repair/init flows can reuse packaged assets instead of going online first
+  - `electron/main/coding/claude-code-readiness.ts`
+    - readiness checks now execute against the resolved bundled / managed / system command target instead of blindly assuming plain `claude.cmd`
+    - Windows install-guide copy is now Chinese-first and internal-runtime-first:
+      - `Mclaw 内置开发运行时`
+      - whether the current build still needs network
+      - whether this Windows build already carries bundled runtime assets
+    - diagnostics now expose bundled Claude / Git paths plus runtime source (`bundled-runtime` / `managed-install` / `system-path`)
+    - ready/install/prerequisite summaries were rewritten around the new product semantics: “初始化开发环境 / 修复开发环境”, not “please install Git/Claude yourself”
+  - `electron/main/coding/claude-code-install.ts`
+    - install action now short-circuits successfully when the bundled runtime is already healthy
+    - if a packaged bundled runtime exists but Git is still missing, returns an explicit “reinstall the current Windows package” style failure instead of pretending online install can repair that state
+    - offline bundle attempts now label the true source (`内置开发运行时` / `内置离线包`) and only fall back to online npm when packaged assets are unavailable or insufficient
+  - `electron/main/coding/claude-code-cli-executor.ts`
+    - executor now shares the resolved runtime command target and avoids unnecessary shell wrapping except for actual script shims
+    - this keeps the execution path aligned with readiness/install and reduces “PATH looks fine but Claude Code still cannot run” drift
+  - `src/shared/coding-mode.ts`
+    - extended the shared contract with:
+      - `bundledRuntimeAvailable`
+      - richer install strategy typing (`bundled-runtime` / `bundled-offline` / `managed-npm`)
+  - `src/components/dashboard/DashboardChatPanel.tsx`
+    - rewired the lower `Mclaw 开发模式` card to present the new Windows experience as:
+      - 内置运行时
+      - 初始化开发环境 / 修复开发环境
+      - 运行时来源说明
+    - reduced manual-install emphasis:
+      - no standalone Git for Windows button in the normal Windows bundled path
+      - manual command copy only remains as a fallback when the current build is not the bundled-runtime path
+    - updated checklist wording from “安装 Claude Code” to “准备开发运行时”, which matches the packaged Windows product direction better for new users
+  - Added Windows dev-tools bundling / verification tooling:
+    - `scripts/stage-windows-dev-tools-bundle.mjs`
+      - stages local `Git for Windows` + `Claude Code` into `resources/dev-tools-bundle/windows-x64`
+      - generates `resources/dev-tools-bundle/windows-x64/manifest.json`
+    - `scripts/check-windows-dev-tools-bundle.mjs`
+      - verifies the staged repo bundle and executes bundled `git --version` / `claude --version`
+    - `scripts/check-win-packaged-dev-tools-bundle.mjs`
+      - verifies the packaged `win-unpacked` output really contains runnable bundled Git / Claude assets
+    - `scripts/run-electron-builder.mjs`
+      - now runs the packaged dev-tools verifier after Windows packaging completes
+    - `electron-builder.json` and `package.json`
+      - now include `resources/dev-tools-bundle`
+      - Windows package scripts now preflight-check the internal dev-tools bundle before building
+  - Staged the actual local Windows acceptance assets into:
+    - `resources/dev-tools-bundle/windows-x64/git`
+    - `resources/dev-tools-bundle/windows-x64/claude-code`
+    - `resources/dev-tools-bundle/windows-x64/manifest.json`
+  - Added/updated focused regression coverage in:
+    - `electron/main/__tests__/claude-code-runtime.test.ts`
+      - verifies bundled runtime detection, env injection, and offline bundle reuse
+    - `electron/main/__tests__/claude-code-readiness.test.ts`
+      - verifies the bundled-runtime ready path and the new internal-runtime wording
+    - `electron/main/__tests__/claude-code-install.test.ts`
+      - verifies bundled-runtime short-circuit / no-op semantics in addition to the prior npm fallback paths
+    - `src/components/dashboard/dashboard-chat-panel-guardrails.test.ts`
+      - now guards the new internal-runtime onboarding wording
+  - 2026-04-24 validation:
+    - `npm.cmd run typecheck` passed
+    - escalated `npx.cmd vitest run electron/main/__tests__/claude-code-runtime.test.ts electron/main/__tests__/claude-code-readiness.test.ts electron/main/__tests__/claude-code-install.test.ts src/components/dashboard/dashboard-chat-panel-guardrails.test.ts electron/main/__tests__/chat-task-router.test.ts` passed (`5` files, `25` tests)
+    - escalated `node scripts/check-windows-dev-tools-bundle.mjs` passed and reported:
+      - Git `2.44.0.windows.1`
+      - Claude Code `2.1.109`
+    - escalated `QCLAW_RELEASE_RETAIN='2026.4.23-v4,2026.4.23-v5,2026.4.23-v6' npm.cmd run package:win:dir` passed and produced `release/2026.4.24-v0/win-unpacked`
+  - Current acceptance artifacts:
+    - retained previous builds:
+      - `release/2026.4.23-v4/win-unpacked/Mclaw.exe`
+      - `release/2026.4.23-v5/win-unpacked/Mclaw.exe`
+      - `release/2026.4.23-v6/win-unpacked/Mclaw.exe`
+    - new bundled-runtime acceptance build:
+      - `release/2026.4.24-v0/win-unpacked/Mclaw.exe`
+  - Remaining release risk to track explicitly:
+    - the Windows technical bundling path is now validated locally, but public redistribution of the bundled Claude Code payload still needs product/legal confirmation before treating this exact payload layout as the final external-release form
+
+- Update 568
+  - Closed the next acceptance round for the four issues found on `2026.4.24-v0`, focusing on first-launch smoothing, development-mode UX, greenfield workspace support, and Claude Code `2.1.109` CLI compatibility.
+  - `src/pages/GatewayBootstrapGate.tsx`
+    - kept the existing short warmup probe, then added a second-stage auth/handshake warmup window for post-start states that are likely still settling (`auth_missing`, token / handshake alignment, runtime-reconcile pending states)
+    - this avoids failing the “正在进入控制面板” bootstrap screen too early when Gateway/OpenClaw has just been launched and the first auth snapshot is still catching up
+    - tightened the warmup heuristic so real hard failures still fail closed instead of hanging on generic `Gateway not ready` states
+  - `src/components/dashboard/DashboardChatPanel.tsx`
+    - changed the top `开发模式` entry from “inline expand/collapse in the composer area” to a dedicated modal panel, matching the memory-manager pattern the user asked for
+    - the composer footer now keeps only a compact `开发模式` switch card; the heavy setup UI no longer lives directly under the input box
+    - added a first-entry reminder notification: `已进入开发模式` + guidance to use the top `开发模式` button for detailed configuration
+    - updated development-mode copy so the workspace field explicitly supports both:
+      - existing project directories
+      - empty folders used to start a new project from scratch
+  - `electron/main/chat-task-router.ts`
+    - relaxed workspace inspection so an existing plain folder is now treated as a valid `new-project` workspace instead of being rejected as `not-project`
+    - coding-mode routing now allows Claude Code execution for those greenfield folders while still rejecting missing / invalid paths
+  - `src/shared/coding-mode.ts`
+    - added shared `new-project` workspace setup state for renderer / main-process coordination
+  - `electron/main/coding/claude-code-cli-executor.ts`
+    - updated Claude Code CLI invocation for bundled Claude Code `2.1.109`
+    - `stream-json` execution now includes `--verbose`
+    - prompts are now passed after `--` so they are treated as prompt text instead of being misread as options
+    - tightened stream-event parsing so verbose non-assistant events are ignored instead of polluting the reply stream
+  - Added/updated focused regression coverage in:
+    - `src/pages/__tests__/dashboard-entry-flow.test.tsx`
+      - added coverage for the extended bootstrap auth warmup path
+    - `electron/main/__tests__/chat-task-router.test.ts`
+      - now covers greenfield / empty-directory workspaces
+    - `electron/main/__tests__/claude-code-cli-executor.test.ts`
+      - guards the Claude Code `2.1.x` arg layout and verbose stream parsing behavior
+    - `src/components/dashboard/dashboard-chat-panel-guardrails.test.ts`
+      - now guards the modal-based dev panel, first-entry hint wiring, and compact composer switch design
+  - 2026-04-24 validation:
+    - `D:\nodejs\npm.cmd run typecheck` passed
+    - `D:\nodejs\npx.cmd vitest run electron/main/__tests__/chat-task-router.test.ts electron/main/__tests__/claude-code-cli-executor.test.ts src/components/dashboard/dashboard-chat-panel-guardrails.test.ts src/pages/__tests__/dashboard-entry-flow.test.tsx` passed (`4` files, `33` tests)
+    - `D:\nodejs\npx.cmd vitest run electron/main/__tests__/openclaw-chat-service.test.ts -t coding-executor` passed (`2` coding-mode tests selected)
+    - `D:\nodejs\npm.cmd run package:win:dir` passed with `QCLAW_RELEASE_RETAIN=2026.4.24-v0`
+  - Current acceptance artifacts:
+    - retained previous build:
+      - `release/2026.4.24-v0/win-unpacked/Mclaw.exe`
+    - new acceptance build for this fix round:
+      - `release/2026.4.24-v1/win-unpacked/Mclaw.exe`
+
+- Update 569
+  - Closed the next acceptance slice for `2026.4.24-v1`, focusing on the four newest issues from the latest packaged验收：首进控制面板时仍会被一次短暂的 Gateway/OpenClaw 自恢复误判打断、开发模式开关还不够轻量、Claude Code 没有优先吸收 Mclaw 当前已选的 Claude 模型、以及回复底部还会冒出由远程 URL 误识别出来的无效“打开文件”按钮。
+  - `src/pages/GatewayBootstrapGate.tsx`
+    - added a third-stage bootstrap recovery window after the existing short warmup + auth-alignment warmup:
+      - if post-start health still looks like auth/token/handshake settling, the bootstrap flow now automatically re-runs `ensureGatewayRunning(...)` once with a dedicated `dashboard-entry-bootstrap-auto-recover` request id
+      - after that auto-recover kick, it keeps polling a longer recovery window before deciding that dashboard entry is a real hard failure
+    - added one UI-side automatic retry for warmup-like bootstrap failures, so the first launch no longer drops users straight onto the red fatal block just because the first OpenClaw terminal died and the second one was still relaunching
+    - together these changes are meant to absorb the exact “first terminal flashes -> page reports auth not ready -> manual retry succeeds” chain that hurt first-use体验
+  - `src/components/dashboard/DashboardChatPanel.tsx`
+    - removed the large composer-bottom dev-mode card
+    - replaced it with a compact send-adjacent `开发模式` quick toggle icon button plus tooltip, matching the requested lighter chat-composer feel
+    - kept the top toolbar `开发模式` entry as the main management入口
+    - updated the dev-mode panel copy so it now clearly states the current model behavior:
+      - if the Mclaw-selected model is a Claude-family model, Mclaw will try to pass it through to Claude Code first
+      - if it is not Claude-compatible yet, Claude Code falls back to its current model until the later 中台开发模型接入 is done
+  - `src/shared/chat-visible-text.ts`
+    - hardened Windows-path extraction so `https://.../predictions` and similar URLs are no longer mistaken for fake local drive paths like `s:\\...`
+    - this removes the meaningless reply-bottom “打开 predictions” / malformed pseudo-file buttons while preserving real Windows file links
+  - `electron/main/coding/coding-executor-types.ts`, `electron/main/coding/claude-code-cli-executor.ts`, and `electron/main/openclaw-chat-service.ts`
+    - extended the Claude Code executor contract with optional `model`
+    - CLI arg building now emits `--model <name>` when the requested Mclaw model can be safely mapped to a Claude Code model id
+    - coding-mode send flow now resolves a preferred model in this order:
+      - current local-session selected model
+      - matched session selected/confirmed model
+      - saved Mclaw default model
+    - when that preferred model looks like a Claude-family runtime key (for example `anthropic/claude-sonnet-4-6`), it is normalized and passed into Claude Code
+    - when the preferred model is something non-Claude (for example `openai/gpt-5.4-pro`), Mclaw now records an explicit fallback trace and keeps Claude Code on its current model instead of pretending it switched
+  - Updated focused regression coverage in:
+    - `src/components/dashboard/chat-panel-messages.test.ts`
+      - added guards that `https://...` and similar remote URLs never become local file buttons
+    - `src/components/dashboard/dashboard-chat-panel-guardrails.test.ts`
+      - now guards the send-adjacent dev-mode quick toggle + tooltip layout and the updated dev-mode onboarding copy
+    - `src/pages/__tests__/dashboard-entry-flow.test.tsx`
+      - added coverage for the new auto-recover `ensureGatewayRunning(...)` pass during dashboard bootstrap
+    - `electron/main/__tests__/claude-code-cli-executor.test.ts`
+      - now covers `--model` emission alongside the Claude Code `2.1.x` stream-json arg layout
+    - `electron/main/__tests__/openclaw-chat-service.test.ts`
+      - added coding-mode coverage for:
+        - passing a Claude-family Mclaw default model through to Claude Code
+        - falling back cleanly when the Mclaw-selected model is not Claude-compatible
+  - 2026-04-24 validation:
+    - `D:\nodejs\npm.cmd run typecheck` passed
+    - escalated `D:\nodejs\npx.cmd vitest run src/components/dashboard/chat-panel-messages.test.ts src/components/dashboard/dashboard-chat-panel-guardrails.test.ts src/pages/__tests__/dashboard-entry-flow.test.tsx electron/main/__tests__/claude-code-cli-executor.test.ts electron/main/__tests__/openclaw-chat-service.test.ts` passed (`5` files, `169` tests)
+    - escalated `$env:QCLAW_RELEASE_RETAIN='2026.4.24-v0,2026.4.24-v1'; D:\nodejs\npm.cmd run package:win:dir` passed and produced `release/2026.4.24-v2/win-unpacked`
+  - Current acceptance artifacts:
+    - retained previous build:
+      - `release/2026.4.24-v1/win-unpacked/Mclaw.exe`
+    - new acceptance build for this fix round:
+      - `release/2026.4.24-v2/win-unpacked/Mclaw.exe`
+
+## 2026-04-28 - Windows internal-test first-launch stabilization
+
+- Started P0 stabilization for the latest internal-test feedback:
+  - reduce Windows install payload by trimming non-Windows OpenClaw runtimes from Windows artifacts
+  - stop first-launch global plugin repair from competing with Gateway bootstrap
+  - hide OpenClaw runtime convergence/degraded toast during setup and bootstrap
+  - make dashboard entry prefer degraded entry with actionable warnings instead of blocking on transient auth/handshake states
+  - reduce visible `openclaw` / `openclaw-gateway` terminal windows by avoiding `.cmd` shell paths where possible
+- Initial code inspection confirmed:
+  - `src/App.tsx` still runs `runPluginRepair('startup')` on app mount
+  - `src/App.tsx` still shows the OpenClaw compatibility notice in `setup`, `gateway-bootstrap`, and `dashboard`
+  - `src/pages/GatewayBootstrapGate.tsx` still treats some post-start health failures as fatal even when bootstrap can continue with warnings
+  - `electron/main/cli.ts` still has `.cmd` / `shell:true` paths that can surface Windows terminals on some machines
+  - `electron-builder.json` still copies the whole `resources/openclaw-bundle` into the packaged app
+- Progress:
+  - removed the app-mount `runPluginRepair('startup')` call from `src/App.tsx`; plugin repair remains available through explicit repair flows instead of competing with first launch
+  - stopped the OpenClaw compatibility/convergence notice from being displayed as a global notification during setup/bootstrap/dashboard
+  - changed `src/pages/GatewayBootstrapGate.tsx` so a post-ensure auth/handshake warmup failure can enter the dashboard with a soft warning instead of hard-blocking first launch
+  - changed Windows command spawning in `electron/main/cli.ts` so shell-required commands and `.cmd` shims are launched through a hidden `cmd /d /s /c ...` wrapper instead of Electron spawning them with `shell:true`
+  - updated `electron/main/__tests__/cli-windows-spawn.test.ts` to guard the hidden Windows shell wrapper path
+  - changed `electron-builder.json` so Windows packaging no longer copies the entire `resources/openclaw-bundle`; it now includes only the Windows runtime, manifest/readme/tgz fallback, managed plugins, Windows dev tools, and the npm/npx runtime additions
+  - kept mac packaging on the full `resources/openclaw-bundle` path so this Windows size fix does not remove mac runtime payloads from mac artifacts
+  - added a packaged-artifact guard in `scripts/check-win-packaged-openclaw-bundle.mjs` that fails Windows verification if `darwin-x64`, `darwin-arm64`, or Linux runtime directories are present
+  - added regression coverage:
+    - `src/pages/__tests__/dashboard-entry-flow.test.tsx` now covers entering the dashboard with a soft warning when auth/handshake alignment remains unstable after post-start warmup
+    - `scripts/electron-builder-config.test.ts` now guards against top-level whole-bundle Windows packaging and verifies Windows artifacts point at `runtime/windows-x64`
+- Validation so far:
+  - `D:\nodejs\npm.cmd run typecheck` passed
+  - elevated `D:\nodejs\npx.cmd vitest run electron/main/__tests__/cli-windows-spawn.test.ts src/pages/__tests__/dashboard-entry-flow.test.tsx src/pages/__tests__/env-check-state.test.ts scripts/electron-builder-config.test.ts` passed (`4` files, `49` tests)
+  - normal-permission `D:\nodejs\npm.cmd run build:app` hit the same esbuild `spawn EPERM` sandbox issue seen in Vitest startup
+  - elevated `D:\nodejs\npm.cmd run build:app` passed; Vite reported existing chunk-size/dynamic-import warnings only
+  - elevated `$env:QCLAW_RELEASE_RETAIN='2026.4.24-v2'; D:\nodejs\npm.cmd run package:win:dir` passed and produced `release/2026.4.28-v0/win-unpacked`
+  - packaged OpenClaw verification passed for `release/2026.4.28-v0/win-unpacked`; packaged runtime contains only `runtime/windows-x64`
+  - packaged key resource sizes:
+    - `resources/openclaw-bundle`: `714.16 MB`
+    - `resources/openclaw-bundle/runtime/windows-x64`: `628.32 MB`
+    - `resources/dev-tools-bundle`: `460.25 MB`
+    - `resources/app.asar`: `124.31 MB`
+
+### Follow-up hardening
+
+- Removed the remaining startup plugin repair hook from `src/pages/EnvCheck.tsx`.
+  - `EnvCheck` no longer accepts `onEnsurePluginRepairReady`
+  - the old `kickoffStartupPluginRepair(...)` helper was removed
+  - the previous unit test that guarded non-blocking startup repair was removed because startup repair is no longer part of first launch
+  - added a replacement guard in `src/pages/__tests__/env-check-state.test.ts` to verify EnvCheck no longer exposes `kickoffStartupPluginRepair`
+- Current intended plugin repair behavior:
+  - explicit manual repair remains available
+  - scoped repair can still run from channel/plugin failure paths
+  - first launch and environment check no longer start a global plugin repair job
+
+### Final validation and Windows installer artifact
+
+- Final validation after the EnvCheck hardening:
+  - `D:\nodejs\npm.cmd run typecheck` passed
+  - elevated `D:\nodejs\npx.cmd vitest run electron/main/__tests__/cli-windows-spawn.test.ts src/pages/__tests__/dashboard-entry-flow.test.tsx src/pages/__tests__/env-check-state.test.ts scripts/electron-builder-config.test.ts` passed (`4` files, `49` tests)
+  - elevated `$env:QCLAW_RELEASE_RETAIN='2026.4.28-v0'; D:\nodejs\npm.cmd run package:win` passed
+- Final Windows artifacts:
+  - installer: `release/2026.4.28-v1/Mclaw_2026.4.28-v1.exe` (`429.67 MB`)
+  - unpacked app: `release/2026.4.28-v1/win-unpacked/Mclaw.exe`
+  - blockmap: `release/2026.4.28-v1/Mclaw_2026.4.28-v1.exe.blockmap`
+- Final packaged verification:
+  - `release/2026.4.28-v1/win-unpacked/resources/openclaw-bundle/runtime` contains only `windows-x64`
+  - packaged OpenClaw runtime verification passed
+  - packaged Feishu managed plugin load verification passed
+  - packaged dev-tools bundle verification passed
+- Final packaged key resource sizes:
+  - `resources/openclaw-bundle`: `714.16 MB`
+  - `resources/openclaw-bundle/runtime/windows-x64`: `628.32 MB`
+  - `resources/dev-tools-bundle`: `460.25 MB`
+  - `resources/app.asar`: `124.31 MB`
+
+### Additional dev-mode Windows spawn hardening
+
+- Found that Claude Code development mode has its own spawn paths outside `electron/main/cli.ts`.
+  - `electron/main/coding/claude-code-cli-executor.ts`
+  - `electron/main/coding/claude-code-readiness.ts`
+- Added `resolveClaudeCodeSpawnCommand(...)` in `electron/main/coding/claude-code-runtime.ts`.
+  - On Windows, `.cmd` / `.bat` / `.ps1` commands are now executed via hidden `cmd /d /s /c ...`
+  - This avoids direct `shell:true` usage for Claude Code readiness probes and development-task execution
+  - Non-Windows behavior remains unchanged
+- Updated:
+  - `electron/main/coding/claude-code-cli-executor.ts`
+  - `electron/main/coding/claude-code-readiness.ts`
+  - `electron/main/__tests__/claude-code-runtime.test.ts`
+
+### Additional Windows package size reduction
+
+- Removed `resources/openclaw-bundle/openclaw-2026.3.24.tgz` from Windows packaging.
+  - Windows artifacts already use the fully staged `bundled-runtime` path and are validated after packaging
+  - The tgz fallback remains in the source bundle and mac full-bundle packaging path
+  - This removes about `44.21 MB` of uncompressed Windows resource payload without changing the runtime path used by first launch
+- Updated `scripts/electron-builder-config.test.ts` so Windows packaging cannot re-add the tgz fallback accidentally.
+
+### Final validation after dev-mode spawn and package-size hardening
+
+- Fixed test isolation after the Claude Code spawn change:
+  - `electron/main/__tests__/claude-code-readiness.test.ts` now uses isolated temp roots so it does not accidentally discover the repo's real bundled dev runtime
+  - `electron/main/__tests__/claude-code-runtime.test.ts` now covers hidden Windows `.cmd` wrapping with a complete test env
+- Final validation:
+  - `D:\nodejs\npm.cmd run typecheck` passed
+  - elevated `D:\nodejs\npx.cmd vitest run electron/main/__tests__/cli-windows-spawn.test.ts electron/main/__tests__/claude-code-runtime.test.ts electron/main/__tests__/claude-code-readiness.test.ts electron/main/__tests__/claude-code-cli-executor.test.ts src/pages/__tests__/dashboard-entry-flow.test.tsx src/pages/__tests__/env-check-state.test.ts scripts/electron-builder-config.test.ts` passed (`7` files, `60` tests)
+  - elevated `$env:QCLAW_RELEASE_RETAIN='2026.4.28-v1'; D:\nodejs\npm.cmd run package:win` passed
+- Final Windows artifacts:
+  - installer: `release/2026.4.28-v2/Mclaw_2026.4.28-v2.exe` (`385.76 MB`)
+  - unpacked app: `release/2026.4.28-v2/win-unpacked/Mclaw.exe`
+  - blockmap: `release/2026.4.28-v2/Mclaw_2026.4.28-v2.exe.blockmap`
+- Final packaged verification:
+  - `release/2026.4.28-v2/win-unpacked/resources/openclaw-bundle/runtime` contains only `windows-x64`
+  - `release/2026.4.28-v2/win-unpacked/resources/openclaw-bundle/openclaw-2026.3.24.tgz` is absent as intended
+  - packaged OpenClaw runtime verification passed
+  - packaged Feishu managed plugin load verification passed
+  - packaged dev-tools bundle verification passed
+- Final packaged key resource sizes:
+  - `resources/openclaw-bundle`: `669.95 MB`
+  - `resources/openclaw-bundle/runtime`: `628.32 MB`
+  - `resources/openclaw-bundle/managed-plugins`: `41.62 MB`
+
+### Control-panel first-launch terminology hardening
+
+- Started an additional UX hardening pass for first launch and control-panel entry copy.
+  - Replaced user-visible `Gateway` wording in the dashboard entry bootstrap tasks with `本机服务`.
+  - Replaced dashboard-entry warmup, recovery, soft-warning, and fallback messages so users see `本机服务 / 模型认证 / 模型连接` instead of internal Gateway/handshake/health-probe terms.
+  - Updated environment-check deferred gateway copy to describe automatic local-service preparation after model configuration.
+  - Updated bootstrap failure guidance to avoid exposing `OpenClaw Control UI` and raw `Gateway` wording in user-facing diagnostics.
+  - Updated focused tests to match the revised user-facing copy.
+- Validation is intentionally deferred until this copy-hardening batch is complete, per the current request to test everything together after implementation.
+
+### Validation after terminology hardening
+
+- Fixed one focused test failure from the first validation pass by sanitizing structured connection-reason text before showing it to users.
+  - `describeGatewayRuntimeReasonDetail(...)` can still return internal `Gateway` wording, so `resolveGatewayBootstrapFailureView(...)` now rewrites that detail to public `本机服务` terminology before rendering.
+- Final validation for this batch:
+  - `D:\nodejs\npm.cmd run typecheck` passed.
+  - elevated `D:\nodejs\npx.cmd vitest run src/pages/__tests__/dashboard-entry-flow.test.tsx src/pages/__tests__/env-check-state.test.ts src/shared/__tests__/gateway-bootstrap-diagnostics.test.ts` passed (`3` files, `54` tests).
+  - elevated `$env:QCLAW_RELEASE_RETAIN='2026.4.28-v2'; D:\nodejs\npm.cmd run package:win` passed.
+- New Windows artifacts:
+  - installer: `release/2026.4.28-v3/Mclaw_2026.4.28-v3.exe` (`385.76 MB`).
+  - unpacked app: `release/2026.4.28-v3/win-unpacked/Mclaw.exe`.
+  - blockmap: `release/2026.4.28-v3/Mclaw_2026.4.28-v3.exe.blockmap`.
+- Packaged verification from `package:win`:
+  - bundled OpenClaw runtime verification passed.
+  - packaged Feishu managed plugin load verification passed.
+  - packaged dev-tools bundle verification passed.
+  - packaged runtime directory contains only `windows-x64`.
+
+### Env-check public terminology hardening
+
+- Started the next UX hardening batch after the v3 package.
+  - Replaced user-visible environment-check copy that exposed `OpenClaw` with `本机运行组件` wording.
+  - Updated version-correction, source-badge, delivery-notice, takeover-backup, recovery, upgrade, and install-progress messages in `src/pages/EnvCheck.tsx`.
+  - Updated the About dialog footer from `Based on OpenClaw` to `内置 Mclaw 本机运行组件`.
+  - Updated `package.json` description so packaged metadata no longer describes the app as an OpenClaw setup wizard.
+  - Mirrored the changed public copy in `src/pages/__tests__/env-check-state.test.ts`.
+- Validation is still deferred until this batch is complete, per the current request to test everything together after implementation.
+
+### Protected cleanup and chat terminology hardening
+
+- Added a protection pass for internal-test users so they cannot accidentally remove Mclaw's local runtime/data from the UI.
+  - Disabled the destructive cleanup entry in `src/pages/SettingsPage.tsx` and replaced it with a protected internal-test notice.
+  - Disabled the floating `SettingsMenu` cleanup actions and removed the cleanup dialogs from that menu path.
+  - Updated related tooltips to explain that local runtime cleanup is closed during internal testing and should be handled by MetaCode studio.
+- Continued public terminology cleanup in dashboard chat history/status copy.
+  - Replaced direct-chat history badges and notices that exposed `OpenClaw` with `直连/直连历史` wording.
+  - Replaced `Qclaw 本地会话` dashboard labels with `Mclaw 本地会话`.
+  - Replaced user-facing dashboard chat errors that exposed `网关/OpenClaw/provider/transcript` with `本机服务/本机运行组件/服务商/本地记录` wording.
+- Validation remains deferred until the implementation batch is complete.
+
+### First-run and daily-use copy hardening
+
+- Continued reducing user-visible internal terms outside the environment-check gate.
+  - Updated `ChannelConnect`, `ChatPage`, `PairingCode`, `Welcome`, and CLI feedback copy from `Gateway/OpenClaw/Qclaw/provider/transcript` toward `本机服务/Mclaw/服务商/本地记录`.
+  - Updated `ModelCenter` authentication/status copy so users see `本机运行组件` rather than raw OpenClaw implementation terms.
+  - Updated dashboard availability and model-switch helper copy to avoid `网关/OpenClaw session` terms.
+  - Updated affected test expectations for channel connection, chat availability, model center, dashboard routing, and CLI feedback.
+- Validation remains deferred until the implementation batch is complete.
+
+### Final validation and v4 Windows package
+
+- Completed the deferred all-at-once validation after the first-run, daily-use, terminology, and protected-cleanup hardening batch.
+- Final validation:
+  - `D:\nodejs\npm.cmd run typecheck` passed.
+  - elevated `D:\nodejs\npx.cmd vitest run src/pages/__tests__/env-check-state.test.ts src/components/__tests__/about-modal.test.tsx src/shared/__tests__/dashboard-chat-routing.test.ts src/components/dashboard/chat-panel-availability.test.ts src/components/dashboard/chat-session-model-switching.test.ts src/lib/__tests__/user-facing-cli-feedback.test.ts src/pages/__tests__/channel-connect.test.ts src/pages/__tests__/channels-page-state.test.ts src/pages/__tests__/chat-availability-state.test.ts src/pages/__tests__/model-center.test.tsx` passed (`10` files, `269` tests).
+  - elevated `$env:QCLAW_RELEASE_RETAIN='2026.4.28-v3'; D:\nodejs\npm.cmd run package:win` passed.
+- New Windows artifacts:
+  - installer: `release/2026.4.28-v4/Mclaw_2026.4.28-v4.exe` (`385.75 MB`).
+  - unpacked app: `release/2026.4.28-v4/win-unpacked/Mclaw.exe`.
+  - blockmap: `release/2026.4.28-v4/Mclaw_2026.4.28-v4.exe.blockmap`.
+- Packaged verification:
+  - Windows release preflight passed.
+  - packaged OpenClaw runtime verification passed.
+  - packaged Feishu managed plugin load verification passed.
+  - packaged dev-tools bundle verification passed.
+  - packaged runtime directory contains only `windows-x64`.
+- Known package warnings retained for internal testing:
+  - unsigned/development Windows build warning.
+  - placeholder update URL warning.
+  - Vite chunk and dynamic-import size warnings.
+
+### Final internal-test closure pass
+
+- Started a final closure pass for the internal-test build after v4.
+- Scope:
+  - audit remaining user-facing internal terms before producing the final package.
+  - keep protected cleanup behavior intact so test users cannot remove Mclaw runtime/data from the UI.
+  - run validation and produce only one final complete Windows build after fixes are complete.
+- Validation is deferred until this closure pass is complete.
+
+### Final internal-test public-surface hardening
+
+- Continued the closure pass by auditing remaining quoted user-facing strings that still exposed internal implementation names.
+- Updated additional surfaces:
+  - version and compatibility notices now describe `本机运行组件` instead of raw OpenClaw labels.
+  - pairing success guidance now tells users to use Mclaw settings instead of editing local config files.
+  - model/channel reload errors now use `本机服务` wording.
+  - Skills, backup center, pairing fallback, and runtime diagnostics copy now use Mclaw-facing terminology.
+- Continuing with the development-mode and update/cleanup dialogs before final validation.
+
+### Final internal-test development-mode and maintenance copy hardening
+
+- Completed the remaining public-surface cleanup for development mode and maintenance/update dialogs.
+  - Development-mode UI now says `Mclaw 开发执行环境 / 开发执行链路` instead of exposing Claude Code directly in primary user guidance.
+  - Update center and cleanup dialogs now use `Mclaw` / `本机运行组件` wording.
+  - Dashboard plugin reload logs and model-center unsupported-auth copy now use public terminology.
+- Validation progress:
+  - `D:\nodejs\npm.cmd run typecheck` passed.
+  - First focused Vitest pass required elevated execution because sandboxed esbuild spawning failed with `spawn EPERM`; elevated run passed (`12` files, `292` tests).
+  - Second focused Vitest pass initially caught outdated test expectations after terminology changes; expectations were updated and the elevated rerun passed (`9` files, `78` tests).
+- Final packaging is still pending until the final typecheck/package run completes.
+
+### Final validation and v5 Windows package
+
+- Completed the final internal-test closure pass and produced the new complete Windows package.
+- Final validation:
+  - `D:\nodejs\npm.cmd run typecheck` passed after all copy and safety changes.
+  - elevated focused Vitest pass 1 passed (`12` files, `292` tests).
+  - elevated focused Vitest pass 2 passed (`9` files, `78` tests).
+  - elevated `$env:QCLAW_RELEASE_RETAIN='2026.4.28-v4'; D:\nodejs\npm.cmd run package:win` passed.
+- New final Windows artifacts:
+  - installer: `release/2026.4.28-v5/Mclaw_2026.4.28-v5.exe` (`385.75 MB`).
+  - unpacked app: `release/2026.4.28-v5/win-unpacked/Mclaw.exe`.
+  - blockmap: `release/2026.4.28-v5/Mclaw_2026.4.28-v5.exe.blockmap`.
+- Packaged verification from the build:
+  - Windows release preflight passed.
+  - dev-tools bundle check passed.
+  - packaged OpenClaw runtime verification passed.
+  - packaged Feishu managed plugin verification passed.
+  - packaged dev-tools bundle verification passed.
+  - packaged runtime directory contains only `windows-x64`.
+- Retained release directories after packaging:
+  - `release/2026.4.28-v5` as the final internal-test build.
+  - `release/2026.4.28-v4` retained for comparison/rollback.
+- Known internal-test warnings remain expected:
+  - unsigned development build warning.
+  - placeholder update URL warning.
+  - Vite chunk and dynamic-import warnings.
+
+### Windows visible gateway terminal regression
+
+- Started a focused fix for the remaining user-visible `openclaw-gateway` terminal window reported during internal testing.
+- Scope:
+  - audit Windows gateway/local-service launch paths that can still allocate a visible console.
+  - force packaged/runtime gateway processes to run hidden in the background.
+  - add regression coverage before producing the next Windows internal-test package.
+- Implemented Windows gateway visibility fix:
+  - Windows `gatewayStart`, `gatewayRestart`, `gatewayForceRestart`, and `gatewayStop` now route through Mclaw-managed hidden runtime handling instead of OpenClaw's scheduled-task/startup launcher path.
+  - Existing visible OpenClaw Windows gateway launchers are stopped/uninstalled before Mclaw starts `gateway run` as a detached hidden child process.
+  - Added/updated regression coverage for hidden Windows spawn wiring and gateway lifecycle routing.
+- Validation so far:
+  - `D:\nodejs\npm.cmd run typecheck` passed.
+  - elevated focused Vitest run passed (`4` files, `39` tests): `cli-windows-spawn`, `cli-gateway-background`, `openclaw-gateway-service`, `gateway-lifecycle-controller`.
+- Packaging next v6 internal-test build now.
+### Windows hidden gateway v6 package
+
+- Completed packaging for the gateway terminal visibility regression.
+- Final validation:
+  - `D:\nodejs\npm.cmd run typecheck` passed.
+  - elevated focused Vitest run passed (`4` files, `39` tests).
+  - elevated `$env:QCLAW_RELEASE_RETAIN='2026.4.28-v5'; D:\nodejs\npm.cmd run package:win` passed.
+- New Windows artifacts:
+  - installer: `release/2026.4.28-v6/Mclaw_2026.4.28-v6.exe` (`385.75 MB`).
+  - unpacked app: `release/2026.4.28-v6/win-unpacked/Mclaw.exe`.
+  - blockmap: `release/2026.4.28-v6/Mclaw_2026.4.28-v6.exe.blockmap`.
+- Packaged verification from the build:
+  - Windows release preflight passed.
+  - dev-tools bundle check passed.
+  - packaged OpenClaw runtime verification passed.
+  - packaged Feishu managed plugin verification passed.
+  - packaged dev-tools bundle verification passed.
+- Retained release directories after packaging:
+  - `release/2026.4.28-v6` as the current internal-test build.
+  - `release/2026.4.28-v5` retained for comparison/rollback.
+- Expected internal-test warnings remain:
+  - unsigned development Windows build warning.
+  - placeholder update URL warning.
+  - Vite chunk and dynamic-import warnings.
+### Windows hidden gateway v7 final package
+
+- Strengthened the terminal-popup fix after v6 by adding a top-level Windows guard in `runCli(...)`:
+  - any internal `gateway start` / `gateway restart` call now routes to the Mclaw hidden gateway runtime.
+  - this covers indirect paths such as config/env/model apply flows that previously could call OpenClaw's Windows scheduled-task launcher directly.
+  - `gateway stop` / `gateway uninstall` remain available only for cleanup of stale visible launchers.
+- Final validation after the strengthened guard:
+  - `D:\nodejs\npm.cmd run typecheck` passed.
+  - elevated focused Vitest run passed (`4` files, `39` tests): `cli-windows-spawn`, `cli-gateway-background`, `openclaw-gateway-service`, `gateway-lifecycle-controller`.
+  - elevated `$env:QCLAW_RELEASE_RETAIN='2026.4.28-v6'; D:\nodejs\npm.cmd run package:win` passed.
+- Final Windows artifacts:
+  - installer: `release/2026.4.28-v7/Mclaw_2026.4.28-v7.exe` (`385.75 MB`).
+  - unpacked app: `release/2026.4.28-v7/win-unpacked/Mclaw.exe`.
+  - blockmap: `release/2026.4.28-v7/Mclaw_2026.4.28-v7.exe.blockmap`.
+- Packaged verification from the build:
+  - Windows release preflight passed.
+  - dev-tools bundle check passed.
+  - packaged OpenClaw runtime verification passed.
+  - packaged Feishu managed plugin verification passed.
+  - packaged dev-tools bundle verification passed.
+- Supersedes `2026.4.28-v6`; `release/2026.4.28-v6` was retained for comparison/rollback.
+### Windows hidden gateway v8 final package
+
+- Final strengthened pass for the `openclaw-gateway` visible terminal regression.
+- Additional hardening after v7:
+  - `runCliStreaming(...)` now has the same Windows `gateway start` / `gateway restart` hidden-runtime guard as `runCli(...)`.
+  - this prevents both normal and streaming OpenClaw command entry points from reaching the Windows scheduled-task/startup launcher for gateway lifecycle actions.
+- Final validation after this pass:
+  - `D:\nodejs\npm.cmd run typecheck` passed.
+  - elevated focused Vitest run passed (`4` files, `39` tests): `cli-windows-spawn`, `cli-gateway-background`, `openclaw-gateway-service`, `gateway-lifecycle-controller`.
+  - elevated `$env:QCLAW_RELEASE_RETAIN='2026.4.28-v7'; D:\nodejs\npm.cmd run package:win` passed.
+- Final Windows artifacts for internal testing:
+  - installer: `release/2026.4.28-v8/Mclaw_2026.4.28-v8.exe` (`385.75 MB`).
+  - unpacked app: `release/2026.4.28-v8/win-unpacked/Mclaw.exe`.
+  - blockmap: `release/2026.4.28-v8/Mclaw_2026.4.28-v8.exe.blockmap`.
+- Packaged verification from the build:
+  - Windows release preflight passed.
+  - dev-tools bundle check passed.
+  - packaged OpenClaw runtime verification passed.
+  - packaged Feishu managed plugin verification passed.
+  - packaged dev-tools bundle verification passed.
+- Supersedes `2026.4.28-v7`; `release/2026.4.28-v7` was retained for comparison/rollback.
+
+### GitHub parallel repair plan
+
+- Added `docs/github_parallel_fix_plan.md` for two-person GitHub collaboration on the remaining internal-test issues.
+- The plan splits work into:
+  - Windows hidden OpenClaw gateway runtime + OpenClaw upgrade.
+  - Chat navigation send persistence + 405 recovery.
+- Included branch strategy, file ownership boundaries, validation commands, PR rules, and final joint acceptance checklist.
+
+### B-only collaboration handoff doc
+
+- Rewrote `docs/github_parallel_fix_plan.md` as a B-only handoff document for the teammate responsible for chat navigation persistence and 405 recovery.
+- Removed the broader A/B split details from that handoff so it can be sent directly to the teammate without extra context.
+
+### Overall A/B collaboration plan
+
+- Added `docs/github_parallel_fix_plan_overall.md` as the full A/B collaboration plan.
+- It covers both workstreams: A for Windows hidden gateway runtime and OpenClaw upgrade, B for chat navigation persistence and 405 recovery.
+- Included branch strategy, file ownership boundaries, PR rules, merge order, and final joint acceptance checklist.
+
+### Windows hidden gateway launcher cleanup hardening
+
+- Continued负责人 A scope before OpenClaw version upgrade.
+- Strengthened Windows gateway hiding so Mclaw removes old OpenClaw Scheduled Task / Startup Folder launcher artifacts directly, not only through `openclaw gateway uninstall`.
+- Added managed `OPENCLAW_STATE_DIR` to the runtime env so OpenClaw commands and cleanup target the Mclaw-managed state directory consistently.
+- Cleanup now best-effort removes:
+  - Scheduled Tasks matching `OpenClaw Gateway*`.
+  - Startup folder entries matching `OpenClaw Gateway*.cmd` / `openclaw-gateway*.cmd`.
+  - known `gateway.cmd` task scripts under managed state candidates.
+- Validation and packaging pending for this pass.
+
+### Windows hidden gateway v9 test package
+
+- Completed validation for the Windows hidden gateway cleanup pass before OpenClaw version upgrade.
+- Validation:
+  - `D:\nodejs\npm.cmd run typecheck` passed.
+  - elevated focused Vitest run passed (`4` files, `46` tests): `cli-windows-spawn`, `cli-gateway-background`, `openclaw-spawn`, `openclaw-gateway-service`.
+  - elevated `$env:QCLAW_RELEASE_RETAIN='2026.4.28-v8'; D:\nodejs\npm.cmd run package:win` passed.
+- Test package artifacts:
+  - installer: `release/2026.4.28-v9/Mclaw_2026.4.28-v9.exe`.
+  - unpacked app: `release/2026.4.28-v9/win-unpacked/Mclaw.exe`.
+  - blockmap: `release/2026.4.28-v9/Mclaw_2026.4.28-v9.exe.blockmap`.
+- Packaged verification from the build:
+  - Windows release preflight passed.
+  - dev-tools bundle check passed.
+  - packaged OpenClaw runtime verification passed.
+  - packaged Feishu managed plugin verification passed.
+  - packaged dev-tools bundle verification passed.
+- Expected internal-test warnings remain: unsigned development build, placeholder update URL, and Vite chunk/dynamic-import warnings.

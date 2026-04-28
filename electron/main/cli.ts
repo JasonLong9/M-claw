@@ -162,7 +162,11 @@ import {
 } from '../../src/shared/openclaw-cli-errors'
 import { resolvePairingApproveErrorCode, type PairingApproveErrorCode } from '../../src/shared/pairing-protocol'
 import { classifyGatewayRuntimeState } from '../../src/shared/gateway-runtime-diagnostics'
-import type { GatewayRuntimeStateCode } from '../../src/shared/gateway-runtime-state'
+import {
+  DEFAULT_GATEWAY_PORT,
+  resolveGatewayConfiguredPort,
+  type GatewayRuntimeStateCode,
+} from '../../src/shared/gateway-runtime-state'
 
 // 记录检测到的 Node.js bin 目录，用于后续找 npm
 let detectedNodeBinDir: string | null = null
@@ -372,6 +376,7 @@ async function buildManagedOpenClawRuntimeEnv(
   return {
     ...baseEnv,
     OPENCLAW_HOME: String(baseEnv.OPENCLAW_HOME || managedHomeEnvRoot || '').trim(),
+    OPENCLAW_STATE_DIR: String(baseEnv.OPENCLAW_STATE_DIR || openClawPaths.homeDir || '').trim(),
     OPENCLAW_CONFIG_PATH: String(baseEnv.OPENCLAW_CONFIG_PATH || openClawPaths.configFile || '').trim(),
   }
 }
@@ -762,12 +767,22 @@ export async function openOAuthUrl(url?: string): Promise<CliResult> {
   }
 }
 
+function shouldUseHiddenWindowsGatewayRuntime(args: string[]): boolean {
+  if (process.platform !== 'win32') return false
+  const command = String(args[0] || '').trim().toLowerCase()
+  const subCommand = String(args[1] || '').trim().toLowerCase()
+  return command === 'gateway' && (subCommand === 'start' || subCommand === 'restart')
+}
+
 /** Run any openclaw CLI command */
 export async function runCli(
   args: string[],
   timeout = MAIN_RUNTIME_POLICY.cli.defaultCommandTimeoutMs,
   controlDomain?: CommandControlDomain
 ): Promise<CliResult> {
+  if (shouldUseHiddenWindowsGatewayRuntime(args)) {
+    return gatewayStartHiddenOnWindows({ allowUnconfigured: true })
+  }
   return runCliStreaming(args, {
     timeout,
     controlDomain: resolveCommandControlDomain(args, controlDomain),
@@ -901,13 +916,17 @@ async function runCliStreamingOnce(args: string[], options: RunCliStreamOptions 
 
   return new Promise((resolve) => {
 
-    const proc = spawn(resolvedCommand.command, resolvedCommand.args, {
+    const windowsShellInvocation =
+      process.platform === 'win32' && resolvedCommand.shell
+        ? resolveHiddenWindowsShellInvocation(resolvedCommand.command, resolvedCommand.args)
+        : null
+    const proc = spawn(windowsShellInvocation?.command || resolvedCommand.command, windowsShellInvocation?.args || resolvedCommand.args, {
       env: mergedEnv,
       cwd: managedCwd,
       timeout,
-      shell: resolvedCommand.shell,
+      shell: windowsShellInvocation ? false : resolvedCommand.shell,
       windowsHide: true,
-      stdio: resolveStdioForCommand(resolvedCommand.command),
+      stdio: resolveStdioForCommand(windowsShellInvocation?.command || resolvedCommand.command),
     })
     trackActiveProcess(proc, controlDomain)
     const enableOAuthScan = shouldAutoOpenBrowserForArgs(args)
@@ -972,6 +991,9 @@ async function runCliStreamingOnce(args: string[], options: RunCliStreamOptions 
 
 /** Run openclaw command while exposing stream callbacks for long-running flows */
 export async function runCliStreaming(args: string[], options: RunCliStreamOptions = {}): Promise<CliResult> {
+  if (shouldUseHiddenWindowsGatewayRuntime(args)) {
+    return gatewayStartHiddenOnWindows({ allowUnconfigured: true })
+  }
   const controlDomain = resolveCommandControlDomain(args, options.controlDomain)
   return runCliLikeWithPermissionAutoRepair(
     () => runCliStreamingOnce(args, { ...options, controlDomain }),
@@ -1063,6 +1085,21 @@ function resolveCommandForShelllessSpawn(command: string): string {
   return normalized
 }
 
+function quoteWindowsCmdArg(value: string): string {
+  const raw = String(value ?? '')
+  if (raw === '') return '""'
+  if (!/[\s"&|<>()^]/.test(raw)) return raw
+  return `"${raw.replace(/(["&|<>()^])/g, '^$1')}"`
+}
+
+function resolveHiddenWindowsShellInvocation(command: string, args: string[]): { command: string; args: string[] } {
+  const commandLine = [command, ...args].map(quoteWindowsCmdArg).join(' ')
+  return {
+    command: process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe',
+    args: ['/d', '/s', '/c', commandLine],
+  }
+}
+
 function normalizeRunShellOptions(
   input?: CommandControlDomain | RunShellOptions
 ): RunShellOptions {
@@ -1086,11 +1123,14 @@ async function runShellOnce(
   const resolvedCommand = useShell ? command : resolveCommandForShelllessSpawn(command)
   const runOnce = (env: NodeJS.ProcessEnv): Promise<CliResult> =>
     new Promise((resolve) => {
-      const forceOpenShell = resolvedCommand.endsWith(".cmd") && process.platform === "win32";
-      const proc = spawn(resolvedCommand, args, {
+      const windowsShellInvocation =
+        process.platform === 'win32' && (useShell || /\.cmd$/i.test(resolvedCommand))
+          ? resolveHiddenWindowsShellInvocation(resolvedCommand, args)
+          : null
+      const proc = spawn(windowsShellInvocation?.command || resolvedCommand, windowsShellInvocation?.args || args, {
         env,
         cwd: normalizedOptions.cwd || resolveManagedSpawnCwd(),
-        shell: forceOpenShell ? true : useShell,
+        shell: windowsShellInvocation ? false : useShell,
         timeout,
         windowsHide: true,
       })
@@ -2887,6 +2927,171 @@ async function readGatewayForegroundLog(logPath: string): Promise<string> {
   }
 }
 
+let windowsVisibleGatewayCleanupPromise: Promise<void> | null = null
+
+async function resolveConfiguredGatewayPortForWindowsCleanup(): Promise<number> {
+  const config = await readConfig().catch(() => null)
+  const port = resolveGatewayConfiguredPort(config)
+  return Number.isInteger(port) && port > 0 ? port : DEFAULT_GATEWAY_PORT
+}
+
+function quotePowerShellString(value: string): string {
+  return `'${String(value || '').replace(/'/g, "''")}'`
+}
+
+function pushUniqueWindowsPath(paths: string[], candidate: string | null | undefined): void {
+  const normalized = String(candidate || '').trim()
+  if (!normalized) return
+  const comparable = normalized.toLowerCase()
+  if (paths.some((path) => path.toLowerCase() === comparable)) return
+  paths.push(normalized)
+}
+
+async function listWindowsGatewayLauncherStateDirCandidates(): Promise<string[]> {
+  const paths: string[] = []
+  pushUniqueWindowsPath(paths, process.env.OPENCLAW_STATE_DIR)
+  const openClawPaths = await getOpenClawPaths().catch(() => null)
+  if (openClawPaths) {
+    pushUniqueWindowsPath(paths, openClawPaths.homeDir)
+    pushUniqueWindowsPath(paths, dirname(openClawPaths.configFile))
+    const managedHomeEnvRoot = resolveManagedOpenClawHomeEnvRoot(openClawPaths)
+    pushUniqueWindowsPath(paths, join(managedHomeEnvRoot, '.openclaw'))
+  }
+  pushUniqueWindowsPath(paths, join(homedir(), '.openclaw'))
+  return paths
+}
+
+function buildRemoveWindowsGatewayLauncherArtifactsScript(stateDirs: string[]): string {
+  const stateDirArray = stateDirs.length > 0
+    ? stateDirs.map(quotePowerShellString).join(', ')
+    : ''
+  return [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    "$taskNamePatterns = @('OpenClaw Gateway*')",
+    'foreach ($taskNamePattern in $taskNamePatterns) {',
+    '  Get-ScheduledTask -TaskName $taskNamePattern -ErrorAction SilentlyContinue | ForEach-Object {',
+    '    Stop-ScheduledTask -TaskName $_.TaskName -TaskPath $_.TaskPath -ErrorAction SilentlyContinue',
+    '    Unregister-ScheduledTask -TaskName $_.TaskName -TaskPath $_.TaskPath -Confirm:$false -ErrorAction SilentlyContinue',
+    '  }',
+    '}',
+    "$knownTaskNames = @('OpenClaw Gateway')",
+    'foreach ($taskName in $knownTaskNames) {',
+    '  & schtasks.exe /End /TN $taskName | Out-Null',
+    '  & schtasks.exe /Delete /F /TN $taskName | Out-Null',
+    '}',
+    '$startupDirs = @()',
+    "if ($env:APPDATA) { $startupDirs += (Join-Path $env:APPDATA 'Microsoft\\Windows\\Start Menu\\Programs\\Startup') }",
+    "if ($env:USERPROFILE) { $startupDirs += (Join-Path $env:USERPROFILE 'AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup') }",
+    '$startupDirs = @($startupDirs | Where-Object { $_ } | Select-Object -Unique)',
+    'foreach ($startupDir in $startupDirs) {',
+    '  if (-not (Test-Path -LiteralPath $startupDir)) { continue }',
+    "  Get-ChildItem -LiteralPath $startupDir -Filter 'OpenClaw Gateway*.cmd' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue",
+    "  Get-ChildItem -LiteralPath $startupDir -Filter 'openclaw-gateway*.cmd' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue",
+    '}',
+    `$stateDirs = @(${stateDirArray})`,
+    'if ($env:OPENCLAW_STATE_DIR) { $stateDirs += $env:OPENCLAW_STATE_DIR }',
+    '$stateDirs = @($stateDirs | Where-Object { $_ } | Select-Object -Unique)',
+    'if ($env:OPENCLAW_TASK_SCRIPT) { Remove-Item -LiteralPath $env:OPENCLAW_TASK_SCRIPT -Force -ErrorAction SilentlyContinue }',
+    'foreach ($stateDir in $stateDirs) {',
+    '  Remove-Item -LiteralPath (Join-Path $stateDir "gateway.cmd") -Force -ErrorAction SilentlyContinue',
+    '}',
+    "Write-Output 'removed visible OpenClaw Gateway launchers'",
+  ].join('\n')
+}
+
+async function removeWindowsGatewayLauncherArtifacts(): Promise<void> {
+  if (process.platform !== 'win32') return
+  const stateDirs = await listWindowsGatewayLauncherStateDirCandidates()
+  await runShell(
+    'powershell',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      buildRemoveWindowsGatewayLauncherArtifactsScript(stateDirs),
+    ],
+    10_000,
+    'gateway'
+  ).catch(() => undefined)
+}
+
+function buildStopWindowsGatewayPortOwnerScript(port: number): string {
+  return [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    `$port = ${Math.trunc(port)}`,
+    '$currentPid = $PID',
+    '$connections = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue',
+    '$ownerPids = @($connections | Select-Object -ExpandProperty OwningProcess -Unique)',
+    'foreach ($ownerPid in $ownerPids) {',
+    '  if (-not $ownerPid -or $ownerPid -eq $currentPid) { continue }',
+    '  $proc = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f $ownerPid) -ErrorAction SilentlyContinue',
+    '  $name = [string]$proc.Name',
+    '  $cmd = [string]$proc.CommandLine',
+    "  $looksLikeGateway = (($name -match 'openclaw.*gateway') -or (($cmd -match 'openclaw') -and ($cmd -match 'gateway')))",
+    '  if ($looksLikeGateway) {',
+    '    Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue',
+    '    Write-Output ("stopped visible gateway pid {0}" -f $ownerPid)',
+    '  }',
+    '}',
+  ].join('; ')
+}
+
+async function stopWindowsGatewayPortOwnerIfOpenClaw(): Promise<void> {
+  if (process.platform !== 'win32') return
+  const port = await resolveConfiguredGatewayPortForWindowsCleanup()
+  await runShell(
+    'powershell',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      buildStopWindowsGatewayPortOwnerScript(port),
+    ],
+    10_000,
+    'gateway'
+  ).catch(() => undefined)
+}
+
+async function disableVisibleWindowsGatewayLaunchers(): Promise<void> {
+  if (process.platform !== 'win32') return
+  if (windowsVisibleGatewayCleanupPromise) {
+    return windowsVisibleGatewayCleanupPromise
+  }
+
+  windowsVisibleGatewayCleanupPromise = (async () => {
+    // OpenClaw's native Windows scheduled-task/startup launcher can allocate a
+    // user-visible console. Mclaw owns Windows runtime launch, so remove those
+    // launchers and restart the gateway through our hidden Node child process.
+    await removeWindowsGatewayLauncherArtifacts()
+    await runCli(['gateway', 'stop'], MAIN_RUNTIME_POLICY.cli.gatewayStopTimeoutMs, 'gateway').catch(() => undefined)
+    await stopWindowsGatewayPortOwnerIfOpenClaw()
+    await runCli(['gateway', 'uninstall'], MAIN_RUNTIME_POLICY.cli.defaultCommandTimeoutMs, 'gateway').catch(() => undefined)
+    await removeWindowsGatewayLauncherArtifacts()
+    await stopWindowsGatewayPortOwnerIfOpenClaw()
+  })()
+
+  try {
+    await windowsVisibleGatewayCleanupPromise
+  } finally {
+    windowsVisibleGatewayCleanupPromise = null
+  }
+}
+
+async function gatewayStartHiddenOnWindows(options: {
+  allowUnconfigured?: boolean
+} = {}): Promise<CliResult> {
+  await disableVisibleWindowsGatewayLaunchers()
+  const port = await resolveConfiguredGatewayPortForWindowsCleanup()
+  return gatewayRunInBackground({
+    port,
+    allowUnconfigured: options.allowUnconfigured ?? true,
+  })
+}
+
 export async function gatewayRunInBackground(options: {
   port?: number
   allowUnconfigured?: boolean
@@ -2954,10 +3159,14 @@ export async function gatewayRunInBackground(options: {
     }
 
     try {
-      const proc = spawn(resolvedCommand.command, resolvedCommand.args, {
+      const windowsShellInvocation =
+        process.platform === 'win32' && resolvedCommand.shell
+          ? resolveHiddenWindowsShellInvocation(resolvedCommand.command, resolvedCommand.args)
+          : null
+      const proc = spawn(windowsShellInvocation?.command || resolvedCommand.command, windowsShellInvocation?.args || resolvedCommand.args, {
         env: mergedEnv,
         cwd: resolveManagedSpawnCwd(),
-        shell: resolvedCommand.shell,
+        shell: windowsShellInvocation ? false : resolvedCommand.shell,
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: true,
         windowsHide: true,
@@ -3021,6 +3230,9 @@ export async function gatewayRunInBackground(options: {
 }
 
 export async function gatewayStart(): Promise<CliResult> {
+  if (process.platform === 'win32') {
+    return gatewayStartHiddenOnWindows({ allowUnconfigured: true })
+  }
   return runCli(['gateway', 'start'], MAIN_RUNTIME_POLICY.cli.defaultCommandTimeoutMs, 'gateway')
 }
 
@@ -3028,6 +3240,9 @@ export async function gatewayStart(): Promise<CliResult> {
 let restartPromise: Promise<CliResult> | null = null
 
 async function gatewayRestartImpl(): Promise<CliResult> {
+  if (process.platform === 'win32') {
+    return gatewayStartHiddenOnWindows({ allowUnconfigured: true })
+  }
   return runCli(['gateway', 'restart'], MAIN_RUNTIME_POLICY.cli.defaultCommandTimeoutMs, 'gateway')
 }
 
@@ -3046,10 +3261,22 @@ export async function gatewayRestart(): Promise<CliResult> {
 }
 
 export async function gatewayForceRestart(): Promise<CliResult> {
+  if (process.platform === 'win32') {
+    return gatewayStartHiddenOnWindows({ allowUnconfigured: true })
+  }
   return runCli(['gateway', 'restart', '--force'])
 }
 
 export async function gatewayStop(): Promise<CliResult> {
+  if (process.platform === 'win32') {
+    await disableVisibleWindowsGatewayLaunchers()
+    return {
+      ok: true,
+      stdout: 'Windows gateway launchers stopped and removed for hidden Mclaw-managed runtime.',
+      stderr: '',
+      code: 0,
+    }
+  }
   return runCli(['gateway', 'stop'], MAIN_RUNTIME_POLICY.cli.gatewayStopTimeoutMs, 'gateway')
 }
 
