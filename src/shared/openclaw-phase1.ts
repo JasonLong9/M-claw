@@ -154,11 +154,46 @@ function hasMeaningfulConfigValue(value: unknown): boolean {
   return typeof value === 'number' || typeof value === 'boolean'
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function hasMeaningfulModelConfig(configData: Record<string, any>): boolean {
+  if (String(configData.defaultModel ?? configData.model ?? '').trim()) return true
+  if (String(configData.imageModel ?? configData.imageDefaultModel ?? '').trim()) return true
+  if (hasMeaningfulConfigValue(configData.fallbacks)) return true
+  if (hasMeaningfulConfigValue(configData.imageFallbacks ?? configData['image-fallbacks'] ?? configData.image_fallbacks)) {
+    return true
+  }
+  if (hasMeaningfulConfigValue(configData.aliases)) return true
+
+  const defaultAgentModel = configData.agents?.defaults?.model
+  if (isRecord(defaultAgentModel) && hasMeaningfulConfigValue(defaultAgentModel)) return true
+
+  const models = configData.models
+  if (!isRecord(models)) return false
+  if (String(models.default ?? models.main ?? models.image ?? models.imageDefault ?? '').trim()) return true
+  if (hasMeaningfulConfigValue(models.allowed)) return true
+  if (hasMeaningfulConfigValue(models.aliases)) return true
+  if (hasMeaningfulConfigValue(models.fallbacks)) return true
+  if (hasMeaningfulConfigValue(models.imageFallbacks ?? models.image_fallbacks)) return true
+
+  const providers = models.providers
+  if (!isRecord(providers)) return false
+  return Object.values(providers).some((providerConfig) => hasMeaningfulConfigValue(providerConfig))
+}
+
+function hasMeaningfulChannelConfig(configData: Record<string, any>): boolean {
+  const channels = configData.channels
+  if (!isRecord(channels)) return false
+  return Object.values(channels).some((channelConfig) => hasMeaningfulConfigValue(channelConfig))
+}
+
 export function hasInitializedOpenClawConfig(
   configData: Record<string, any> | null | undefined
 ): boolean {
   if (!configData || typeof configData !== 'object') return false
-  return Object.values(configData).some((value) => hasMeaningfulConfigValue(value))
+  return hasMeaningfulModelConfig(configData) || hasMeaningfulChannelConfig(configData)
 }
 
 export function shouldRouteToSetupAfterPhase1(

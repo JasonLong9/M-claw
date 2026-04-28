@@ -164,6 +164,11 @@ async function initializeManagedRuntimeEnvironment(): Promise<void> {
   })
   await repairManagedOpenClawStateLayout(openClawPaths.homeDir).catch(() => undefined)
   await ensureRequiredOpenClawStateDirs(path.join(openClawPaths.homeDir, '.openclaw')).catch(() => undefined)
+
+  if (process.platform === 'win32') {
+    const { cleanupWindowsGatewayLaunchersForMclaw } = await import('./cli')
+    await cleanupWindowsGatewayLaunchersForMclaw().catch(() => undefined)
+  }
 }
 
 function showMainWindow() {

@@ -6,6 +6,7 @@ import { stopWatchdog } from './watchdog'
 
 const EXIT_CANCEL_DOMAINS = [
   'gateway',
+  'gateway-runtime',
   'config-write',
   'chat',
   'oauth',

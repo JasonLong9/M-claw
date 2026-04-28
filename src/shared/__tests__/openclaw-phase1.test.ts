@@ -110,13 +110,38 @@ describe('hasInitializedOpenClawConfig', () => {
     expect(hasInitializedOpenClawConfig(null)).toBe(false)
     expect(hasInitializedOpenClawConfig({})).toBe(false)
     expect(hasInitializedOpenClawConfig({ channels: {}, plugins: { allow: [] } })).toBe(false)
-  })
-
-  it('returns true once shared config contains initialized values', () => {
     expect(
       hasInitializedOpenClawConfig({
+        gateway: {
+          auth: {
+            token: 'runtime-generated-token',
+          },
+        },
         plugins: {
           allow: ['feishu-openclaw-plugin'],
+        },
+      })
+    ).toBe(false)
+  })
+
+  it('returns true once shared config contains user-facing model or channel setup values', () => {
+    expect(
+      hasInitializedOpenClawConfig({
+        agents: {
+          defaults: {
+            model: {
+              primary: 'custom-openai/deepseek-chat',
+            },
+          },
+        },
+      })
+    ).toBe(true)
+    expect(
+      hasInitializedOpenClawConfig({
+        channels: {
+          feishu: {
+            appId: 'cli_xxx',
+          },
         },
       })
     ).toBe(true)

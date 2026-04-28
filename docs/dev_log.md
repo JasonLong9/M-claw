@@ -7898,3 +7898,52 @@
   - packaged Feishu managed plugin verification passed.
   - packaged dev-tools bundle verification passed.
 - Expected internal-test warnings remain: unsigned development build, placeholder update URL, and Vite chunk/dynamic-import warnings.
+
+### Windows hidden gateway v10 investigation start
+
+- User testing on v9 still reproduced a visible blank Windows Terminal tab titled `openclaw-gateway`, especially during dashboard bootstrap, model config apply, and first chat send.
+- Current diagnosis: v9 still used a detached Windows foreground-compatible gateway child process and cleanup still invoked OpenClaw `gateway stop` / `gateway uninstall`; both can leave or re-enter visible Windows Scheduled Task / Startup launcher paths.
+- Fix direction for this pass:
+  - Windows gateway runtime must be a Mclaw-owned non-detached hidden child process, not an OpenClaw Scheduled Task / Startup launcher and not a detached console process.
+  - Windows gateway cleanup must remove legacy tasks/startup scripts directly and must not call OpenClaw `gateway install` / `stop` / `uninstall` service paths.
+  - First-entry setup routing must ignore gateway/runtime-only config noise so a first-use user is sent to model/IM setup instead of the dashboard.
+- Validation and packaging are pending for this pass.
+
+### Windows hidden gateway v10 implementation checkpoint
+
+- Implemented the main runtime change: on Windows, `gateway run` now resolves to a direct `node.exe + openclaw.mjs` invocation and refuses shell/.cmd gateway launch paths.
+- Changed the Windows gateway child process from detached to Mclaw-owned/non-detached with `windowsHide: true`, so Windows Terminal should not allocate a visible `openclaw-gateway` console.
+- Removed OpenClaw `gateway stop` / `gateway uninstall` calls from the legacy launcher cleanup path; cleanup now directly removes Scheduled Tasks / Startup entries and kills verified OpenClaw gateway port owners.
+- Added startup-time Windows launcher cleanup before the main window is created, so stale OpenClaw Scheduled Task / Startup entries are removed before dashboard bootstrap can start the gateway.
+- Tightened first-use setup detection so runtime-only config values such as gateway auth tokens or plugin allowlists no longer count as completed Mclaw setup.
+- Typecheck/tests/package still pending.
+
+### Windows hidden gateway v10 validation checkpoint
+
+- `D:\nodejs\npm.cmd run typecheck` passed.
+- Focused Vitest passed after rerunning outside the sandbox because the first attempt hit `spawn EPERM` while Vite/esbuild loaded config:
+  - `electron/main/__tests__/cli-windows-spawn.test.ts`
+  - `electron/main/__tests__/cli-gateway-background.test.ts`
+  - `electron/main/__tests__/openclaw-spawn.test.ts`
+  - `electron/main/__tests__/openclaw-gateway-service.test.ts`
+  - `src/shared/__tests__/openclaw-phase1.test.ts`
+  - `src/pages/__tests__/env-check-state.test.ts`
+- Focused test result: 6 files / 96 tests passed.
+- Packaging is next.
+
+### Windows hidden gateway v10 package
+
+- Windows package build completed successfully after rerunning outside the sandbox because the first package attempt hit a sandbox `EPERM` while checking the packaged dev-tools Git binary.
+- Package validation completed in the build:
+  - Windows release preflight passed and assigned `2026.4.28-v10`.
+  - dev-tools bundle check passed (`git version 2.44.0.windows.1`, Claude Code `2.1.109`).
+  - renderer/main/preload production builds passed.
+  - packaged OpenClaw runtime verification passed.
+  - packaged Feishu managed plugin verification passed.
+  - packaged dev-tools bundle verification passed.
+- Internal test artifacts:
+  - installer: `release/2026.4.28-v10/Mclaw_2026.4.28-v10.exe`.
+  - unpacked app: `release/2026.4.28-v10/win-unpacked/Mclaw.exe`.
+  - blockmap: `release/2026.4.28-v10/Mclaw_2026.4.28-v10.exe.blockmap`.
+- Expected warnings remain: unsigned development build, placeholder update URL, Vite chunk/dynamic-import warnings.
+- The old `release/2026.4.28-v9` directory was retained because Windows reported it was still locked/busy.
