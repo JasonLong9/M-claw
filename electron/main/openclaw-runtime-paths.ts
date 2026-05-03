@@ -162,6 +162,16 @@ async function defaultPathExists(targetPath: string): Promise<boolean> {
   }
 }
 
+const DEFAULT_RUNTIME_COMMAND_TIMEOUT_MS = 10_000
+
+function resolveRuntimeCommandTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = String(env.QCLAW_RUNTIME_PATH_PROBE_TIMEOUT_MS || '').trim()
+  if (!raw) return DEFAULT_RUNTIME_COMMAND_TIMEOUT_MS
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed)) return DEFAULT_RUNTIME_COMMAND_TIMEOUT_MS
+  return Math.max(500, Math.floor(parsed))
+}
+
 async function defaultRunCommand(
   binaryPath: string,
   args: string[],
@@ -185,6 +195,20 @@ async function defaultRunCommand(
       stdio: ['ignore', 'pipe', 'pipe'],
     })
 
+    const timeoutMs = resolveRuntimeCommandTimeoutMs(runtimeEnv)
+    let settled = false
+    const timeoutId = setTimeout(() => {
+      try { proc.kill() } catch { /* noop */ }
+      if (settled) return
+      settled = true
+      resolve({
+        ok: false,
+        stdout: '',
+        stderr: `Runtime path probe timed out after ${timeoutMs}ms: ${binaryPath} ${args.join(' ')}`,
+        code: null,
+      })
+    }, timeoutMs)
+
     let stdout = ''
     let stderr = ''
     proc.stdout?.on('data', (chunk) => {
@@ -194,6 +218,9 @@ async function defaultRunCommand(
       stderr += String(chunk)
     })
     proc.on('error', (error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeoutId)
       resolve({
         ok: false,
         stdout,
@@ -202,6 +229,9 @@ async function defaultRunCommand(
       })
     })
     proc.on('close', (code) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeoutId)
       resolve({
         ok: code === 0,
         stdout,

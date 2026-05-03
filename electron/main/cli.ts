@@ -810,14 +810,23 @@ async function runCliStreamingOnce(args: string[], options: RunCliStreamOptions 
         return runCliStreamingOnce(args, { ...options, binaryPath: bundledRuntimeBinaryPath })
       }
     }
+    // Fast path: filesystem scan without spawning where.exe / which.
+    // On Windows, where.exe can hang indefinitely when PATH contains
+    // inaccessible network drives, so probe the filesystem first.
+    const fastPath = await resolveOpenClawBinaryPath({
+      platform: process.platform,
+      env: commandProbeEnv,
+      fileExists: existsSync,
+    }).catch(() => '')
+    if (fastPath) {
+      return runCliStreamingOnce(args, { ...options, binaryPath: fastPath })
+    }
+
     const openClawCapability = await probePlatformCommandCapability('openclaw', {
       platform: process.platform,
       env: commandProbeEnv,
     })
     if (!openClawCapability.available) {
-      // where.exe / command -v couldn't find openclaw on PATH.
-      // Fall back to filesystem scan (matches how gatewayRunInBackground finds
-      // the binary on bundled/non-standard Windows installations).
       const fallbackPath = await resolveOpenClawBinaryPath({
         platform: process.platform,
         env: commandProbeEnv,
