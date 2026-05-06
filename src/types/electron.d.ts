@@ -1806,6 +1806,7 @@ interface ElectronApi {
     requestId?: string
   }) => Promise<GatewayEnsureRunningResult>
   onGatewayBootstrapState: (listener: (payload: GatewayBootstrapStateEvent) => void) => () => void
+  saveDiagnosticsTrace: (entries: unknown[]) => Promise<void>
 
   // Status
   getStatus: () => Promise<CliResult>

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { classifyGatewayRuntimeState } from '../gateway-runtime-diagnostics'
+import { createInMemoryTrace } from '../gateway-diagnostics-trace'
 
 describe('classifyGatewayRuntimeState', () => {
   it('classifies service-missing failures', () => {
@@ -119,5 +120,108 @@ describe('classifyGatewayRuntimeState', () => {
 
     expect(result.stateCode).toBe('port_conflict_foreign_process')
     expect(result.evidence.some((item) => item.source === 'port-owner')).toBe(true)
+  })
+
+  it('populates trace with the matched branch when trace is provided', () => {
+    const { trace, entries } = createInMemoryTrace()
+    classifyGatewayRuntimeState({ stderr: 'Gateway service not loaded.' }, trace)
+
+    const all = entries()
+    expect(all.length).toBeGreaterThanOrEqual(1)
+    const last = all[all.length - 1]
+    expect(last.phase).toBe('classify')
+    expect(last.step).toBe('corpus_service_missing')
+    expect(last.result).toBe('service_missing')
+  })
+
+  it('records fallback branch in trace when no signal matches', () => {
+    const { trace, entries } = createInMemoryTrace()
+    classifyGatewayRuntimeState({ stderr: 'some random unrelated output' }, trace)
+
+    const all = entries()
+    const last = all[all.length - 1]
+    expect(last.phase).toBe('classify')
+    expect(last.step).toBe('fallback')
+    expect(last.result).toBe('unknown_runtime_failure')
+  })
+
+  it('records explicit stateCode path in trace with corpus', () => {
+    const { trace, entries } = createInMemoryTrace()
+    classifyGatewayRuntimeState({
+      stateCode: 'token_mismatch',
+      summary: 'Token mismatch detected',
+    }, trace)
+
+    const all = entries()
+    // Should have corpus entry followed by explicit_state_code entry
+    expect(all.some(e => e.phase === 'corpus')).toBe(true)
+    const last = all[all.length - 1]
+    expect(last.step).toBe('explicit_state_code')
+    expect(last.result).toBe('token_mismatch')
+  })
+
+  it('does not throw when trace is omitted (backward compatible)', () => {
+    const result = classifyGatewayRuntimeState({ ok: true, running: true })
+    expect(result.stateCode).toBe('healthy')
+  })
+
+  it('records sanitized corpus in trace', () => {
+    const { trace, entries } = createInMemoryTrace()
+    classifyGatewayRuntimeState({ stderr: 'Gateway service not loaded.' }, trace)
+
+    const corpusEntries = entries().filter(e => e.phase === 'corpus')
+    expect(corpusEntries.length).toBe(1)
+    expect(corpusEntries[0].corpus_snippet).toContain('gateway service not loaded')
+  })
+
+  it('classifies bundled runtime deployment failures as config_invalid, not plugin_load_failure', () => {
+    const result = classifyGatewayRuntimeState({
+      stderr: [
+        '检测到内置 openclaw runtime 本体，但当前源布局不完整，无法执行 windows runtime 接管。',
+        'source package manifest: (missing)',
+        'bundled manifest path: g:\\m-claw\\resources\\openclaw-bundle\\manifest.json',
+        '检测到内置 openclaw 载荷，但本地安装失败，已回退在线安装流程。',
+        'openclaw cli 安装失败，已按镜像顺序自动重试。',
+      ].join('\n'),
+    })
+
+    expect(result.stateCode).toBe('config_invalid')
+    expect(result.summary).toContain('部署失败')
+    expect(result.safeToRetry).toBe(false)
+  })
+
+  it('classifies MODULE_NOT_FOUND for openclaw.mjs as runtime deployment failure', () => {
+    const result = classifyGatewayRuntimeState({
+      stderr: [
+        "Error: Cannot find module 'g:\\m-claw\\resources\\openclaw-bundle\\runtime\\windows-x64\\node_modules\\openclaw\\openclaw.mjs'",
+        "  code: 'MODULE_NOT_FOUND'",
+      ].join('\n'),
+    })
+
+    expect(result.stateCode).toBe('config_invalid')
+    expect(result.summary).toContain('部署失败')
+  })
+
+  it('classifies ERR_MODULE_NOT_FOUND for missing openclaw dependency as deployment failure', () => {
+    const result = classifyGatewayRuntimeState({
+      stderr: [
+        "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'zod' imported from g:\\m-claw\\resources\\openclaw-bundle\\runtime\\windows-x64\\node_modules\\openclaw\\dist\\zod-schema.js",
+        "  code: 'ERR_MODULE_NOT_FOUND'",
+      ].join('\n'),
+    })
+
+    expect(result.stateCode).toBe('config_invalid')
+    expect(result.summary).toContain('部署失败')
+  })
+
+  it('sanitizes sensitive data from corpus in trace', () => {
+    const { trace, entries } = createInMemoryTrace()
+    classifyGatewayRuntimeState({
+      stderr: 'unauthorized: Bearer sk-abc123xyz789 secret',
+    }, trace)
+
+    const corpusEntries = entries().filter(e => e.phase === 'corpus')
+    expect(corpusEntries[0].corpus_snippet).not.toContain('sk-abc123xyz789')
+    expect(corpusEntries[0].corpus_snippet).toContain('<redacted>')
   })
 })

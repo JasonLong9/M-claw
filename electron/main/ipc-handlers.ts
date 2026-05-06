@@ -1321,4 +1321,16 @@ export function registerIpcHandlers() {
       'env-setup'
     )
   })
+
+  ipcMain.handle('diagnostics:trace', (_event, entries: unknown[]) => {
+    const { createDiagnosticsFileTrace } = require('./gateway-diagnostics-log')
+    const trace = createDiagnosticsFileTrace()
+    const validPhases = new Set(['classify', 'resolve_view', 'corpus'])
+    for (const entry of entries) {
+      const e = entry as Record<string, unknown> | null | undefined
+      if (typeof e?.phase === 'string' && validPhases.has(e.phase as string)) {
+        trace.add(entry as any)
+      }
+    }
+  })
 }

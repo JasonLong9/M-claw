@@ -2,6 +2,7 @@ import { pollWithBackoff } from '../../src/shared/polling'
 import type { ReconcileActionSummary } from '../../src/shared/gateway-runtime-reconcile-state'
 import { UI_RUNTIME_DEFAULTS } from '../../src/shared/runtime-policies'
 import { classifyGatewayRuntimeState } from '../../src/shared/gateway-runtime-diagnostics'
+import { createDiagnosticsFileTrace } from './gateway-diagnostics-log'
 import {
   type GatewayControlUiAppDiagnostics,
   type GatewayPortOwner,
@@ -314,6 +315,7 @@ function buildGatewayEnsureResult(
     >
   > = {}
 ): GatewayEnsureRunningResult {
+  const trace = createDiagnosticsFileTrace()
   const classified = classifyGatewayRuntimeState({
     ...base,
     running: flags.running,
@@ -322,7 +324,7 @@ function buildGatewayEnsureResult(
     portOwner: extras.diagnostics?.portOwner ?? context.portOwner,
     stateCode: extras.stateCode,
     summary: extras.summary,
-  })
+  }, trace)
   const stateCode = flags.running && base.ok ? 'healthy' : extras.stateCode || classified.stateCode
   const summary =
     flags.running && base.ok

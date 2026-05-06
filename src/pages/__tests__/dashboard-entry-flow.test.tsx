@@ -127,6 +127,7 @@ function createBootstrapApi(
         issues: [],
       },
     }),
+    saveDiagnosticsTrace: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   }
 }

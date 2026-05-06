@@ -312,6 +312,10 @@ export const api = {
   onDepsInstallLog: (listener: (msg: string) => void) => subscribeToChannel('deps:install:log', listener),
   depsCheckBrew: () => ipcRenderer.invoke('deps:checkBrew'),
   depsInstallBrew: () => ipcRenderer.invoke('deps:installBrew'),
+
+  // Diagnostics
+  saveDiagnosticsTrace: (entries: unknown[]) =>
+    ipcRenderer.invoke('diagnostics:trace', entries),
 }
 
 contextBridge.exposeInMainWorld('api', api)
