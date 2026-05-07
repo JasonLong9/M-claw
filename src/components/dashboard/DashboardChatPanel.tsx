@@ -413,7 +413,8 @@ export default function DashboardChatPanel({
   const composerResizeStateRef = useRef<{ startY: number; startHeight: number } | null>(null)
   const composerResizeCleanupRef = useRef<(() => void) | null>(null)
 
-  const canLoadChatData = true
+  const [initialRecoveryDone, setInitialRecoveryDone] = useState(false)
+  const canLoadChatData = initialRecoveryDone
   const canBrowseHistory = !loadingSessions && !sending
 
   const activeSession = sessions.find((session) => session.sessionId === activeSessionId) || null
@@ -1350,9 +1351,9 @@ export default function DashboardChatPanel({
     void (async () => {
       try {
         const sendState = await window.api.getActiveChatSendState()
-        if (canceled || !sendState) return
+        if (canceled) return
 
-        if (sendState.status === 'sending' && sendState.sessionId) {
+        if (sendState?.status === 'sending' && sendState.sessionId) {
           setSending(true)
           setAssistantStreamStarted(true)
           setPendingUserText(sendState.pendingUserText || '')
@@ -1365,12 +1366,7 @@ export default function DashboardChatPanel({
           setLastRetryText(sendState.pendingUserText || '')
           setPanelError('')
           setStopping(false)
-          void loadSessions(sendState.sessionId, { silent: true })
-          void loadTranscript(sendState.sessionId, { silent: true })
-          return
-        }
-
-        if (sendState.status === 'failed' && sendState.sessionId) {
+        } else if (sendState?.status === 'failed' && sendState.sessionId) {
           setSending(false)
           setAssistantStreamStarted(false)
           setPendingUserText('')
@@ -1379,16 +1375,12 @@ export default function DashboardChatPanel({
           setStreamingAssistantModel('')
           setStreamingAssistantUsage(undefined)
           activeSendSessionIdRef.current = ''
+          setActiveSessionId(sendState.sessionId)
           setLastRetryText(sendState.pendingUserText || '')
           if (sendState.lastError) {
             setPanelError(sendState.lastError)
           }
-          void loadSessions(sendState.sessionId, { silent: true })
-          void loadTranscript(sendState.sessionId, { silent: true })
-          return
-        }
-
-        if (sendState.status === 'completed' && sendState.sessionId) {
+        } else if (sendState?.status === 'completed' && sendState.sessionId) {
           setSending(false)
           setAssistantStreamStarted(false)
           setPendingUserText('')
@@ -1397,13 +1389,16 @@ export default function DashboardChatPanel({
           setStreamingAssistantModel('')
           setStreamingAssistantUsage(undefined)
           activeSendSessionIdRef.current = ''
+          setActiveSessionId(sendState.sessionId)
           setLastRetryText('')
           setPanelError('')
-          void loadSessions(sendState.sessionId, { silent: true })
-          void loadTranscript(sendState.sessionId, { silent: true })
         }
       } catch (error) {
         console.error('Failed to restore active chat send state', error)
+      } finally {
+        if (!canceled) {
+          setInitialRecoveryDone(true)
+        }
       }
     })()
     return () => {
