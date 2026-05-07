@@ -481,6 +481,103 @@ function shouldFallbackToForegroundGatewayRun(installResult: CliResult): boolean
     || detail.includes('service install failed')
 }
 
+function isScheduledTaskGatewayFailedToBind(result: CliResult): boolean {
+  if (process.platform !== 'win32') return false
+  const detail = combineCliOutput(result).toLowerCase()
+  return (
+    /timed out.*port.*free|port.*free.*timed out|port \d+ status:\s*free/i.test(detail) ||
+    (detail.includes('timed out') && detail.includes('healthy'))
+  )
+}
+
+async function tryForegroundGatewayFallback(
+  options: EnsureGatewayRunningOptions,
+  context: GatewayRecoveryContext,
+  autoInstalledGatewayService: boolean,
+  installedFlags: { autoInstalledNode: boolean; autoInstalledOpenClaw: boolean },
+  persistReconcile: (params: {
+    result: Pick<
+      GatewayEnsureRunningResult,
+      'ok' | 'running' | 'stateCode' | 'summary' | 'safeToRetry' | 'reasonDetail'
+    >
+    summary?: string
+  }) => Promise<void>
+): Promise<GatewayEnsureRunningResult | null> {
+  if (process.platform !== 'win32') return null
+
+  emitGatewayBootstrapState(options, {
+    phase: 'start-command',
+    title: '正在以兼容模式启动 Gateway',
+    detail: '检测到 Windows 后台服务未能启动 Gateway 进程，正在回退到当前会话前台运行模式。',
+    progress: 54,
+  })
+  recordGatewayAction(context, 'start-gateway', [
+    'gateway',
+    'run',
+    '--port',
+    String(context.effectivePort),
+  ])
+  const foregroundRunResult = await gatewayRunInBackground({
+    port: context.effectivePort,
+  })
+  if (!foregroundRunResult.ok) {
+    appendGatewayEvidence(context, {
+      source: 'service',
+      message: 'Gateway 前台兼容模式启动失败',
+      detail: combineCliOutput(foregroundRunResult),
+      port: context.effectivePort,
+    })
+    return null
+  }
+
+  recordGatewayAction(context, 'wait-ready')
+  const foregroundReady = await waitForGatewayReady(options, context.effectivePort)
+  if (!foregroundReady.running) {
+    appendGatewayEvidence(context, {
+      source: 'service',
+      message: 'Gateway 前台模式已启动但就绪确认未通过',
+      detail: foregroundReady.health.stderr || foregroundReady.health.raw,
+      port: context.effectivePort,
+    })
+    return null
+  }
+
+  appendGatewayEvidence(context, {
+    source: 'service',
+    message: 'Gateway 已通过前台兼容模式启动并完成就绪确认',
+    detail: 'Windows 后台服务未能启动 Gateway 进程，已切换到前台兼容运行模式。',
+    port: context.effectivePort,
+  })
+  const result = buildGatewayEnsureResult(
+    {
+      ok: true,
+      stdout: foregroundReady.health.raw,
+      stderr: foregroundReady.health.stderr,
+      code: 0,
+    },
+    {
+      running: true,
+      autoInstalledGatewayService,
+      ...installedFlags,
+    },
+    context,
+    {
+      summary: 'Gateway 已通过前台兼容模式启动并完成就绪确认。',
+    }
+  )
+  await persistReconcile({
+    result,
+    summary: 'Gateway Windows 后台服务不可用，已切换到前台兼容运行模式。',
+  })
+  emitGatewayBootstrapState(options, {
+    phase: 'done',
+    title: 'Gateway 已确认可用',
+    detail: '系统已通过前台兼容模式恢复 Gateway，正在进入控制面板。',
+    progress: 100,
+  })
+  return result
+}
+
 function isSafeAlreadyInstalledManagedPluginInstallError(detail: string): boolean {
   return isPluginAlreadyInstalledError(detail)
     && !String(detail || '').includes('已自动隔离')
@@ -930,12 +1027,16 @@ async function safeGatewayHealth(): Promise<GatewayHealthCheckResult> {
 function shouldAcceptGatewayPortFallback(health: GatewayHealthCheckResult): boolean {
   switch (health.stateCode) {
     case 'config_invalid':
-    case 'token_mismatch':
-    case 'websocket_1006':
     case 'auth_missing':
     case 'plugin_load_failure':
     case 'network_blocked':
       return false
+    case 'token_mismatch':
+    case 'websocket_1006':
+      // These are retryable transient states. The CLI health check may
+      // fail while the daemon is already listening — allow the direct
+      // socket probe to confirm whether the gateway is actually reachable.
+      return true
     default:
       return true
   }
@@ -1029,14 +1130,28 @@ async function restartGatewayAndWait(
   recordGatewayAction(context, 'restart-gateway', ['gateway', 'restart'])
   const restartResult = await gatewayRestart()
   if (!restartResult.ok) {
+    const restartClassification = classifyGatewayRuntimeState({
+      ...restartResult,
+      diagnostics: { lastHealth: null, doctor: null },
+      evidence: context.evidence,
+    })
     appendGatewayEvidence(context, {
       source: 'restart',
-      message: 'Gateway 重载失败',
+      message: 'Gateway 重载命令返回非零',
       detail: combineCliOutput(restartResult),
     })
-    return {
-      ok: false,
-      result: restartResult,
+    // For retryable connection errors, the daemon may still be starting.
+    // Fall through to waitForGatewayReady instead of failing immediately.
+    if (
+      restartClassification.stateCode !== 'websocket_1006' &&
+      restartClassification.stateCode !== 'token_mismatch' &&
+      restartClassification.stateCode !== 'network_blocked' &&
+      restartClassification.stateCode !== 'gateway_not_running'
+    ) {
+      return {
+        ok: false,
+        result: restartResult,
+      }
     }
   }
 
@@ -1885,6 +2000,7 @@ async function ensureGatewayRunningImpl(
   let autoInstalledGatewayService = false
   let rollbackConfig: Record<string, any> | null | undefined = undefined
   let restartRepairAttempted = false
+  let foregroundFallbackAttempted = false
   await ensureGatewayRuntimeRevision(
     configRuntimeApplyRequired ? 'gateway_runtime_apply' : 'gateway_start_required',
     configRuntimeApplyRequired
@@ -2037,6 +2153,25 @@ async function ensureGatewayRunningImpl(
     }
 	    appendGatewayEvidence(context, startClassification.evidence)
 
+	    // If the scheduled-task gateway never bound the port, fall back
+	    // to foreground mode (gateway run) which is more reliable on Windows.
+	    if (
+	      isScheduledTaskGatewayFailedToBind(startResult) ||
+	      ((startClassification.stateCode === 'websocket_1006' ||
+	        startClassification.stateCode === 'network_blocked' ||
+	        startClassification.stateCode === 'gateway_not_running') &&
+	        process.platform === 'win32')
+	    ) {
+	      const foregroundResult = await tryForegroundGatewayFallback(
+	        options,
+	        context,
+	        autoInstalledGatewayService,
+	        installedFlags,
+	        persistGatewayRuntimeReconcile
+	      )
+	      if (foregroundResult) return foregroundResult
+	    }
+
 	    if (startClassification.stateCode === 'config_invalid') {
 	      await ensureGatewayRuntimeRevision(
 	        'gateway_official_repair_required',
@@ -2162,6 +2297,13 @@ async function ensureGatewayRunningImpl(
         await persistGatewayRuntimeReconcile({ result })
         return result
       }
+    } else if (
+      startClassification.stateCode === 'websocket_1006' ||
+      startClassification.stateCode === 'token_mismatch'
+    ) {
+      // The gateway daemon may have started successfully, but the CLI's
+      // immediate WebSocket verification failed because the server wasn't
+      // ready yet. Fall through to waitForGatewayReady instead of failing.
     } else {
       const result = buildGatewayEnsureResult(
         startResult,
@@ -2275,7 +2417,9 @@ async function ensureGatewayRunningImpl(
     if (
       !restartRepairAttempted &&
       (readyClassification.stateCode === 'token_mismatch' ||
-        readyClassification.stateCode === 'websocket_1006')
+        readyClassification.stateCode === 'websocket_1006' ||
+        readyClassification.stateCode === 'network_blocked' ||
+        readyClassification.stateCode === 'gateway_not_running')
     ) {
       restartRepairAttempted = true
       const restartRepair = await restartGatewayAndWait(options, context)
@@ -2310,6 +2454,20 @@ async function ensureGatewayRunningImpl(
       if (restartRepair.ready) {
         ready = restartRepair.ready
       }
+    }
+
+    // On Windows the scheduled-task gateway may never bind the port.
+    // Try foreground mode (gateway run) before falling through to the doctor.
+    if (!foregroundFallbackAttempted && process.platform === 'win32') {
+      foregroundFallbackAttempted = true
+      const foregroundResult = await tryForegroundGatewayFallback(
+        options,
+        context,
+        autoInstalledGatewayService,
+        installedFlags,
+        persistGatewayRuntimeReconcile
+      )
+      if (foregroundResult) return foregroundResult
     }
 
     const doctorFlow = await runOfficialGatewayRepairFlow(options, context, {
