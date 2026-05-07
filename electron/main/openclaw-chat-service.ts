@@ -7500,10 +7500,26 @@ export async function sendChatMessage(
     }
   }
 
+  updateActiveSendState({
+    status: 'sending',
+    sessionId: requestedSessionId,
+    pendingUserText: request.text,
+    streamedText: '',
+    startedAt: Date.now(),
+  })
+
   const sendPromise = sendChatMessageImpl(request, options)
   inFlightChatSendPromise = sendPromise
   try {
-    return await sendPromise
+    const result = await sendPromise
+    if (!result.ok && getActiveChatSendState().status === 'sending') {
+      updateActiveSendState({
+        status: 'failed',
+        lastError: result.messageText,
+        lastErrorCode: result.errorCode,
+      })
+    }
+    return result
   } catch (error) {
     updateActiveSendState({
       status: 'failed',
