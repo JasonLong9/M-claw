@@ -2887,6 +2887,12 @@ export async function gatewayHealth(): Promise<GatewayHealthCheckResult> {
 
 const GATEWAY_FOREGROUND_STABILIZE_MS = 1500
 
+let foregroundGatewayProcess: ChildProcess | null = null
+
+export function getForegroundGatewayProcess(): ChildProcess | null {
+  return foregroundGatewayProcess
+}
+
 async function readGatewayForegroundLog(logPath: string): Promise<string> {
   try {
     const content = await readFile(logPath, 'utf8')
@@ -2958,7 +2964,12 @@ export async function gatewayRunInBackground(options: {
     const finalize = (result: CliResult) => {
       if (settled) return
       settled = true
-      closeStreams()
+      // Only close streams when the process failed to start.
+      // On success, keep them open so the child's stdout/stderr
+      // pipes remain valid and the process can keep logging.
+      if (!settledBySpawn) {
+        closeStreams()
+      }
       resolve(result)
     }
 
@@ -2998,10 +3009,18 @@ export async function gatewayRunInBackground(options: {
           })
           return
         }
+        // Process exited after successful startup — log for diagnostics.
+        foregroundGatewayProcess = null
+        console.warn(
+          `Foreground gateway process exited (code=${String(code)}, signal=${String(signal)}). ` +
+          `Logs: ${stderrLogPath}`
+        )
       })
 
       proc.once('spawn', () => {
-        proc.unref()
+        // Keep a persistent reference so the process is not GC'd and
+        // its stdio pipes stay alive for the lifetime of the gateway.
+        foregroundGatewayProcess = proc
         setTimeout(async () => {
           if (settled) return
           settledBySpawn = true
