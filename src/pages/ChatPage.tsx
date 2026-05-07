@@ -26,13 +26,15 @@ const INITIAL_AVAILABILITY_STATE: ChatPageAvailabilityState = {
   availabilityMessage: '正在读取聊天状态...',
 }
 
+let cachedAvailabilityState: ChatPageAvailabilityState | null = null
+
 const GATEWAY_START_RECOVERY_GRACE_MS = 60_000
 const CHAT_PAGE_AUTO_GATEWAY_RETRY_COOLDOWN_MS = 15_000
 
 export default function ChatPage() {
   const navigate = useNavigate()
   const [chatAvailability, setChatAvailability] = useState<ChatPageAvailabilityState>(
-    INITIAL_AVAILABILITY_STATE
+    cachedAvailabilityState ?? INITIAL_AVAILABILITY_STATE
   )
   const [gatewayActionPending, setGatewayActionPending] = useState(false)
   const [gatewayActionMessage, setGatewayActionMessage] = useState('')
@@ -67,6 +69,7 @@ export default function ChatPage() {
 
       if (shouldApplyRequestResult(requestId, latestAvailabilityRequestIdRef.current)) {
         availabilityStateRef.current = recoveredState
+        cachedAvailabilityState = recoveredState
         setChatAvailability(recoveredState)
       }
       return recoveredState
