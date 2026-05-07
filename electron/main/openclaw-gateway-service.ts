@@ -63,6 +63,7 @@ import {
   resolveGatewayBlockingReasonFromState,
 } from './openclaw-runtime-reconcile'
 import { detectOpenClawVersionBand } from './openclaw-upgrade-compatibility'
+import { markForegroundGatewayUsed, shouldPreferForegroundGateway } from './gateway-foreground-preference'
 
 export type GatewayBootstrapPhase =
   | 'runtime-check'
@@ -565,6 +566,7 @@ async function tryForegroundGatewayFallback(
       summary: 'Gateway 已通过前台兼容模式启动并完成就绪确认。',
     }
   )
+  await markForegroundGatewayUsed().catch(() => undefined)
   await persistReconcile({
     result,
     summary: 'Gateway Windows 后台服务不可用，已切换到前台兼容运行模式。',
@@ -2007,6 +2009,79 @@ async function ensureGatewayRunningImpl(
       ? 'Gateway 正在应用启动前修补后的配置并确认运行时状态。'
       : 'Gateway 正在启动并确认当前配置已被运行时消费。'
   )
+
+  const preferForeground = await shouldPreferForegroundGateway()
+  if (preferForeground) {
+    emitGatewayBootstrapState(options, {
+      phase: 'start-command',
+      title: '正在以前台模式启动 Gateway',
+      detail: '已启用前台运行模式偏好，系统将直接在会话中运行 Gateway。',
+      progress: 40,
+    })
+    recordGatewayAction(context, 'start-gateway', [
+      'gateway',
+      'run',
+      '--port',
+      String(context.effectivePort),
+    ])
+    const prefRunResult = await gatewayRunInBackground({
+      port: context.effectivePort,
+    })
+    if (prefRunResult.ok) {
+      recordGatewayAction(context, 'wait-ready')
+      const prefReady = await waitForGatewayReady(options, context.effectivePort)
+      if (prefReady.running) {
+        appendGatewayEvidence(context, {
+          source: 'service',
+          message: 'Gateway 已根据留存偏好以前台模式启动并完成就绪确认',
+          detail: '当前机器默认使用前台模式运行 Gateway。',
+          port: context.effectivePort,
+        })
+        const result = buildGatewayEnsureResult(
+          {
+            ok: true,
+            stdout: prefReady.health.raw,
+            stderr: prefReady.health.stderr,
+            code: 0,
+          },
+          {
+            running: true,
+            autoInstalledGatewayService: false,
+            ...installedFlags,
+          },
+          context,
+          {
+            summary: 'Gateway 已根据留存偏好以前台模式启动并完成就绪确认。',
+          }
+        )
+        await persistGatewayRuntimeReconcile({
+          result,
+          summary: '当前机器默认以 Gateway 前台兼容模式运行。',
+        })
+        emitGatewayBootstrapState(options, {
+          phase: 'done',
+          title: 'Gateway 已确认可用',
+          detail: '系统已根据留存偏好以前台模式启动 Gateway，正在进入控制面板。',
+          progress: 100,
+        })
+        return result
+      }
+      appendGatewayEvidence(context, {
+        source: 'service',
+        message: '前台模式偏好启动后 Gateway 就绪确认未通过，系统将继续尝试后台服务模式',
+        detail: prefReady.health.stderr || prefReady.health.raw,
+        port: context.effectivePort,
+      })
+    } else {
+      appendGatewayEvidence(context, {
+        source: 'service',
+        message: '前台模式偏好启动失败，系统将继续尝试后台服务模式',
+        detail: combineCliOutput(prefRunResult),
+        port: context.effectivePort,
+      })
+    }
+  }
+
   emitGatewayBootstrapState(options, {
     phase: 'start-command',
     title: '正在启动 Gateway',
@@ -2075,6 +2150,7 @@ async function ensureGatewayRunningImpl(
                 summary: 'Gateway 已通过兼容前台模式启动并完成就绪确认。',
               }
             )
+            await markForegroundGatewayUsed().catch(() => undefined)
             await persistGatewayRuntimeReconcile({
               result,
               summary: 'Gateway 后台服务安装失败，已切换到前台兼容运行模式。',

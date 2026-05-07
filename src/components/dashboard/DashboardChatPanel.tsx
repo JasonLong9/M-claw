@@ -326,6 +326,8 @@ function LightSwitch() {
   )
 }
 
+let dashboardChatPanelNextMountKey = 0
+
 export default function DashboardChatPanel({
   availabilityState,
   canSend,
@@ -396,6 +398,10 @@ export default function DashboardChatPanel({
   const [memoryDraft, setMemoryDraft] = useState('')
   const [memoryScope, setMemoryScope] = useState<ChatMemoryScope>('user')
   const [editingMemoryId, setEditingMemoryId] = useState('')
+  const [_mountKey] = useState(() => {
+    dashboardChatPanelNextMountKey += 1
+    return dashboardChatPanelNextMountKey
+  })
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const activeSendSessionIdRef = useRef('')
   const sessionsRequestIdRef = useRef(0)
@@ -894,6 +900,7 @@ export default function DashboardChatPanel({
     const text = String(rawText ?? draft).trim()
     if (!text || sending || chatModelSwitching) return
 
+    const sendMountKey = dashboardChatPanelNextMountKey
     setPanelError('')
     setSending(true)
     setStopping(false)
@@ -908,7 +915,9 @@ export default function DashboardChatPanel({
       if (!gatewayRunning) {
         const ready = await onEnsureGatewayRunning()
         if (!ready) {
-          setPanelError('网关启动失败，暂时无法发送消息')
+          if (dashboardChatPanelNextMountKey === sendMountKey) {
+            setPanelError('网关启动失败，暂时无法发送消息')
+          }
           return
         }
       }
@@ -925,6 +934,7 @@ export default function DashboardChatPanel({
         sessionId,
         text,
       })
+      if (dashboardChatPanelNextMountKey !== sendMountKey) return
       if (!result.ok) {
         const failedSessionId = String(activeSendSessionIdRef.current || result.sessionId || sessionId).trim()
         if (result.errorCode !== 'canceled') {
@@ -951,10 +961,12 @@ export default function DashboardChatPanel({
         loadSessions(resolvedSessionId, { silent: true }),
       ])
     } catch (error) {
+      if (dashboardChatPanelNextMountKey !== sendMountKey) return
       setDraft(nextDraft)
       setPanelError(error instanceof Error ? error.message : String(error))
       await reconcileSessionView(String(activeSendSessionIdRef.current || sessionId).trim())
     } finally {
+      if (dashboardChatPanelNextMountKey !== sendMountKey) return
       activeSendSessionIdRef.current = ''
       setPendingUserText('')
       setStreamingAssistantText('')
@@ -1290,11 +1302,41 @@ export default function DashboardChatPanel({
         setStreamingAssistantText(payload.message.text)
         setStreamingAssistantModel(payload.message.model || '')
         setStreamingAssistantUsage(payload.message.usage)
+        setSending(false)
+        setPendingUserText('')
+        setStopping(false)
+        activeSendSessionIdRef.current = ''
+        setLastRetryText('')
+        void loadTranscript(payload.sessionId, { silent: true })
+        void loadSessions(payload.sessionId, { silent: true })
         return
       }
 
       if (payload.type === 'assistant-error' && payload.errorCode !== 'canceled') {
         setPanelError(payload.messageText)
+        setSending(false)
+        setPendingUserText('')
+        setStreamingAssistantText('')
+        setVisibleStreamingAssistantText('')
+        setStreamingAssistantModel('')
+        setStreamingAssistantUsage(undefined)
+        setAssistantStreamStarted(false)
+        setStopping(false)
+        activeSendSessionIdRef.current = ''
+        void loadTranscript(payload.sessionId, { silent: true })
+        void loadSessions(payload.sessionId, { silent: true })
+      }
+
+      if (payload.type === 'assistant-error' && payload.errorCode === 'canceled') {
+        setSending(false)
+        setPendingUserText('')
+        setStreamingAssistantText('')
+        setVisibleStreamingAssistantText('')
+        setStreamingAssistantModel('')
+        setStreamingAssistantUsage(undefined)
+        setAssistantStreamStarted(false)
+        setStopping(false)
+        activeSendSessionIdRef.current = ''
       }
     })
 
@@ -1302,6 +1344,74 @@ export default function DashboardChatPanel({
       unsubscribe()
     }
   }, [activeSessionId, showMemoryManager])
+
+  useEffect(() => {
+    let canceled = false
+    void (async () => {
+      try {
+        const sendState = await window.api.getActiveChatSendState()
+        if (canceled || !sendState) return
+
+        if (sendState.status === 'sending' && sendState.sessionId) {
+          setSending(true)
+          setAssistantStreamStarted(true)
+          setPendingUserText(sendState.pendingUserText || '')
+          setStreamingAssistantText(sendState.streamedText || '')
+          setVisibleStreamingAssistantText(sendState.streamedText || '')
+          setStreamingAssistantModel(sendState.streamedModel || '')
+          setStreamingAssistantUsage(sendState.streamedUsage)
+          activeSendSessionIdRef.current = sendState.sessionId
+          setActiveSessionId(sendState.sessionId)
+          setLastRetryText(sendState.pendingUserText || '')
+          setPanelError('')
+          setStopping(false)
+          void loadSessions(sendState.sessionId, { silent: true })
+          void loadTranscript(sendState.sessionId, { silent: true })
+          return
+        }
+
+        if (sendState.status === 'failed' && sendState.sessionId) {
+          setSending(false)
+          setAssistantStreamStarted(false)
+          setPendingUserText('')
+          setStreamingAssistantText('')
+          setVisibleStreamingAssistantText('')
+          setStreamingAssistantModel('')
+          setStreamingAssistantUsage(undefined)
+          activeSendSessionIdRef.current = ''
+          setLastRetryText(sendState.pendingUserText || '')
+          if (sendState.lastError) {
+            setPanelError(sendState.lastError)
+          }
+          void loadSessions(sendState.sessionId, { silent: true })
+          void loadTranscript(sendState.sessionId, { silent: true })
+          return
+        }
+
+        if (sendState.status === 'completed' && sendState.sessionId) {
+          setSending(false)
+          setAssistantStreamStarted(false)
+          setPendingUserText('')
+          setStreamingAssistantText('')
+          setVisibleStreamingAssistantText('')
+          setStreamingAssistantModel('')
+          setStreamingAssistantUsage(undefined)
+          activeSendSessionIdRef.current = ''
+          setLastRetryText('')
+          setPanelError('')
+          void loadSessions(sendState.sessionId, { silent: true })
+          void loadTranscript(sendState.sessionId, { silent: true })
+        }
+      } catch (error) {
+        console.error('Failed to restore active chat send state', error)
+      }
+    })()
+    return () => {
+      canceled = true
+    }
+    // Run only on mount; refs are stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     if (!copiedMessageId) return

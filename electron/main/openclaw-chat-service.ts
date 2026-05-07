@@ -1,4 +1,5 @@
 import type {
+  ActiveChatSendState,
   ChatAuthorityKind,
   ChatCapabilitySnapshot,
   ChatExternalTranscriptErrorCode,
@@ -74,7 +75,7 @@ import { getModelStatus } from './openclaw-model-config'
 import { getModelCatalog } from './openclaw-model-catalog'
 import { gatewayHealth, readConfig, readEnvFile, runCli, runCliStreaming, type RunCliStreamOptions } from './cli'
 import { probeGatewayPortReachable, probeGatewaySocketReady, readConfiguredGatewayPort } from './openclaw-gateway-probes'
-import { classifySendErrorCode } from './chat-send-error-code'
+import { classifySendErrorCode, humanizeSendError } from './chat-send-error-code'
 import { discoverOpenClawInstallations } from './openclaw-install-discovery'
 import {
   callGatewayRpcViaControlUiBrowser,
@@ -216,6 +217,20 @@ const dashboardChatAvailabilitySelectableModelsCache: {
 
 let inFlightChatSendPromise: Promise<ChatSendResult> | null = null
 
+let activeSendState: ActiveChatSendState = { status: 'idle' }
+
+export function getActiveChatSendState(): ActiveChatSendState {
+  return { ...activeSendState }
+}
+
+function updateActiveSendState(patch: Partial<ActiveChatSendState>): void {
+  activeSendState = { ...activeSendState, ...patch }
+}
+
+function resetActiveSendState(): void {
+  activeSendState = { status: 'idle' }
+}
+
 export function resetDashboardChatAvailabilityTrackerForTests(): void {
   chatAvailabilityTracker.consecutiveGatewayFailures = 0
   chatAvailabilityTracker.lastHealthyAt = 0
@@ -229,6 +244,8 @@ export function resetDashboardChatAvailabilityTrackerForTests(): void {
   dashboardChatAvailabilitySelectableModelsCache.inFlight = null
   dashboardChatAvailabilitySelectableModelsCache.inFlightFingerprint = ''
   inFlightChatSendPromise = null
+  resetActiveSendState()
+  mergedSessionsInFlight = null
   chatTraceStore.entries = []
   chatTraceStore.nextId = 1
 }
@@ -3952,41 +3969,58 @@ export function mergeChatSessionSummaries(
     .sort((left, right) => right.updatedAt - left.updatedAt)
 }
 
+let mergedSessionsInFlight: Promise<{ scopeKey: string; sessions: ChatSessionSummary[] }> | null = null
+
 async function resolveMergedChatSessions(
   options: OpenClawChatServiceOptions = {}
 ): Promise<{
   scopeKey: string
   sessions: ChatSessionSummary[]
 }> {
-  const runCommand = options.runCommand ?? defaultRunCommand
-  const discoverOpenClawFn = options.discoverOpenClaw ?? discoverOpenClawInstallations
-  const scopeKey = await resolveChatScopeKey(discoverOpenClawFn)
-  const localSessionStates = await listLocalChatSessionStates(scopeKey)
-  const localSessions = mergeChatSessionSummaries([], localSessionStates)
+  if (mergedSessionsInFlight) {
+    return mergedSessionsInFlight
+  }
 
-  try {
-    const result = await runCommand(['sessions', '--json', '--all-agents'], CHAT_SESSIONS_TIMEOUT_MS)
-    if (!result.ok) {
+  const task = (async () => {
+    const runCommand = options.runCommand ?? defaultRunCommand
+    const discoverOpenClawFn = options.discoverOpenClaw ?? discoverOpenClawInstallations
+    const scopeKey = await resolveChatScopeKey(discoverOpenClawFn)
+    const localSessionStates = await listLocalChatSessionStates(scopeKey)
+    const localSessions = mergeChatSessionSummaries([], localSessionStates)
+
+    try {
+      const result = await runCommand(['sessions', '--json', '--all-agents'], CHAT_SESSIONS_TIMEOUT_MS)
+      if (!result.ok) {
+        return {
+          scopeKey,
+          sessions: localSessions.sort((left, right) => right.updatedAt - left.updatedAt),
+        }
+      }
+
+      const parsed = parseJsonFromOutput<OpenClawSessionsPayload>(result.stdout)
+      const externalSessions = Array.isArray(parsed?.sessions)
+        ? parsed.sessions
+            .map(sanitizeExternalSession)
+            .filter((session): session is OpenClawSessionCandidate => Boolean(session))
+        : []
+      return {
+        scopeKey,
+        sessions: mergeChatSessionSummaries(externalSessions, localSessionStates),
+      }
+    } catch {
       return {
         scopeKey,
         sessions: localSessions.sort((left, right) => right.updatedAt - left.updatedAt),
       }
     }
+  })()
 
-    const parsed = parseJsonFromOutput<OpenClawSessionsPayload>(result.stdout)
-    const externalSessions = Array.isArray(parsed?.sessions)
-      ? parsed.sessions
-          .map(sanitizeExternalSession)
-          .filter((session): session is OpenClawSessionCandidate => Boolean(session))
-      : []
-    return {
-      scopeKey,
-      sessions: mergeChatSessionSummaries(externalSessions, localSessionStates),
-    }
-  } catch {
-    return {
-      scopeKey,
-      sessions: localSessions.sort((left, right) => right.updatedAt - left.updatedAt),
+  mergedSessionsInFlight = task
+  try {
+    return await task
+  } finally {
+    if (mergedSessionsInFlight === task) {
+      mergedSessionsInFlight = null
     }
   }
 }
@@ -6730,6 +6764,7 @@ async function sendChatMessageImpl(
       })
     } else {
       const messageText = bootstrapResult.message || '首条消息创建上游会话失败'
+      const humanizedMessage = humanizeSendError(messageText)
       appendChatTrace({
         operation: 'send',
         stage: 'bootstrap-session-failed',
@@ -6740,17 +6775,22 @@ async function sendChatMessageImpl(
         failureClass: classifyChatFailureClass(messageText),
         message: messageText,
       })
+      updateActiveSendState({
+        status: 'failed',
+        lastError: humanizedMessage,
+        lastErrorCode: classifySendErrorCode(messageText),
+      })
       emit({
         type: 'assistant-error',
         sessionId,
         errorCode: classifySendErrorCode(messageText),
-        messageText,
+        messageText: humanizedMessage,
       })
       return {
         ok: false,
         sessionId,
         errorCode: classifySendErrorCode(messageText),
-        messageText,
+        messageText: humanizedMessage,
       }
     }
   }
@@ -6787,11 +6827,17 @@ async function sendChatMessageImpl(
         }
       )
       if (!patchResult.ok) {
+        const patchErrorMessage = patchResult.messageText || '聊天消息发送失败'
+        updateActiveSendState({
+          status: 'failed',
+          lastError: humanizeSendError(patchErrorMessage),
+          lastErrorCode: classifySendErrorCode(patchErrorMessage),
+        })
         return {
           ok: false,
           sessionId,
-          errorCode: classifySendErrorCode(patchResult.messageText || '聊天消息发送失败'),
-          messageText: patchResult.messageText || '聊天消息发送失败',
+          errorCode: classifySendErrorCode(patchErrorMessage),
+          messageText: humanizeSendError(patchErrorMessage),
         }
       }
 
@@ -6837,6 +6883,14 @@ async function sendChatMessageImpl(
   const abortController = new AbortController()
   const sendStartedAt = now()
 
+  updateActiveSendState({
+    status: 'sending',
+    sessionId,
+    pendingUserText: text,
+    streamedText: '',
+    startedAt: sendStartedAt,
+  })
+
   emit({
     type: 'assistant-start',
     sessionId,
@@ -6870,6 +6924,11 @@ async function sendChatMessageImpl(
           streamedText = text
           streamedModel = model || streamedModel
           streamedUsage = usage || streamedUsage
+          updateActiveSendState({
+            streamedText: text,
+            streamedModel: streamedModel,
+            streamedUsage: streamedUsage,
+          })
           emit({
             type: 'assistant-delta',
             sessionId,
@@ -6926,6 +6985,7 @@ async function sendChatMessageImpl(
 
       const errorCode = result.canceled ? 'canceled' : classifySendErrorCode(messageText)
       const traceMessage = buildChatFailureTraceMessage(result, messageText)
+      const humanizedMessage = result.canceled ? messageText : humanizeSendError(messageText)
       appendChatTrace({
         operation: 'send',
         stage: result.canceled ? 'canceled' : 'failed',
@@ -6937,17 +6997,22 @@ async function sendChatMessageImpl(
         failureClass: classifyChatFailureClass(messageText),
         message: traceMessage,
       })
+      updateActiveSendState({
+        status: result.canceled ? 'idle' : 'failed',
+        lastError: humanizedMessage,
+        lastErrorCode: errorCode,
+      })
       emit({
         type: 'assistant-error',
         sessionId,
         errorCode,
-        messageText,
+        messageText: humanizedMessage,
       })
       return {
         ok: false,
         sessionId,
         errorCode,
-        messageText,
+        messageText: humanizedMessage,
       }
     }
   } finally {
@@ -6957,6 +7022,7 @@ async function sendChatMessageImpl(
   if (!result?.ok) {
     const messageText = result ? getCliFailureMessage(result, '聊天消息发送失败') : '聊天消息发送失败'
     const errorCode = classifySendErrorCode(messageText)
+    const humanizedMessage = humanizeSendError(messageText)
     const traceMessage = buildChatFailureTraceMessage(result, messageText)
     appendChatTrace({
       operation: 'send',
@@ -6969,17 +7035,22 @@ async function sendChatMessageImpl(
       failureClass: 'unknown',
       message: traceMessage,
     })
+    updateActiveSendState({
+      status: 'failed',
+      lastError: humanizedMessage,
+      lastErrorCode: errorCode,
+    })
     emit({
       type: 'assistant-error',
       sessionId,
       errorCode,
-      messageText,
+      messageText: humanizedMessage,
     })
     return {
       ok: false,
       sessionId,
       errorCode,
-      messageText,
+      messageText: humanizedMessage,
     }
   }
 
@@ -7385,6 +7456,8 @@ async function sendChatMessageImpl(
     message: assistantMessage,
   })
 
+  updateActiveSendState({ status: 'completed' })
+
   appendChatTrace({
     operation: 'send',
     stage: 'succeeded',
@@ -7431,6 +7504,13 @@ export async function sendChatMessage(
   inFlightChatSendPromise = sendPromise
   try {
     return await sendPromise
+  } catch (error) {
+    updateActiveSendState({
+      status: 'failed',
+      lastError: error instanceof Error ? error.message : String(error),
+      lastErrorCode: 'command-failed',
+    })
+    throw error
   } finally {
     if (inFlightChatSendPromise === sendPromise) {
       inFlightChatSendPromise = null
