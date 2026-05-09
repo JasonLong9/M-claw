@@ -188,6 +188,7 @@ import {
   createChatSession,
   createLocalChatSession,
   getChatCapabilitySnapshot,
+  getActiveChatSendState,
   getChatSessionDebugSnapshot,
   getChatTranscript,
   getDashboardChatAvailability,
@@ -846,6 +847,7 @@ export function registerIpcHandlers() {
     })
   )
   ipcMain.handle('chat:cancel', () => cancelActiveCommand('chat'))
+  ipcMain.handle('chat:send:state', () => getActiveChatSendState())
   ipcMain.handle('chat:transcript:clear', (_e, sessionId: string) => clearChatTranscript(sessionId))
   ipcMain.handle('chat:memory:list', (_e, request) => listChatMemories(request))
   ipcMain.handle('chat:memory:save', (_e, request) => saveChatMemory(request))
@@ -1320,5 +1322,17 @@ export function registerIpcHandlers() {
       600_000,
       'env-setup'
     )
+  })
+
+  ipcMain.handle('diagnostics:trace', (_event, entries: unknown[]) => {
+    const { createDiagnosticsFileTrace } = require('./gateway-diagnostics-log')
+    const trace = createDiagnosticsFileTrace()
+    const validPhases = new Set(['classify', 'resolve_view', 'corpus'])
+    for (const entry of entries) {
+      const e = entry as Record<string, unknown> | null | undefined
+      if (typeof e?.phase === 'string' && validPhases.has(e.phase as string)) {
+        trace.add(entry as any)
+      }
+    }
   })
 }

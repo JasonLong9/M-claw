@@ -843,14 +843,23 @@ async function runCliStreamingOnce(args: string[], options: RunCliStreamOptions 
         return runCliStreamingOnce(args, { ...options, binaryPath: bundledRuntimeBinaryPath })
       }
     }
+    // Fast path: filesystem scan without spawning where.exe / which.
+    // On Windows, where.exe can hang indefinitely when PATH contains
+    // inaccessible network drives, so probe the filesystem first.
+    const fastPath = await resolveOpenClawBinaryPath({
+      platform: process.platform,
+      env: commandProbeEnv,
+      fileExists: existsSync,
+    }).catch(() => '')
+    if (fastPath) {
+      return runCliStreamingOnce(args, { ...options, binaryPath: fastPath })
+    }
+
     const openClawCapability = await probePlatformCommandCapability('openclaw', {
       platform: process.platform,
       env: commandProbeEnv,
     })
     if (!openClawCapability.available) {
-      // where.exe / command -v couldn't find openclaw on PATH.
-      // Fall back to filesystem scan (matches how gatewayRunInBackground finds
-      // the binary on bundled/non-standard Windows installations).
       const fallbackPath = await resolveOpenClawBinaryPath({
         platform: process.platform,
         env: commandProbeEnv,
@@ -2937,6 +2946,12 @@ export async function gatewayHealth(): Promise<GatewayHealthCheckResult> {
 
 const GATEWAY_FOREGROUND_STABILIZE_MS = 1500
 
+let foregroundGatewayProcess: ChildProcess | null = null
+
+export function getForegroundGatewayProcess(): ChildProcess | null {
+  return foregroundGatewayProcess
+}
+
 async function readGatewayForegroundLog(logPath: string): Promise<string> {
   try {
     const content = await readFile(logPath, 'utf8')
@@ -3316,7 +3331,8 @@ export async function gatewayRunInBackground(options: {
     const finalize = (result: CliResult, options: { keepStreamsOpen?: boolean } = {}) => {
       if (settled) return
       settled = true
-      if (!options.keepStreamsOpen) {
+      // Keep log streams open after successful spawn so background logs continue piping.
+      if (!options.keepStreamsOpen && !settledBySpawn) {
         closeStreams()
       }
       resolve(result)
@@ -3375,9 +3391,17 @@ export async function gatewayRunInBackground(options: {
           })
           return
         }
+        // Process exited after successful startup — log for diagnostics.
+        foregroundGatewayProcess = null
+        console.warn(
+          `Foreground gateway process exited (code=${String(code)}, signal=${String(signal)}). ` +
+          `Logs: ${stderrLogPath}`
+        )
       })
 
       proc.once('spawn', () => {
+        // Keep a persistent reference so stdout/stderr pipes stay alive for diagnostics.
+        foregroundGatewayProcess = proc
         if (process.platform !== 'win32') {
           proc.unref()
         }

@@ -269,6 +269,16 @@ function extractFirstNonEmptyLine(text: string): string {
   return ''
 }
 
+const DEFAULT_COMMAND_LOOKUP_TIMEOUT_MS = 15_000
+
+function resolveCommandLookupTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = String(env.QCLAW_COMMAND_LOOKUP_TIMEOUT_MS || '').trim()
+  if (!raw) return DEFAULT_COMMAND_LOOKUP_TIMEOUT_MS
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed)) return DEFAULT_COMMAND_LOOKUP_TIMEOUT_MS
+  return Math.max(500, Math.floor(parsed))
+}
+
 function runNamedCommandLookup(invocation: CommandLookupInvocation, env: NodeJS.ProcessEnv): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = childProcess.spawn(invocation.command, invocation.args, {
@@ -279,6 +289,15 @@ function runNamedCommandLookup(invocation: CommandLookupInvocation, env: NodeJS.
       windowsHide: true,
     })
 
+    const timeoutMs = resolveCommandLookupTimeoutMs(env)
+    let settled = false
+    const timeoutId = setTimeout(() => {
+      try { child.kill() } catch { /* noop */ }
+      if (settled) return
+      settled = true
+      reject(new Error(`Command lookup timed out after ${timeoutMs}ms for ${invocation.command}`))
+    }, timeoutMs)
+
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (chunk) => {
@@ -287,8 +306,16 @@ function runNamedCommandLookup(invocation: CommandLookupInvocation, env: NodeJS.
     child.stderr.on('data', (chunk) => {
       stderr += String(chunk)
     })
-    child.on('error', reject)
+    child.on('error', (err) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeoutId)
+      reject(err)
+    })
     child.on('close', (code) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeoutId)
       const resolvedPath = extractFirstNonEmptyLine(stdout)
       if (code === 0 && resolvedPath) {
         resolve(resolvedPath)

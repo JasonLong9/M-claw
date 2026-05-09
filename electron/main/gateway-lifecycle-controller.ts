@@ -190,7 +190,20 @@ async function executeLifecycleCommandAndWaitForHealthy(
 ): Promise<GatewayReloadResult> {
   const commandResult = await command()
   if (!commandResult.ok) {
-    return commandResult
+    const classification = classifyGatewayRuntimeState({
+      ...commandResult,
+      diagnostics: { lastHealth: null, doctor: null },
+    })
+    if (
+      classification.stateCode !== 'websocket_1006' &&
+      classification.stateCode !== 'token_mismatch' &&
+      classification.stateCode !== 'network_blocked' &&
+      classification.stateCode !== 'gateway_not_running'
+    ) {
+      return commandResult
+    }
+    // The daemon may have started despite the CLI verification failing.
+    // Fall through to waitForGatewayHealthyAfterReload.
   }
 
   return waitForGatewayHealthyAfterReload(commandResult, actionLabel)
@@ -248,7 +261,20 @@ export async function reloadGatewayForConfigChange(
 
     const restartResult = await gatewayRestart()
     if (!restartResult.ok) {
-      return restartResult
+      const classification = classifyGatewayRuntimeState({
+        ...restartResult,
+        diagnostics: { lastHealth: null, doctor: null },
+      })
+      if (
+        classification.stateCode !== 'websocket_1006' &&
+        classification.stateCode !== 'token_mismatch' &&
+        classification.stateCode !== 'network_blocked' &&
+        classification.stateCode !== 'gateway_not_running'
+      ) {
+        return restartResult
+      }
+      // The daemon may have restarted despite the CLI verification failing.
+      // Fall through to waitForGatewayHealthyAfterReload.
     }
 
     return waitForGatewayHealthyAfterReload(restartResult, 'restart')

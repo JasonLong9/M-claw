@@ -4,6 +4,8 @@ import {
 } from './gateway-runtime-state'
 import { classifyGatewayRuntimeState } from './gateway-runtime-diagnostics'
 import { describeGatewayRuntimeReasonDetail } from './gateway-runtime-reason-detail'
+import type { DiagnosticsTrace } from './gateway-diagnostics-trace'
+import { sanitizeDiagnosticsText } from './gateway-diagnostics-trace'
 
 export interface GatewayBootstrapFailureView {
   title: string
@@ -62,25 +64,30 @@ function describePortOwner(evidence: GatewayRuntimeEvidence[] = []): string {
   return parts.length > 0 ? `检测到占用端口的进程：${parts.join(' / ')}` : '已识别到端口被其他进程占用'
 }
 
-function resolveReasonDetailFailureView(reasonCode: string | undefined): GatewayBootstrapFailureView | null {
+function resolveReasonDetailFailureView(
+  reasonCode: string | undefined,
+  trace?: DiagnosticsTrace,
+): GatewayBootstrapFailureView | null {
   if (reasonCode === 'device_token_mismatch') {
+    trace?.add({ phase: 'resolve_view', step: 'reason_detail', decision: `code=device_token_mismatch`, result: '控制界面与本地 Gateway 的设备令牌不一致' })
     return createView(
       '控制界面与本地 Gateway 的设备令牌不一致',
       '系统已直接复用 OpenClaw Control UI 的连接结果，确认当前控制界面连本机 Gateway 时被 device token 不一致拒绝。这更像是本机控制面与运行中的 Gateway 状态错位，不是远端模型上游故障。',
       [
-        '先点“重试启动 Gateway”，让程序重新加载当前机器上的运行时令牌。',
-        '如果这是换机后的首次运行，建议点“重新配置向导”，在本机重新完成认证与初始化。',
+        '先点”重试启动 Gateway”，让程序重新加载当前机器上的运行时令牌。',
+        '如果这是换机后的首次运行，建议点”重新配置向导”，在本机重新完成认证与初始化。',
         '若仍反复出现，优先排查是否还存在旧 Gateway 进程、旧 user data 或旧 token 注入。',
       ]
     )
   }
 
   if (reasonCode === 'gateway_auth_token_mismatch' || reasonCode === 'token_mismatch') {
+    trace?.add({ phase: 'resolve_view', step: 'reason_detail', decision: `code=${reasonCode}`, result: '控制界面与 Gateway 的 auth token 不一致' })
     return createView(
       '控制界面与 Gateway 的 auth token 不一致',
       '系统已直接复用 OpenClaw Control UI 的连接结果，确认当前控制界面握手时使用的 auth token 与运行中的 Gateway 不一致。',
       [
-        '先点“重试启动 Gateway”，让程序重新加载当前机器上的配置和 Gateway token。',
+        '先点”重试启动 Gateway”，让程序重新加载当前机器上的配置和 Gateway token。',
         '如果最近改过配置文件、环境变量或执行过升级，建议重新走一次本机配置流程。',
         '若问题反复出现，优先检查是否有旧 Gateway 服务还在消费旧 token。',
       ]
@@ -92,9 +99,11 @@ function resolveReasonDetailFailureView(reasonCode: string | undefined): Gateway
 
 function resolveStructuredGatewayFailureView(
   stateCode: GatewayRuntimeStateCode,
-  evidence: GatewayRuntimeEvidence[]
+  evidence: GatewayRuntimeEvidence[],
+  trace?: DiagnosticsTrace,
 ): GatewayBootstrapFailureView | null {
   if (stateCode === 'service_missing' || stateCode === 'service_install_failed' || stateCode === 'service_loaded_but_stale') {
+    trace?.add({ phase: 'resolve_view', step: 'structured', decision: `stateCode=${stateCode}`, result: '这台机器上的 Gateway 后台服务还没真正准备好' })
     return createView(
       '这台机器上的 Gateway 后台服务还没真正准备好',
       '系统已经尝试自动启动 Gateway，但后台服务本身没有成功加载完成，当前还不能安全放行到控制面板。',
@@ -107,6 +116,7 @@ function resolveStructuredGatewayFailureView(
   }
 
   if (stateCode === 'port_conflict_same_gateway' || stateCode === 'port_conflict_foreign_process') {
+    trace?.add({ phase: 'resolve_view', step: 'structured', decision: `stateCode=${stateCode}`, result: 'Gateway 启动时遇到了本机端口占用' })
     return createView(
       'Gateway 启动时遇到了本机端口占用',
       `系统已经识别到 Gateway 端口冲突。${describePortOwner(evidence)}。`,
@@ -121,6 +131,7 @@ function resolveStructuredGatewayFailureView(
   }
 
   if (stateCode === 'token_mismatch' || stateCode === 'websocket_1006' || stateCode === 'auth_missing') {
+    trace?.add({ phase: 'resolve_view', step: 'structured', decision: `stateCode=${stateCode}`, result: '这台机器上的模型认证还没准备好' })
     return createView(
       '这台机器上的模型认证还没准备好',
       '系统已经发出 Gateway 启动或重载指令，但当前机器上的 API Key、OAuth 登录状态、运行中的 token，或网关握手状态还没有和最新配置保持一致。',
@@ -133,6 +144,7 @@ function resolveStructuredGatewayFailureView(
   }
 
   if (stateCode === 'plugin_load_failure') {
+    trace?.add({ phase: 'resolve_view', step: 'structured', decision: 'stateCode=plugin_load_failure', result: 'Gateway 依赖的插件没有正常加载' })
     return createView(
       'Gateway 依赖的插件没有正常加载',
       '当前机器上的插件文件、allowlist 或插件导出状态仍然不一致，所以网关不能安全启动。',
@@ -145,6 +157,7 @@ function resolveStructuredGatewayFailureView(
   }
 
   if (stateCode === 'plugin_allowlist_warning') {
+    trace?.add({ phase: 'resolve_view', step: 'structured', decision: 'stateCode=plugin_allowlist_warning', result: 'Gateway 检测到外部插件 allowlist 提示' })
     return createView(
       'Gateway 检测到外部插件 allowlist 提示',
       '当前更像是 Gateway 发现了未显式写入 allowlist 的外部插件，并输出了安全提示；这类日志不等于插件本身加载失败。',
@@ -157,6 +170,7 @@ function resolveStructuredGatewayFailureView(
   }
 
   if (stateCode === 'config_invalid') {
+    trace?.add({ phase: 'resolve_view', step: 'structured', decision: 'stateCode=config_invalid', result: 'Gateway 配置在这台机器上还不完整' })
     return createView(
       'Gateway 配置在这台机器上还不完整',
       '系统已经尝试启动 Gateway，但共享配置、模型配置或提供商设置还不足以让当前机器顺利完成启动。',
@@ -169,6 +183,7 @@ function resolveStructuredGatewayFailureView(
   }
 
   if (stateCode === 'network_blocked') {
+    trace?.add({ phase: 'resolve_view', step: 'structured', decision: 'stateCode=network_blocked', result: 'Gateway 更像是被网络或代理环境卡住了' })
     return createView(
       'Gateway 更像是被网络或代理环境卡住了',
       '系统补充诊断后，问题更接近这台机器当前无法顺利访问上游服务，或者代理、证书、网络出口配置和原机器不一致。',
@@ -183,10 +198,20 @@ function resolveStructuredGatewayFailureView(
   return null
 }
 
-export function resolveGatewayBootstrapFailureView(result: unknown): GatewayBootstrapFailureView {
-  const classification = classifyGatewayRuntimeState(result)
+export function resolveGatewayBootstrapFailureView(
+  result: unknown,
+  trace?: DiagnosticsTrace,
+): GatewayBootstrapFailureView {
+  const classification = classifyGatewayRuntimeState(result, trace)
   const corpus = buildSearchCorpus(result)
-  const reasonView = resolveReasonDetailFailureView(classification.reasonDetail?.code)
+  trace?.add({
+    phase: 'corpus',
+    step: 'resolve_view_corpus',
+    decision: corpus ? `corpus length=${corpus.length}` : 'corpus empty',
+    result: 'corpus_recorded',
+    corpus_snippet: sanitizeDiagnosticsText(corpus, 2000),
+  })
+  const reasonView = resolveReasonDetailFailureView(classification.reasonDetail?.code, trace)
   if (reasonView) return reasonView
 
   if (
@@ -197,17 +222,19 @@ export function resolveGatewayBootstrapFailureView(result: unknown): GatewayBoot
       corpus
     )
   ) {
-    const serviceView = resolveStructuredGatewayFailureView('service_missing', classification.evidence)
+    trace?.add({ phase: 'resolve_view', step: 'service_signal_override', decision: `stateCode=${classification.stateCode} with service signal in corpus → override to service_missing`, result: '这台机器上的 Gateway 后台服务还没真正准备好' })
+    const serviceView = resolveStructuredGatewayFailureView('service_missing', classification.evidence, trace)
     if (serviceView) return serviceView
   }
 
   const reasonDetailCopy = describeGatewayRuntimeReasonDetail(classification.reasonDetail)
   if (reasonDetailCopy) {
+    trace?.add({ phase: 'resolve_view', step: 'reason_detail_copy', decision: 'reason detail present', result: '控制界面返回了更具体的连接原因' })
     return createView(
       '控制界面返回了更具体的连接原因',
       `系统已直接复用 OpenClaw Control UI 的连接结果：${reasonDetailCopy}。`,
       [
-        '先点“重试启动 Gateway”，观察当前机器上的运行时状态是否能重新对齐。',
+        '先点”重试启动 Gateway”，观察当前机器上的运行时状态是否能重新对齐。',
         '如果这是换机或迁移后的首次运行，建议重新走一次本机配置向导。',
         '若仍失败，再结合原始日志继续排查当前机器上的本地 Gateway 运行态。',
       ]
@@ -216,13 +243,15 @@ export function resolveGatewayBootstrapFailureView(result: unknown): GatewayBoot
 
   const structuredView = resolveStructuredGatewayFailureView(
     classification.stateCode,
-    classification.evidence
+    classification.evidence,
+    trace,
   )
   if (structuredView) return structuredView
 
   if (
     /gateway service not loaded|launchctl|daemon|service unavailable|service failed/i.test(corpus)
   ) {
+    trace?.add({ phase: 'resolve_view', step: 'corpus_service', decision: 'matched: service/daemon keywords', result: '这台机器上的 Gateway 后台服务还没真正准备好' })
     return createView(
       '这台机器上的 Gateway 后台服务还没真正准备好',
       '系统已经尝试自动启动 Gateway，但后台服务本身没有成功加载完成，当前还不能安全放行到控制面板。',
@@ -237,6 +266,7 @@ export function resolveGatewayBootstrapFailureView(result: unknown): GatewayBoot
   if (
     /\beaddrinuse\b|address already in use|port\b.*in use|listen\b.*in use|bind\b.*failed/i.test(corpus)
   ) {
+    trace?.add({ phase: 'resolve_view', step: 'corpus_port', decision: 'matched: port conflict keywords', result: 'Gateway 启动时遇到了本机端口占用' })
     return createView(
       'Gateway 启动时遇到了本机端口占用',
       '系统自检更像是本机已经有别的进程占用了 Gateway 需要的端口，因此网关没有办法完成就绪确认。',
@@ -251,6 +281,7 @@ export function resolveGatewayBootstrapFailureView(result: unknown): GatewayBoot
   if (
     /\bapi[_ -]?key\b|oauth|token|unauthorized|forbidden|not logged in|credential|auth(?:entication)?|login|expired/i.test(corpus)
   ) {
+    trace?.add({ phase: 'resolve_view', step: 'corpus_auth', decision: 'matched: auth-related keywords (api_key, oauth, token, unauthorized...)', result: '这台机器上的模型认证还没准备好' })
     return createView(
       '这台机器上的模型认证还没准备好',
       '系统已经发出 Gateway 启动指令，但补充诊断更像是当前机器缺少可用的 API Key、OAuth 登录状态，或原有登录没有在本机生效。',
@@ -265,6 +296,7 @@ export function resolveGatewayBootstrapFailureView(result: unknown): GatewayBoot
   if (
     /\benotfound\b|\beconnrefused\b|\beconnreset\b|timed out|timeout|network|dns|proxy|certificate|tls|ssl|socket hang up|fetch failed|service unavailable/i.test(corpus)
   ) {
+    trace?.add({ phase: 'resolve_view', step: 'corpus_network', decision: 'matched: network/timeout/proxy keywords', result: 'Gateway 更像是被网络或代理环境卡住了' })
     return createView(
       'Gateway 更像是被网络或代理环境卡住了',
       '系统补充诊断后，问题更接近这台机器当前无法顺利访问上游服务，或者代理、证书、网络出口配置和原机器不一致。',
@@ -277,8 +309,24 @@ export function resolveGatewayBootstrapFailureView(result: unknown): GatewayBoot
   }
 
   if (
+    /does not have an adjacent or parent.*package\.json|openclaw package\.json.*not found|node_modules[\\/]openclaw[\\/]package\.json/i.test(corpus)
+  ) {
+    trace?.add({ phase: 'resolve_view', step: 'corpus_package_json', decision: 'matched: openclaw package.json not found', result: '内置 OpenClaw 运行时还没有完成本地部署' })
+    return createView(
+      '内置 OpenClaw 运行时还没有完成本地部署',
+      '系统已在当前机器上检测到内置 OpenClaw 二进制文件，但与其配套的 openclaw 软件包（node_modules/openclaw/package.json）尚未安装到运行目录，所以 Gateway 无法通过该运行时正常启动。',
+      [
+        '在开发环境下，请先执行一次构建流程，将 openclaw tgz 部署到 bundled runtime 目录。',
+        '如果是首次运行，请确保已正确打包应用或已从正式发布渠道安装。',
+        '若你同时安装了全局 openclaw 命令，系统会优先尝试使用全局命令；若仍失败，可先通过 npm install -g openclaw 补齐全局安装。',
+      ]
+    )
+  }
+
+  if (
     /config|openclaw\.json|provider|model|missing required|invalid|parse|json/i.test(corpus)
   ) {
+    trace?.add({ phase: 'resolve_view', step: 'corpus_config', decision: 'matched: config/provider/model keywords', result: 'Gateway 配置在这台机器上还不完整' })
     return createView(
       'Gateway 配置在这台机器上还不完整',
       '系统已经尝试启动 Gateway，但补充诊断显示共享配置、模型配置或提供商设置还不足以让当前机器顺利完成启动。',
@@ -290,6 +338,7 @@ export function resolveGatewayBootstrapFailureView(result: unknown): GatewayBoot
     )
   }
 
+  trace?.add({ phase: 'resolve_view', step: 'fallback', decision: 'no specific signal matched', result: 'Gateway 还没有完成就绪确认' })
   return createView(
     'Gateway 还没有完成就绪确认',
     '系统已经执行了启动和补充诊断，但仍然没能在当前机器上确认 Gateway 已经可用。这个问题通常与本机配置、认证、网络或后台服务状态有关。',

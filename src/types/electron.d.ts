@@ -1662,6 +1662,19 @@ interface ChatSendResult {
   messageText?: string
 }
 
+interface ActiveChatSendState {
+  status: 'idle' | 'sending' | 'failed' | 'completed'
+  sessionId?: string
+  requestId?: string
+  pendingUserText?: string
+  streamedText?: string
+  streamedModel?: string
+  streamedUsage?: ChatUsage
+  startedAt?: number
+  lastError?: string
+  lastErrorCode?: ChatSendErrorCode
+}
+
 interface ChatPatchSessionModelRequest {
   sessionId: string
   model: string
@@ -1806,6 +1819,7 @@ interface ElectronApi {
     requestId?: string
   }) => Promise<GatewayEnsureRunningResult>
   onGatewayBootstrapState: (listener: (payload: GatewayBootstrapStateEvent) => void) => () => void
+  saveDiagnosticsTrace: (entries: unknown[]) => Promise<void>
 
   // Status
   getStatus: () => Promise<CliResult>
@@ -1887,6 +1901,7 @@ interface ElectronApi {
   getChatTranscript: (sessionId: string) => Promise<ChatTranscript>
   sendChatMessage: (request: ChatSendRequest) => Promise<ChatSendResult>
   cancelChatMessage: () => Promise<boolean>
+  getActiveChatSendState: () => Promise<ActiveChatSendState>
   clearChatTranscript: (sessionId: string) => Promise<ChatClearLocalTranscriptResult>
   listChatMemories: (request?: ChatMemoryListRequest) => Promise<ChatMemoryEntry[]>
   saveChatMemory: (request: ChatMemorySaveRequest) => Promise<ChatMemorySaveResult>

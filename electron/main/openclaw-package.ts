@@ -142,6 +142,16 @@ export function getCommandPathLookupInvocation(
   return getNamedCommandLookupInvocation(commandName, platformOrRuntime)
 }
 
+const DEFAULT_COMMAND_LOOKUP_TIMEOUT_MS = 15_000
+
+function resolveCommandLookupTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = String(env.QCLAW_COMMAND_LOOKUP_TIMEOUT_MS || '').trim()
+  if (!raw) return DEFAULT_COMMAND_LOOKUP_TIMEOUT_MS
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed)) return DEFAULT_COMMAND_LOOKUP_TIMEOUT_MS
+  return Math.max(500, Math.floor(parsed))
+}
+
 function runCommandPathLookup(commandName: string, runtime: CommandLookupRuntime): Promise<string> {
   return new Promise((resolve, reject) => {
     const invocation = getCommandPathLookupInvocation(commandName, runtime)
@@ -153,6 +163,15 @@ function runCommandPathLookup(commandName: string, runtime: CommandLookupRuntime
       windowsHide: true,
     })
 
+    const timeoutMs = resolveCommandLookupTimeoutMs(runtime.env)
+    let settled = false
+    const timeoutId = setTimeout(() => {
+      try { child.kill() } catch { /* noop */ }
+      if (settled) return
+      settled = true
+      reject(new Error(`Command lookup timed out after ${timeoutMs}ms for ${commandName}`))
+    }, timeoutMs)
+
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (chunk) => {
@@ -161,8 +180,16 @@ function runCommandPathLookup(commandName: string, runtime: CommandLookupRuntime
     child.stderr.on('data', (chunk) => {
       stderr += String(chunk)
     })
-    child.on('error', reject)
+    child.on('error', (err) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeoutId)
+      reject(err)
+    })
     child.on('close', (code) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeoutId)
       const resolved = extractFirstNonEmptyLine(stdout)
       if (code === 0 && resolved) {
         resolve(resolved)
@@ -183,6 +210,15 @@ function runDirectCommand(command: string, args: string[], runtime: CommandLooku
       windowsHide: true,
     })
 
+    const timeoutMs = resolveCommandLookupTimeoutMs(runtime.env)
+    let settled = false
+    const timeoutId = setTimeout(() => {
+      try { child.kill() } catch { /* noop */ }
+      if (settled) return
+      settled = true
+      reject(new Error(`Direct command timed out after ${timeoutMs}ms: ${command} ${args.join(' ')}`))
+    }, timeoutMs)
+
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (chunk) => {
@@ -191,8 +227,16 @@ function runDirectCommand(command: string, args: string[], runtime: CommandLooku
     child.stderr.on('data', (chunk) => {
       stderr += String(chunk)
     })
-    child.on('error', reject)
+    child.on('error', (err) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeoutId)
+      reject(err)
+    })
     child.on('close', (code) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeoutId)
       if (code === 0) {
         resolve(stdout)
         return
@@ -370,6 +414,12 @@ export async function resolveOpenClawBinaryPath(
   if (bundledRuntimeBinaryPath) {
     return bundledRuntimeBinaryPath
   }
+
+  // Fast path: filesystem scan without spawning where.exe / which.
+  // On Windows, where.exe can hang indefinitely when PATH contains
+  // inaccessible network drives. Pure fs checks avoid that entirely.
+  const fastCandidate = findKnownCommandCandidate(runtime, null, options.fileExists)
+  if (fastCandidate) return fastCandidate
 
   try {
     const binaryPath = await resolveCommandPath('openclaw')

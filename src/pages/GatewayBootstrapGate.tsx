@@ -15,6 +15,7 @@ import {
   resolveGatewayBootstrapFailureView,
   type GatewayBootstrapFailureView,
 } from '../shared/gateway-bootstrap-diagnostics'
+import { createInMemoryTrace } from '../shared/gateway-diagnostics-trace'
 import {
   getUpstreamModelStatusLike,
   readOpenClawUpstreamModelState,
@@ -44,6 +45,7 @@ export interface DashboardEntryBootstrapApi {
   getModelStatus: () => Promise<{ ok: boolean; data?: Record<string, any> | null }>
   pairingFeishuStatus: (accountIds: string[]) => Promise<Record<string, { pairedCount: number; pairedUsers: string[] }>>
   getFeishuRuntimeStatus: () => Promise<Record<string, FeishuRuntimeStatusSummary>>
+  saveDiagnosticsTrace: (entries: unknown[]) => Promise<void>
 }
 
 interface GatewayHealthCheckResult {
@@ -264,6 +266,13 @@ export async function runDashboardEntryBootstrapFlow(
     detail: string
   ) => options.onTaskUpdate?.(key, status, detail)
 
+  const traceAndResolveView = (input: unknown): GatewayBootstrapFailureView => {
+    const { trace, entries } = createInMemoryTrace()
+    const view = resolveGatewayBootstrapFailureView(input, trace)
+    api.saveDiagnosticsTrace(entries()).catch(() => {})
+    return view
+  }
+
   notify('config', 'active', '正在读取共享配置...')
   const config = await api.readConfig().catch((error) => {
     notify('config', 'error', '共享配置读取失败，当前无法安全进入控制面板。')
@@ -281,12 +290,12 @@ export async function runDashboardEntryBootstrapFlow(
     skipRuntimePrecheck: true,
     requestId: 'dashboard-entry-bootstrap',
   }).catch((error) => {
-    const failureView = resolveGatewayBootstrapFailureView(normalizeGatewayFailureInput(error))
+    const failureView = traceAndResolveView(normalizeGatewayFailureInput(error))
     notify('gateway', 'error', failureView.detail)
     throw failureView
   })
   if (!ensureResult.ok || ensureResult.running !== true) {
-    const failureView = resolveGatewayBootstrapFailureView(ensureResult)
+    const failureView = traceAndResolveView(ensureResult)
     notify('gateway', 'error', failureView.detail)
     throw failureView
   }
@@ -306,11 +315,28 @@ export async function runDashboardEntryBootstrapFlow(
     runtimeStore,
   })
   if (health?.running === false) {
-    const failureView = resolveGatewayBootstrapFailureView(
-      buildGatewayHealthFailureInput(ensureResult, health, chatAvailability)
-    )
-    notify('gateway', 'error', failureView.detail)
-    throw failureView
+    // The CLI health check (`openclaw health --json`) can return false
+    // negatives when the binary resolution path is degraded (e.g. incomplete
+    // bundled runtime, where.exe hanging on network drives). When other
+    // signals confirm the Gateway is actually available — ensureGatewayRunning
+    // already verified via port/socket probes, the runtime store says ready,
+    // or chat availability detected a running Gateway — accept degraded
+    // readiness instead of blocking entry to the dashboard.
+    if (
+      runtimeHintsRunning ||
+      chatAvailability?.gatewayRunning === true ||
+      ensureResult.running === true
+    ) {
+      softWarnings.push(
+        'Gateway 健康探针暂未确认可用，但运行时状态已指示 Gateway 正在运行，控制面板会按已启动状态继续。'
+      )
+    } else {
+      const failureView = traceAndResolveView(
+        buildGatewayHealthFailureInput(ensureResult, health, chatAvailability)
+      )
+      notify('gateway', 'error', failureView.detail)
+      throw failureView
+    }
   }
   if (
     health === null

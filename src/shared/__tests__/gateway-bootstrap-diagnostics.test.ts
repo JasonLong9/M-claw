@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { resolveGatewayBootstrapFailureView } from '../gateway-bootstrap-diagnostics'
+import { createInMemoryTrace } from '../gateway-diagnostics-trace'
 
 describe('resolveGatewayBootstrapFailureView', () => {
   it('explains auth-like failures in user-friendly language', () => {
@@ -140,5 +141,63 @@ describe('resolveGatewayBootstrapFailureView', () => {
 
     expect(view.title).toContain('allowlist')
     expect(view.detail).toContain('不等于插件本身加载失败')
+  })
+
+  it('populates trace with the resolve view path when trace is provided', () => {
+    const { trace, entries } = createInMemoryTrace()
+    resolveGatewayBootstrapFailureView({ stderr: 'missing api key' }, trace)
+
+    const all = entries()
+    expect(all.length).toBeGreaterThanOrEqual(1)
+    // Should contain classify, resolve_view, and corpus phases
+    const phases = all.map(e => e.phase)
+    expect(phases).toContain('classify')
+    expect(phases).toContain('resolve_view')
+    expect(phases).toContain('corpus')
+  })
+
+  it('records structured stateCode branch in trace', () => {
+    const { trace, entries } = createInMemoryTrace()
+    resolveGatewayBootstrapFailureView({
+      stateCode: 'token_mismatch',
+      evidence: [],
+    }, trace)
+
+    const all = entries()
+    const resolveEntries = all.filter(e => e.phase === 'resolve_view')
+    expect(resolveEntries.length).toBeGreaterThanOrEqual(1)
+    expect(resolveEntries.some(e => e.result === '这台机器上的模型认证还没准备好')).toBe(true)
+  })
+
+  it('records service signal override in trace', () => {
+    const { trace, entries } = createInMemoryTrace()
+    resolveGatewayBootstrapFailureView({
+      stateCode: 'token_mismatch',
+      diagnostics: {
+        doctor: {
+          ok: false,
+          stdout: 'Gateway service not installed',
+          stderr: '',
+          code: 1,
+        },
+      },
+    }, trace)
+
+    const all = entries()
+    expect(all.some(e => e.step === 'service_signal_override')).toBe(true)
+  })
+
+  it('does not throw when trace is omitted (backward compatible)', () => {
+    const view = resolveGatewayBootstrapFailureView({ stderr: 'some error' })
+    expect(view.title).toContain('还没有完成就绪确认')
+  })
+
+  it('records search corpus in resolve view trace with sanitized content', () => {
+    const { trace, entries } = createInMemoryTrace()
+    resolveGatewayBootstrapFailureView({ stderr: 'missing api key' }, trace)
+
+    const corpusEntries = entries().filter(e => e.phase === 'corpus' && e.step === 'resolve_view_corpus')
+    expect(corpusEntries.length).toBe(1)
+    expect(corpusEntries[0].corpus_snippet).toContain('missing api key')
   })
 })

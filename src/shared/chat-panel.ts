@@ -32,6 +32,8 @@ export type ChatSendErrorCode =
   | 'timeout'
   | 'invalid-input'
   | 'canceled'
+  | 'http-4xx'
+  | 'http-5xx'
 
 export type ChatExternalTranscriptErrorCode =
   | 'session-key-missing'
@@ -228,6 +230,21 @@ export interface ChatPatchSessionModelResult {
 export interface ChatClearLocalTranscriptResult {
   ok: boolean
   sessionId: string
+}
+
+export type ActiveChatSendStatus = 'idle' | 'sending' | 'failed' | 'completed'
+
+export interface ActiveChatSendState {
+  status: ActiveChatSendStatus
+  sessionId?: string
+  requestId?: string
+  pendingUserText?: string
+  streamedText?: string
+  streamedModel?: string
+  streamedUsage?: ChatUsage
+  startedAt?: number
+  lastError?: string
+  lastErrorCode?: ChatSendErrorCode
 }
 
 export type ChatStreamEvent =
