@@ -30,6 +30,38 @@ interface CommandControlState {
   cancelRequested: boolean
 }
 
+const isWin = process.platform === 'win32'
+
+function terminateChildProcess(proc: ChildProcess): void {
+  try {
+    // On Windows, child_process.kill() ignores the signal argument and
+    // always uses TerminateProcess (forceful). Call without arguments to
+    // match the platform's default behavior: SIGTERM on POSIX,
+    // TerminateProcess on Windows.
+    proc.kill()
+  } catch {
+    // Ignore process-kill errors and continue best-effort cancellation.
+  }
+}
+
+function forceKillProcessTree(proc: ChildProcess): void {
+  if (!proc.pid) return
+  try {
+    if (isWin) {
+      // On Windows, child_process.kill() always uses TerminateProcess
+      // (forceful), so a repeated kill is the best we can do for the
+      // follow-up stage.  The first call in terminateChildProcess already
+      // terminated the process; this handles any edge case where the
+      // shell wrapper needed an extra nudge.
+      proc.kill()
+    } else {
+      process.kill(proc.pid, 'SIGKILL')
+    }
+  } catch {
+    // Ignore if process already exited.
+  }
+}
+
 const controlState = new Map<CommandControlDomain, CommandControlState>()
 const cancelInFlight = new Map<CommandControlDomain, Promise<boolean>>()
 
@@ -49,18 +81,9 @@ function getDomainState(domain: CommandControlDomain): CommandControlState {
 
 function markProcessCanceledAndTerminate(proc: ChildProcess, waitMs: number, state: CommandControlState): void {
   state.canceledProcesses.add(proc)
-  try {
-    proc.kill('SIGTERM')
-  } catch {
-    // Ignore process-kill errors and continue best-effort cancellation.
-  }
+  terminateChildProcess(proc)
   setTimeout(() => {
-    if (!proc.pid) return
-    try {
-      process.kill(proc.pid, 'SIGKILL')
-    } catch {
-      // ignore if process already exited
-    }
+    forceKillProcessTree(proc)
   }, waitMs)
 }
 
@@ -126,21 +149,12 @@ async function cancelActiveProcessImpl(
     if (activeProcesses.length === 0) return true
     for (const proc of activeProcesses) {
       state.canceledProcesses.add(proc)
-      try {
-        proc.kill('SIGTERM')
-      } catch {
-        // Ignore process-kill errors and continue best-effort cancellation.
-      }
+      terminateChildProcess(proc)
     }
 
     await new Promise((resolve) => setTimeout(resolve, waitMs))
     for (const proc of activeProcesses) {
-      if (!proc.pid) continue
-      try {
-        process.kill(proc.pid, 'SIGKILL')
-      } catch {
-        // ignore if process already exited
-      }
+      forceKillProcessTree(proc)
     }
     return true
   } finally {

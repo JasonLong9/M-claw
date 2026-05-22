@@ -7,6 +7,8 @@ import {
   setActiveProcess,
 } from '../command-control'
 
+const isWin = process.platform === 'win32'
+
 class FakeProcess {
   pid: number
   kill = vi.fn(() => true)
@@ -45,8 +47,10 @@ describe('command-control', () => {
     const canceled = await pendingCancel
 
     expect(canceled).toBe(true)
-    expect(fake.kill).toHaveBeenCalledWith('SIGTERM')
-    expect(processKillSpy).toHaveBeenCalledWith(fake.pid, 'SIGKILL')
+    expect(fake.kill).toHaveBeenCalledWith()
+    if (!isWin) {
+      expect(processKillSpy).toHaveBeenCalledWith(fake.pid, 'SIGKILL')
+    }
   })
 
   it('returns false when there is no active process', async () => {
@@ -79,7 +83,7 @@ describe('command-control', () => {
     const canceled = await pendingCancel
 
     expect(canceled).toBe(true)
-    expect(chatProcess.kill).toHaveBeenCalledWith('SIGTERM')
+    expect(chatProcess.kill).toHaveBeenCalledWith()
     expect(globalProcess.kill).not.toHaveBeenCalled()
 
     const pendingGlobalCancel = cancelActiveProcess('global', 0)
@@ -112,8 +116,13 @@ describe('command-control', () => {
 
     expect(firstResult).toBe(true)
     expect(secondResult).toBe(true)
-    expect(fake.kill).toHaveBeenCalledTimes(1)
-    expect(processKillSpy).toHaveBeenCalledTimes(1)
+    // On Windows, forceKillProcessTree also calls proc.kill() (TerminateProcess).
+    // On POSIX, only terminateChildProcess calls proc.kill(); the force stage
+    // uses process.kill(pid, SIGKILL) which hits a different spy.
+    expect(fake.kill).toHaveBeenCalledTimes(isWin ? 2 : 1)
+    if (!isWin) {
+      expect(processKillSpy).toHaveBeenCalledTimes(1)
+    }
   })
 
   it('supports batch cancel for multiple domains', async () => {
@@ -145,10 +154,12 @@ describe('command-control', () => {
     const canceled = await pendingCancel
 
     expect(canceled).toBe(true)
-    expect(first.kill).toHaveBeenCalledWith('SIGTERM')
-    expect(second.kill).toHaveBeenCalledWith('SIGTERM')
-    expect(processKillSpy).toHaveBeenCalledWith(22001, 'SIGKILL')
-    expect(processKillSpy).toHaveBeenCalledWith(22002, 'SIGKILL')
+    expect(first.kill).toHaveBeenCalledWith()
+    expect(second.kill).toHaveBeenCalledWith()
+    if (!isWin) {
+      expect(processKillSpy).toHaveBeenCalledWith(22001, 'SIGKILL')
+      expect(processKillSpy).toHaveBeenCalledWith(22002, 'SIGKILL')
+    }
     expect(await cancelActiveProcess('oauth', 0)).toBe(false)
   })
 
@@ -166,9 +177,11 @@ describe('command-control', () => {
     const canceled = await pendingCancel
 
     expect(canceled).toBe(true)
-    expect(first.kill).toHaveBeenCalledWith('SIGTERM')
-    expect(second.kill).toHaveBeenCalledWith('SIGTERM')
-    expect(processKillSpy).toHaveBeenCalledWith(10001, 'SIGKILL')
-    expect(processKillSpy).toHaveBeenCalledWith(10002, 'SIGKILL')
+    expect(first.kill).toHaveBeenCalledWith()
+    expect(second.kill).toHaveBeenCalledWith()
+    if (!isWin) {
+      expect(processKillSpy).toHaveBeenCalledWith(10001, 'SIGKILL')
+      expect(processKillSpy).toHaveBeenCalledWith(10002, 'SIGKILL')
+    }
   })
 })
