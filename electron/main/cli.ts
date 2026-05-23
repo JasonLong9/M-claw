@@ -3,7 +3,7 @@
  */
 import type { ChildProcess } from 'node:child_process'
 import { homedir, tmpdir, userInfo } from 'os'
-import { dirname, join, resolve, sep } from 'path'
+import { basename, dirname, join, resolve, sep } from 'path'
 import { access, readFile, writeFile, mkdir, stat, unlink, cp, rm } from 'fs/promises'
 import { createWriteStream, existsSync } from 'fs'
 import https from 'https'
@@ -369,10 +369,25 @@ async function buildManagedOpenClawRuntimeEnv(
   const openClawPaths = await getOpenClawPaths().catch(() => null)
   if (!openClawPaths) return baseEnv
   const managedHomeEnvRoot = resolveManagedOpenClawHomeEnvRoot(openClawPaths)
+
+  // Explicitly set OPENCLAW_STATE_DIR so the CLI never derives it as
+  // <HOME>/.openclaw — which would double-nest when HOME already points
+  // inside the .openclaw directory (e.g. …/openclaw-state/.openclaw/.openclaw).
+  const resolvedHomeDir = String(openClawPaths?.homeDir || '').trim()
+  let stateDir = String(baseEnv.OPENCLAW_STATE_DIR || '').trim()
+  if (!stateDir && resolvedHomeDir) {
+    const leaf = basename(resolvedHomeDir).toLowerCase()
+    stateDir =
+      leaf === '.openclaw'
+        ? resolvedHomeDir
+        : join(resolvedHomeDir, '.openclaw')
+  }
+
   return {
     ...baseEnv,
     OPENCLAW_HOME: String(baseEnv.OPENCLAW_HOME || managedHomeEnvRoot || '').trim(),
     OPENCLAW_CONFIG_PATH: String(baseEnv.OPENCLAW_CONFIG_PATH || openClawPaths.configFile || '').trim(),
+    ...(stateDir ? { OPENCLAW_STATE_DIR: stateDir } : {}),
   }
 }
 
