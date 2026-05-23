@@ -3,6 +3,7 @@ import { runNodeEvalWithQualifiedRuntime } from './node-subprocess-runtime'
 import { inspectBundledOpenClawDeliveryStatus } from './openclaw-bundled-manifest'
 import { formatDisplayPath } from './openclaw-paths'
 import {
+  getManagedChannelPluginByPluginId,
   isOfficialManagedPluginId,
   listManagedChannelPluginRecords,
 } from '../../src/shared/managed-channel-plugin-registry'
@@ -298,6 +299,12 @@ async function findIncompatibleExtensionPlugins(
       }
       if (isOfficialManagedPluginId(entry.name) && options.quarantineOfficialManagedPlugins !== true) {
         break
+      }
+      if (scopedPluginIds.length === 0) {
+        const record = getManagedChannelPluginByPluginId(entry.name)
+        if (record && record.smokeTestPolicy === 'diagnostic-only') {
+          break
+        }
       }
       incompatible.push({
         pluginId: entry.name,
