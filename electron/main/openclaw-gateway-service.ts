@@ -780,6 +780,46 @@ async function tryRepairUnknownManagedChannels(
           summary: '已补装个人微信插件，Gateway 将继续尝试启动。',
         }
       }
+
+      // The weixin plugin is installed on disk and the config is correct, but
+      // the gateway still reports config_invalid — the running gateway process
+      // started before the plugin was fully staged and hasn't re-scanned it.
+      // Restart the gateway to force a fresh plugin scan so it recognizes the
+      // newly installed weixin channel.
+      const restartResult = await gatewayRestart().catch(() => null)
+      const restartHealth = restartResult
+        ? await safeGatewayHealth().catch(() => createEmptyHealthCheck())
+        : createEmptyHealthCheck()
+      appendGatewayEvidence(context, {
+        source: 'config',
+        message: restartHealth.running
+          ? '个人微信插件已补装，Gateway 重启后恢复可用'
+          : '个人微信插件已补装，Gateway 重启后仍在恢复中',
+        detail: joinNonEmpty([
+          restartHealth.summary,
+          restartResult?.stderr,
+        ]),
+      })
+
+      if (restartHealth.running) {
+        return {
+          handled: true,
+          recovered: true,
+          blockingFailure: false,
+          health: restartHealth,
+          summary: '已重启 Gateway 并确认个人微信插件加载完成。',
+        }
+      }
+
+      if (restartHealth.stateCode !== 'config_invalid') {
+        return {
+          handled: true,
+          recovered: false,
+          blockingFailure: false,
+          health: restartHealth,
+          summary: '已重启 Gateway，个人微信插件修复将继续按主链路执行。',
+        }
+      }
     }
 
     const summary =
@@ -2236,6 +2276,7 @@ async function ensureGatewayRunningImpl(
 	        startClassification.stateCode === 'gateway_not_running') &&
 	        process.platform === 'win32')
 	    ) {
+	      foregroundFallbackAttempted = true
 	      const foregroundResult = await tryForegroundGatewayFallback(
 	        options,
 	        context,
@@ -2378,6 +2419,38 @@ async function ensureGatewayRunningImpl(
       // The gateway daemon may have started successfully, but the CLI's
       // immediate WebSocket verification failed because the server wasn't
       // ready yet. Fall through to waitForGatewayReady instead of failing.
+    } else if (process.platform === 'win32') {
+      // On Windows the scheduled-task gateway (gateway start) is unreliable —
+      // it requires admin privileges for schtasks. Fall back to foreground mode
+      // (gateway run) before reporting failure for any unrecognized error code.
+      foregroundFallbackAttempted = true
+      const foregroundResult = await tryForegroundGatewayFallback(
+        options,
+        context,
+        autoInstalledGatewayService,
+        installedFlags,
+        persistGatewayRuntimeReconcile
+      )
+      if (foregroundResult) return foregroundResult
+
+      const result = buildGatewayEnsureResult(
+        startResult,
+        {
+          running: false,
+          autoInstalledGatewayService,
+          ...installedFlags,
+        },
+        context,
+        {
+          stateCode: startClassification.stateCode,
+          summary: startClassification.summary,
+          safeToRetry: startClassification.safeToRetry,
+          reasonDetail: startClassification.reasonDetail,
+          diagnostics: startDiagnostics,
+        }
+      )
+      await persistGatewayRuntimeReconcile({ result })
+      return result
     } else {
       const result = buildGatewayEnsureResult(
         startResult,

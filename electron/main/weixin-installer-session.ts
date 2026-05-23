@@ -9,18 +9,51 @@ import {
   setActiveProcess,
 } from './command-control'
 import { probePlatformCommandCapability } from './command-capabilities'
+import { getOpenClawPaths } from './cli'
+import { resolveFeishuInstallerManagedOpenClawHomeEnvRoot } from './feishu-installer-env'
+import { sanitizeManagedInstallerEnv } from './managed-installer-env'
+import { cleanupIsolatedNpmCacheEnv, createIsolatedNpmCacheEnv } from './npm-cache-env'
+import { inspectBundledOpenClawDeliveryStatus } from './openclaw-bundled-manifest'
+import { resolveOpenClawBinaryPath } from './openclaw-package'
 import { MAIN_RUNTIME_POLICY } from './runtime-policy'
 import { buildCliPathWithCandidates } from './runtime-path-discovery'
 import { resolveSafeWorkingDirectory } from './runtime-working-directory'
 import { listWeixinAccountState } from './weixin-account-state'
-import { cleanupIsolatedNpmCacheEnv, createIsolatedNpmCacheEnv } from './npm-cache-env'
 
 const childProcess = process.getBuiltinModule('node:child_process') as typeof import('node:child_process')
 const { spawn } = childProcess
 
 const WEIXIN_INSTALLER_CONTROL_DOMAIN = 'weixin-installer'
-const WEIXIN_INSTALLER_PACKAGE = '@tencent-weixin/openclaw-weixin-cli@latest'
-const WEIXIN_INSTALLER_COMMAND = ['npx', '-y', WEIXIN_INSTALLER_PACKAGE, 'install'] as const
+const WEIXIN_PLUGIN_SPEC = '@tencent-weixin/openclaw-weixin'
+
+const WEIXIN_INSTALLER_BASE_COMMAND = [
+  'plugins', 'install', WEIXIN_PLUGIN_SPEC,
+] as const
+
+async function resolveManagedOpenClawBinary(): Promise<string | null> {
+  try {
+    const binaryPath = await resolveOpenClawBinaryPath({
+      env: process.env,
+      platform: process.platform,
+    })
+    const trimmed = String(binaryPath).trim()
+    if (trimmed) return trimmed
+  } catch {
+    // Best-effort resolution — fall back to PATH lookup by the shell.
+  }
+  return null
+}
+
+function buildWeixinInstallerShellCommand(openclawBin: string): string {
+  const q = process.platform === 'win32' ? '"' : "'"
+  const bin = `${q}${openclawBin}${q}`
+  const pluginSpec = `${q}${WEIXIN_PLUGIN_SPEC}${q}`
+  return [
+    `${bin} plugins install ${pluginSpec}`,
+    `${bin} config set plugins.entries.openclaw-weixin.enabled true`,
+    `${bin} channels login --channel openclaw-weixin`,
+  ].join(' && ')
+}
 
 function resolveWeixinInstallerNpmCacheDir(): string {
   return path.join(app.getPath('userData'), 'npm-cache')
@@ -82,7 +115,7 @@ function buildSnapshot(): WeixinInstallerSessionSnapshot {
       code: null,
       ok: false,
       canceled: false,
-      command: [...WEIXIN_INSTALLER_COMMAND],
+      command: ['openclaw', ...WEIXIN_INSTALLER_BASE_COMMAND],
       beforeAccountIds: [],
       afterAccountIds: [],
       newAccountIds: [],
@@ -136,9 +169,26 @@ async function finalizeSession(
   const beforeSet = new Set(activeSession.beforeAccountIds)
   const newAccountIds = afterAccountIds.filter((accountId) => !beforeSet.has(accountId))
 
+  const pluginInstalled = newAccountIds.length > 0
+  // Only report success when new accounts are actually detected. Exit code
+  // alone is unreliable — `channels login` may return 0 without a completed
+  // scan, which would cause finishWeixinChannelConnect to fail downstream.
+  const effectiveOk = pluginInstalled && !params.canceled
+
+  if (!effectiveOk && params.ok && !params.canceled) {
+    activeSession.output +=
+      '\n⚠️ 安装命令已执行完成，但未检测到新的微信账号。请确认已扫描二维码完成登录。\n'
+  }
+
+  if (!params.ok && effectiveOk) {
+    activeSession.output +=
+      '\n⚠️ 安装收尾步骤报告了非零退出码，但已检测到新的微信账号，插件安装与登录实际已完成。\n' +
+      'Gateway 重载将由 Mclaw 统一接管，当前安装视为成功。\n'
+  }
+
   activeSession.phase = 'exited'
   activeSession.code = params.code
-  activeSession.ok = params.ok
+  activeSession.ok = effectiveOk
   activeSession.canceled = params.canceled
   activeSession.afterAccountIds = afterAccountIds
   activeSession.newAccountIds = newAccountIds
@@ -148,7 +198,7 @@ async function finalizeSession(
     type: 'exit',
     phase: 'exited',
     code: params.code,
-    ok: params.ok,
+    ok: effectiveOk,
     canceled: params.canceled,
     beforeAccountIds: [...activeSession.beforeAccountIds],
     afterAccountIds: [...afterAccountIds],
@@ -168,7 +218,7 @@ export async function startWeixinInstallerSession(
     return buildSnapshot()
   }
 
-  const capability = await probePlatformCommandCapability('npx', {
+  const capability = await probePlatformCommandCapability('openclaw', {
     platform: process.platform,
     env: process.env,
   })
@@ -178,42 +228,114 @@ export async function startWeixinInstallerSession(
       active: false,
       sessionId: errorSessionId,
       phase: 'exited',
-      output: capability.message || 'npx 命令不可用，无法启动个人微信安装器。',
+      output: capability.message || 'openclaw 命令不可用，无法启动个人微信安装器。',
       code: 1,
       ok: false,
       canceled: false,
-      command: [...WEIXIN_INSTALLER_COMMAND],
+      command: [...WEIXIN_INSTALLER_BASE_COMMAND],
       beforeAccountIds: [],
       afterAccountIds: [],
       newAccountIds: [],
     }
   }
 
+  const openclawBin = await resolveManagedOpenClawBinary()
+  if (!openclawBin) {
+    const errorSessionId = activeSession?.id || randomUUID()
+    return {
+      active: false,
+      sessionId: errorSessionId,
+      phase: 'exited',
+      output: '无法定位托管的 openclaw 可执行文件，请确认 OpenClaw 已正确安装。',
+      code: 1,
+      ok: false,
+      canceled: false,
+      command: [...WEIXIN_INSTALLER_BASE_COMMAND],
+      beforeAccountIds: [],
+      afterAccountIds: [],
+      newAccountIds: [],
+    }
+  }
+
+  const shellCommand = buildWeixinInstallerShellCommand(openclawBin)
+
   const npmCacheDir = resolveWeixinInstallerNpmCacheDir()
   const isolatedNpmCache = await createIsolatedNpmCacheEnv(npmCacheDir)
+  const openClawPaths = await getOpenClawPaths().catch(() => null)
+  const homeEnvRoot = resolveFeishuInstallerManagedOpenClawHomeEnvRoot(openClawPaths)
+  const baseEnv = sanitizeManagedInstallerEnv(process.env)
+  const managedOpenClawEnv: NodeJS.ProcessEnv = { ...baseEnv }
+
+  // Derive OPENCLAW_HOME (the directory containing .openclaw state).
+  const resolvedHome = String(baseEnv.OPENCLAW_HOME || homeEnvRoot || '').trim()
+  if (resolvedHome) {
+    managedOpenClawEnv.OPENCLAW_HOME = resolvedHome
+  } else {
+    const userDataDir = String(
+      process.env.QCLAW_USER_DATA_DIR || app.getPath('userData')
+    ).trim()
+    managedOpenClawEnv.OPENCLAW_HOME = path.join(userDataDir, 'openclaw-state')
+  }
+
+  // Explicitly set OPENCLAW_STATE_DIR so the CLI does NOT derive it as
+  // <OPENCLAW_HOME>/.openclaw — which would double-nest when the probed
+  // state root already is the .openclaw directory.
+  const probedHomeDir = String(openClawPaths?.homeDir || '').trim()
+  if (probedHomeDir) {
+    // Ensure the state directory points to the actual .openclaw config
+    // directory.  The probed homeDir may be the managed root (e.g.
+    // .../openclaw-state) which needs .openclaw appended, or it may
+    // already be the .openclaw directory itself.
+    const normalizedLeaf = path.basename(probedHomeDir).toLowerCase()
+    managedOpenClawEnv.OPENCLAW_STATE_DIR =
+      normalizedLeaf === '.openclaw'
+        ? probedHomeDir
+        : path.join(probedHomeDir, '.openclaw')
+  } else {
+    managedOpenClawEnv.OPENCLAW_STATE_DIR = path.join(
+      String(managedOpenClawEnv.OPENCLAW_HOME || '').trim(),
+      '.openclaw'
+    )
+  }
+
+  if (openClawPaths?.configFile) {
+    managedOpenClawEnv.OPENCLAW_CONFIG_PATH = String(
+      baseEnv.OPENCLAW_CONFIG_PATH || openClawPaths.configFile
+    ).trim()
+  }
+
+  const bundledStatus = inspectBundledOpenClawDeliveryStatus({
+    cwd: process.cwd(),
+    resourcesPath: process.resourcesPath,
+    env: process.env,
+    platform: process.platform,
+  })
+  const runtimeBinDir = String(bundledStatus.runtimePath || '').trim() || null
 
   const beforeAccountIds = await collectAccountIds().catch(() => [])
   const sessionId = randomUUID()
-  const proc = spawn(WEIXIN_INSTALLER_COMMAND[0], WEIXIN_INSTALLER_COMMAND.slice(1), {
+  const displayCommand = ['openclaw', ...WEIXIN_INSTALLER_BASE_COMMAND]
+  const proc = spawn(shellCommand, [], {
     cwd: resolveSafeWorkingDirectory({
-      env: process.env,
+      env: managedOpenClawEnv,
       platform: process.platform,
     }),
     env: {
-      ...process.env,
+      ...managedOpenClawEnv,
       PATH: buildCliPathWithCandidates({
         platform: process.platform,
-        currentPath: process.env.PATH || '',
-        env: process.env,
+        currentPath: managedOpenClawEnv.PATH || process.env.PATH || '',
+        detectedNodeBinDir: runtimeBinDir,
+        env: managedOpenClawEnv,
       }),
       NO_COLOR: '1',
       FORCE_COLOR: '0',
       ...isolatedNpmCache.env,
     },
-    detached: process.platform !== 'win32',
-    shell: process.platform === 'win32',
+    shell: true,
+    windowsHide: true,
     timeout: MAIN_RUNTIME_POLICY.cli.pluginInstallNpxTimeoutMs,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['pipe', 'pipe', 'pipe'],
   })
 
   activeSession = {
@@ -224,7 +346,7 @@ export async function startWeixinInstallerSession(
     code: null,
     ok: false,
     canceled: false,
-    command: [...WEIXIN_INSTALLER_COMMAND],
+    command: displayCommand,
     beforeAccountIds,
     afterAccountIds: [],
     newAccountIds: [],
@@ -236,7 +358,7 @@ export async function startWeixinInstallerSession(
     sessionId,
     type: 'started',
     phase: 'running',
-    command: [...WEIXIN_INSTALLER_COMMAND],
+    command: displayCommand,
     beforeAccountIds: [...beforeAccountIds],
   })
 
