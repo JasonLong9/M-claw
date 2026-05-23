@@ -33,7 +33,7 @@ export interface ManagedChannelPluginLifecycleDependencies {
   repairIncompatiblePlugins: (
     options?: RepairIncompatibleExtensionPluginsOptions
   ) => Promise<RepairIncompatibleExtensionsResult>
-  installPlugin: (name: string, expectedPluginIds?: string[]) => Promise<CliResult>
+  installPlugin: (name: string, expectedPluginIds?: string[], registryUrl?: string | null) => Promise<CliResult>
   installPluginNpx: (specifier: string, expectedPluginIds?: string[]) => Promise<CliResult>
   isPluginInstalledOnDisk: (pluginId: string) => Promise<boolean>
   listRegisteredPlugins: () => Promise<string[] | null>
@@ -683,9 +683,10 @@ export function createManagedChannelPluginLifecycleService(
       const installedBefore = await resolvedDependencies.isPluginInstalledOnDisk(spec.canonicalPluginId)
       let action: 'reused-existing' | 'installed' | 'restored' = repairResult.repaired ? 'restored' : 'reused-existing'
       if (!installedBefore) {
+        const weixinMirrorUrl = spec.channelId === 'openclaw-weixin' ? 'https://registry.npmmirror.com' : undefined
         const installResult = spec.installStrategy === 'npx'
           ? await resolvedDependencies.installPluginNpx(spec.npxSpecifier || '', [spec.canonicalPluginId])
-          : await resolvedDependencies.installPlugin(spec.packageName || '', [spec.canonicalPluginId])
+          : await resolvedDependencies.installPlugin(spec.packageName || '', [spec.canonicalPluginId], weixinMirrorUrl)
         if (!installResult.ok) {
           const installedAfterAlreadyExists = isSafeAlreadyInstalledManagedPluginInstallFailure(installResult)
             ? await resolvedDependencies.isPluginInstalledOnDisk(spec.canonicalPluginId)

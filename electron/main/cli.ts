@@ -4062,16 +4062,25 @@ async function runPluginWhitelistPreflight(
 }
 
 /** Install a plugin: openclaw plugins install <name> */
-export async function installPlugin(name: string, expectedPluginIds: string[] = []): Promise<CliResult> {
+export async function installPlugin(name: string, expectedPluginIds: string[] = [], registryUrl?: string | null): Promise<CliResult> {
   const whitelistPreflight = await runPluginWhitelistPreflight(name, expectedPluginIds)
   if (whitelistPreflight) return whitelistPreflight
 
   const npmEnv = await createPluginInstallNpmEnv()
   try {
+    const normalizedRegistry = String(registryUrl || '').trim()
     const result = await runCliStreaming(['plugins', 'install', name], {
       timeout: MAIN_RUNTIME_POLICY.cli.pluginInstallTimeoutMs,
       controlDomain: 'plugin-install',
-      env: npmEnv.env,
+      env: {
+        ...npmEnv.env,
+        ...(normalizedRegistry
+          ? {
+              npm_config_registry: normalizedRegistry,
+              NPM_CONFIG_REGISTRY: normalizedRegistry,
+            }
+          : {}),
+      },
     })
     const annotated = await annotatePluginPermissionFailure(result)
     return finalizePluginInstallResult(annotated, expectedPluginIds)

@@ -331,6 +331,8 @@ export async function startWeixinInstallerSession(
       NO_COLOR: '1',
       FORCE_COLOR: '0',
       ...isolatedNpmCache.env,
+      npm_config_registry: 'https://registry.npmmirror.com',
+      NPM_CONFIG_REGISTRY: 'https://registry.npmmirror.com',
     },
     shell: true,
     windowsHide: true,

@@ -677,7 +677,8 @@ describe('openclaw gateway service', () => {
 
     expect(installPluginMock).toHaveBeenCalledWith(
       '@tencent-weixin/openclaw-weixin',
-      ['openclaw-weixin']
+      ['openclaw-weixin'],
+      'https://registry.npmmirror.com'
     )
     expect(runShellMock).toHaveBeenCalledWith(
       'npm',
@@ -1177,7 +1178,8 @@ describe('openclaw gateway service', () => {
     expect(repairManagedChannelPluginMock).toHaveBeenCalledWith('openclaw-weixin')
     expect(installPluginMock).toHaveBeenCalledWith(
       '@tencent-weixin/openclaw-weixin',
-      ['openclaw-weixin']
+      ['openclaw-weixin'],
+      'https://registry.npmmirror.com'
     )
     expect(guardedWriteConfigMock).toHaveBeenCalledWith({
       config: {
@@ -1341,7 +1343,8 @@ describe('openclaw gateway service', () => {
     expect(repairManagedChannelPluginMock).toHaveBeenCalledWith('openclaw-weixin')
     expect(installPluginMock).toHaveBeenCalledWith(
       '@tencent-weixin/openclaw-weixin',
-      ['openclaw-weixin']
+      ['openclaw-weixin'],
+      'https://registry.npmmirror.com'
     )
     expect(result.ok).toBe(true)
     expect(result.running).toBe(true)

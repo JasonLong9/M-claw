@@ -689,7 +689,7 @@ async function tryRepairUnknownManagedChannels(
     if (record.channelId === 'openclaw-weixin' && repairResult.kind === 'manual-action-required') {
       const pluginInstalledBefore = await isPluginInstalledOnDisk(record.pluginId)
       if (!pluginInstalledBefore) {
-        let installResult = await installPlugin(record.packageName || '', [record.pluginId])
+        let installResult = await installPlugin(record.packageName || '', [record.pluginId], 'https://registry.npmmirror.com')
         if (!installResult.ok && record.packageName && isClawHubResolutionFailure(installResult)) {
           installResult = await installPluginFromPackedNpmArchive(record.packageName, record.pluginId)
         }
