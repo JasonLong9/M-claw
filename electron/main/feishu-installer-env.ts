@@ -1,4 +1,5 @@
 import type { OpenClawPaths } from './openclaw-paths'
+import path from 'node:path'
 
 type FeishuInstallerOpenClawPathsLike =
   Partial<Pick<OpenClawPaths, 'homeDir' | 'configFile'>>
@@ -83,7 +84,17 @@ export function buildFeishuInstallerManagedOpenClawEnv(params: {
   return {
     ...baseEnv,
     OPENCLAW_HOME: trimPath(baseEnv.OPENCLAW_HOME || homeEnvRoot) || undefined,
-    OPENCLAW_STATE_DIR: trimPath(baseEnv.OPENCLAW_STATE_DIR || homeDir) || undefined,
+    OPENCLAW_STATE_DIR: (() => {
+      const raw = trimPath(baseEnv.OPENCLAW_STATE_DIR || homeDir) || undefined
+      if (!raw) return undefined
+      // Ensure the state directory points to the actual .openclaw config
+      // directory.  The homeDir may be the managed root (e.g.
+      // .../openclaw-state) which needs .openclaw appended, or it may
+      // already be the .openclaw directory itself.
+      return getPathBasename(raw).toLowerCase() === '.openclaw'
+        ? raw
+        : path.join(raw, '.openclaw')
+    })(),
     OPENCLAW_CONFIG_PATH: trimPath(baseEnv.OPENCLAW_CONFIG_PATH || configFile) || undefined,
   }
 }

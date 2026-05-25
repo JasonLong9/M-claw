@@ -188,6 +188,7 @@ import {
   createChatSession,
   createLocalChatSession,
   getChatCapabilitySnapshot,
+  getActiveChatSendState,
   getChatSessionDebugSnapshot,
   getChatTranscript,
   getDashboardChatAvailability,
@@ -846,6 +847,7 @@ export function registerIpcHandlers() {
     })
   )
   ipcMain.handle('chat:cancel', () => cancelActiveCommand('chat'))
+  ipcMain.handle('chat:send:state', () => getActiveChatSendState())
   ipcMain.handle('chat:transcript:clear', (_e, sessionId: string) => clearChatTranscript(sessionId))
   ipcMain.handle('chat:memory:list', (_e, request) => listChatMemories(request))
   ipcMain.handle('chat:memory:save', (_e, request) => saveChatMemory(request))

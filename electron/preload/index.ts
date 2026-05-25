@@ -233,6 +233,7 @@ export const api = {
   getChatTranscript: (sessionId: string) => ipcRenderer.invoke('chat:transcript:get', sessionId),
   sendChatMessage: (request: Record<string, any>) => ipcRenderer.invoke('chat:send', request),
   cancelChatMessage: () => ipcRenderer.invoke('chat:cancel'),
+  getActiveChatSendState: () => ipcRenderer.invoke('chat:send:state'),
   clearChatTranscript: (sessionId: string) => ipcRenderer.invoke('chat:transcript:clear', sessionId),
   listChatMemories: (request?: Record<string, any>) => ipcRenderer.invoke('chat:memory:list', request),
   saveChatMemory: (request: Record<string, any>) => ipcRenderer.invoke('chat:memory:save', request),

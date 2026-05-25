@@ -25,6 +25,8 @@ const {
   getOpenClawPathsMock,
   issueDesiredRuntimeRevisionMock,
   markRuntimeRevisionInProgressMock,
+  shouldPreferForegroundGatewayMock,
+  markForegroundGatewayUsedMock,
   probeGatewayPortOwnerMock,
   repairManagedChannelPluginMock,
   repairDingtalkOfficialChannelMock,
@@ -60,6 +62,8 @@ const {
   getOpenClawPathsMock: vi.fn(),
   issueDesiredRuntimeRevisionMock: vi.fn(),
   markRuntimeRevisionInProgressMock: vi.fn(),
+  shouldPreferForegroundGatewayMock: vi.fn(),
+  markForegroundGatewayUsedMock: vi.fn(),
   probeGatewayPortOwnerMock: vi.fn(),
   repairManagedChannelPluginMock: vi.fn(),
   repairDingtalkOfficialChannelMock: vi.fn(),
@@ -148,6 +152,11 @@ vi.mock('../openclaw-gateway-probes', () => ({
   probeGatewaySocketReady: probeGatewaySocketReadyMock,
 }))
 
+vi.mock('../gateway-foreground-preference', () => ({
+  shouldPreferForegroundGateway: shouldPreferForegroundGatewayMock,
+  markForegroundGatewayUsed: markForegroundGatewayUsedMock,
+}))
+
 vi.mock('../../../src/shared/polling', () => ({
   pollWithBackoff: pollWithBackoffMock,
 }))
@@ -190,6 +199,8 @@ describe('openclaw gateway service', () => {
     getOpenClawPathsMock.mockReset()
     issueDesiredRuntimeRevisionMock.mockReset()
     markRuntimeRevisionInProgressMock.mockReset()
+    shouldPreferForegroundGatewayMock.mockReset()
+    markForegroundGatewayUsedMock.mockReset()
     probeGatewayPortOwnerMock.mockReset()
     repairManagedChannelPluginMock.mockReset()
     repairDingtalkOfficialChannelMock.mockReset()
@@ -282,6 +293,8 @@ describe('openclaw gateway service', () => {
     })
     findAvailableLoopbackPortMock.mockResolvedValue(19876)
     probeGatewaySocketReadyMock.mockResolvedValue(true)
+    shouldPreferForegroundGatewayMock.mockResolvedValue(false)
+    markForegroundGatewayUsedMock.mockResolvedValue(undefined)
     gatewayRunInBackgroundMock.mockResolvedValue({
       ok: false,
       stdout: '',
@@ -664,7 +677,8 @@ describe('openclaw gateway service', () => {
 
     expect(installPluginMock).toHaveBeenCalledWith(
       '@tencent-weixin/openclaw-weixin',
-      ['openclaw-weixin']
+      ['openclaw-weixin'],
+      'https://registry.npmmirror.com'
     )
     expect(runShellMock).toHaveBeenCalledWith(
       'npm',
@@ -1164,7 +1178,8 @@ describe('openclaw gateway service', () => {
     expect(repairManagedChannelPluginMock).toHaveBeenCalledWith('openclaw-weixin')
     expect(installPluginMock).toHaveBeenCalledWith(
       '@tencent-weixin/openclaw-weixin',
-      ['openclaw-weixin']
+      ['openclaw-weixin'],
+      'https://registry.npmmirror.com'
     )
     expect(guardedWriteConfigMock).toHaveBeenCalledWith({
       config: {
@@ -1328,7 +1343,8 @@ describe('openclaw gateway service', () => {
     expect(repairManagedChannelPluginMock).toHaveBeenCalledWith('openclaw-weixin')
     expect(installPluginMock).toHaveBeenCalledWith(
       '@tencent-weixin/openclaw-weixin',
-      ['openclaw-weixin']
+      ['openclaw-weixin'],
+      'https://registry.npmmirror.com'
     )
     expect(result.ok).toBe(true)
     expect(result.running).toBe(true)
@@ -1603,6 +1619,63 @@ describe('openclaw gateway service', () => {
       ['gateway', 'install'],
       ['gateway', 'run', '--allow-unconfigured', '--port', '18789'],
     ])
+  })
+
+  it('calls markForegroundGatewayUsed when the Windows foreground compatibility fallback succeeds', async () => {
+    gatewayStartMock.mockResolvedValueOnce({
+      ok: false,
+      stdout: '',
+      stderr: 'Gateway service not loaded.',
+      code: 1,
+    })
+    runCliMock.mockResolvedValueOnce({
+      ok: false,
+      stdout: '',
+      stderr: 'Gateway service install failed: Error: spawn EPERM',
+      code: 1,
+    })
+    gatewayRunInBackgroundMock.mockResolvedValueOnce({
+      ok: true,
+      stdout: '',
+      stderr: 'Gateway foreground compatibility logs: C:\\temp\\gateway.log',
+      code: 0,
+    })
+    gatewayHealthMock.mockResolvedValueOnce({
+      running: false,
+      raw: '',
+      stderr: 'EPERM: operation not permitted',
+      code: 1,
+      stateCode: 'unknown_runtime_failure',
+      summary: 'OpenClaw health command is blocked by a local permission issue',
+    })
+    probeGatewayPortReachableMock.mockResolvedValueOnce(true)
+
+    const result = await ensureGatewayRunning()
+
+    expect(result.ok).toBe(true)
+    expect(result.running).toBe(true)
+    expect(markForegroundGatewayUsedMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses foreground mode directly when the preference is set, skipping gateway start', async () => {
+    shouldPreferForegroundGatewayMock.mockResolvedValue(true)
+    gatewayRunInBackgroundMock.mockResolvedValueOnce({
+      ok: true,
+      stdout: '',
+      stderr: 'Gateway foreground compatibility logs: C:\\temp\\gateway.log',
+      code: 0,
+    })
+    gatewayHealthMock
+      .mockResolvedValueOnce({ running: false, raw: '' })
+      .mockResolvedValueOnce({ running: true, raw: '{"ok":true}', stderr: '', code: 0 })
+
+    const result = await ensureGatewayRunning()
+
+    expect(result.ok).toBe(true)
+    expect(result.running).toBe(true)
+    expect(gatewayStartMock).not.toHaveBeenCalled()
+    expect(gatewayRunInBackgroundMock).toHaveBeenCalledTimes(1)
+    expect(result.attemptedCommands).toContainEqual(['gateway', 'run', '--port', '18789'])
   })
 
   it('restarts the gateway once when readiness evidence shows token mismatch', async () => {

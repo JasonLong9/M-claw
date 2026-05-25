@@ -3,7 +3,7 @@
  */
 import type { ChildProcess } from 'node:child_process'
 import { homedir, tmpdir, userInfo } from 'os'
-import { dirname, join, resolve, sep } from 'path'
+import { basename, dirname, join, resolve, sep } from 'path'
 import { access, readFile, writeFile, mkdir, stat, unlink, cp, rm } from 'fs/promises'
 import { createWriteStream, existsSync } from 'fs'
 import https from 'https'
@@ -369,10 +369,25 @@ async function buildManagedOpenClawRuntimeEnv(
   const openClawPaths = await getOpenClawPaths().catch(() => null)
   if (!openClawPaths) return baseEnv
   const managedHomeEnvRoot = resolveManagedOpenClawHomeEnvRoot(openClawPaths)
+
+  // Explicitly set OPENCLAW_STATE_DIR so the CLI never derives it as
+  // <HOME>/.openclaw — which would double-nest when HOME already points
+  // inside the .openclaw directory (e.g. …/openclaw-state/.openclaw/.openclaw).
+  const resolvedHomeDir = String(openClawPaths?.homeDir || '').trim()
+  let stateDir = String(baseEnv.OPENCLAW_STATE_DIR || '').trim()
+  if (!stateDir && resolvedHomeDir) {
+    const leaf = basename(resolvedHomeDir).toLowerCase()
+    stateDir =
+      leaf === '.openclaw'
+        ? resolvedHomeDir
+        : join(resolvedHomeDir, '.openclaw')
+  }
+
   return {
     ...baseEnv,
     OPENCLAW_HOME: String(baseEnv.OPENCLAW_HOME || managedHomeEnvRoot || '').trim(),
     OPENCLAW_CONFIG_PATH: String(baseEnv.OPENCLAW_CONFIG_PATH || openClawPaths.configFile || '').trim(),
+    ...(stateDir ? { OPENCLAW_STATE_DIR: stateDir } : {}),
   }
 }
 
@@ -810,14 +825,23 @@ async function runCliStreamingOnce(args: string[], options: RunCliStreamOptions 
         return runCliStreamingOnce(args, { ...options, binaryPath: bundledRuntimeBinaryPath })
       }
     }
+    // Fast path: filesystem scan without spawning where.exe / which.
+    // On Windows, where.exe can hang indefinitely when PATH contains
+    // inaccessible network drives, so probe the filesystem first.
+    const fastPath = await resolveOpenClawBinaryPath({
+      platform: process.platform,
+      env: commandProbeEnv,
+      fileExists: existsSync,
+    }).catch(() => '')
+    if (fastPath) {
+      return runCliStreamingOnce(args, { ...options, binaryPath: fastPath })
+    }
+
     const openClawCapability = await probePlatformCommandCapability('openclaw', {
       platform: process.platform,
       env: commandProbeEnv,
     })
     if (!openClawCapability.available) {
-      // where.exe / command -v couldn't find openclaw on PATH.
-      // Fall back to filesystem scan (matches how gatewayRunInBackground finds
-      // the binary on bundled/non-standard Windows installations).
       const fallbackPath = await resolveOpenClawBinaryPath({
         platform: process.platform,
         env: commandProbeEnv,
@@ -2878,6 +2902,12 @@ export async function gatewayHealth(): Promise<GatewayHealthCheckResult> {
 
 const GATEWAY_FOREGROUND_STABILIZE_MS = 1500
 
+let foregroundGatewayProcess: ChildProcess | null = null
+
+export function getForegroundGatewayProcess(): ChildProcess | null {
+  return foregroundGatewayProcess
+}
+
 async function readGatewayForegroundLog(logPath: string): Promise<string> {
   try {
     const content = await readFile(logPath, 'utf8')
@@ -2949,7 +2979,12 @@ export async function gatewayRunInBackground(options: {
     const finalize = (result: CliResult) => {
       if (settled) return
       settled = true
-      closeStreams()
+      // Only close streams when the process failed to start.
+      // On success, keep them open so the child's stdout/stderr
+      // pipes remain valid and the process can keep logging.
+      if (!settledBySpawn) {
+        closeStreams()
+      }
       resolve(result)
     }
 
@@ -2989,10 +3024,18 @@ export async function gatewayRunInBackground(options: {
           })
           return
         }
+        // Process exited after successful startup — log for diagnostics.
+        foregroundGatewayProcess = null
+        console.warn(
+          `Foreground gateway process exited (code=${String(code)}, signal=${String(signal)}). ` +
+          `Logs: ${stderrLogPath}`
+        )
       })
 
       proc.once('spawn', () => {
-        proc.unref()
+        // Keep a persistent reference so the process is not GC'd and
+        // its stdio pipes stay alive for the lifetime of the gateway.
+        foregroundGatewayProcess = proc
         setTimeout(async () => {
           if (settled) return
           settledBySpawn = true
@@ -4019,16 +4062,25 @@ async function runPluginWhitelistPreflight(
 }
 
 /** Install a plugin: openclaw plugins install <name> */
-export async function installPlugin(name: string, expectedPluginIds: string[] = []): Promise<CliResult> {
+export async function installPlugin(name: string, expectedPluginIds: string[] = [], registryUrl?: string | null): Promise<CliResult> {
   const whitelistPreflight = await runPluginWhitelistPreflight(name, expectedPluginIds)
   if (whitelistPreflight) return whitelistPreflight
 
   const npmEnv = await createPluginInstallNpmEnv()
   try {
+    const normalizedRegistry = String(registryUrl || '').trim()
     const result = await runCliStreaming(['plugins', 'install', name], {
       timeout: MAIN_RUNTIME_POLICY.cli.pluginInstallTimeoutMs,
       controlDomain: 'plugin-install',
-      env: npmEnv.env,
+      env: {
+        ...npmEnv.env,
+        ...(normalizedRegistry
+          ? {
+              npm_config_registry: normalizedRegistry,
+              NPM_CONFIG_REGISTRY: normalizedRegistry,
+            }
+          : {}),
+      },
     })
     const annotated = await annotatePluginPermissionFailure(result)
     return finalizePluginInstallResult(annotated, expectedPluginIds)
