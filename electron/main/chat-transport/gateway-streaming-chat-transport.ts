@@ -4,6 +4,7 @@ import {
   sanitizeAssistantRawFallbackText,
   sanitizeAssistantVisibleText,
 } from '../../../src/shared/chat-visible-text'
+import { isLikelyMclawInternalPath } from '../../../src/shared/mclaw-protected-paths'
 import type {
   ChatTransport,
   ChatTransportRunParams,
@@ -563,6 +564,7 @@ function summarizeToolOnlyPath(value: unknown): string | null {
   const pathValue = typeof record.path === 'string' ? record.path.trim() : ''
   if (!pathValue) return null
   if (typeof record.command === 'string' || typeof record.cmd === 'string') return null
+  if (isLikelyMclawInternalPath(pathValue)) return null
   if (!isStructuredToolLocalPathCandidate(pathValue)) return null
   return `Saved to ${pathValue}`
 }

@@ -168,22 +168,20 @@ function validateRuntime(bundleRoot, manifest) {
   }
 }
 
-function validateManagedPlugin(bundleRoot, manifest) {
-  const managedPlugins = Array.isArray(manifest?.artifacts?.managedPlugins) ? manifest.artifacts.managedPlugins : []
-  const feishuPlugin = managedPlugins.find((artifact) => String(artifact?.id || '').trim() === 'openclaw-lark')
-  if (!feishuPlugin) {
-    fail('Manifest is missing the bundled openclaw-lark managed plugin artifact.')
+function validateManagedPluginArtifact(bundleRoot, artifact) {
+  const pluginId = String(artifact?.id || '').trim()
+  if (!pluginId) {
+    fail('Managed plugin artifact id is missing.')
   }
-
-  const pluginRoot = path.join(bundleRoot, 'managed-plugins', feishuPlugin.directoryName)
+  const pluginRoot = path.join(bundleRoot, 'managed-plugins', String(artifact.directoryName || '').trim())
   const pluginManifestPath = path.join(pluginRoot, 'openclaw.plugin.json')
   const pluginPackagePath = path.join(pluginRoot, 'package.json')
   const pluginNodeModulesPath = path.join(pluginRoot, 'node_modules')
 
-  ensureDirectory(pluginRoot, 'bundled openclaw-lark plugin root')
-  ensureFile(pluginManifestPath, 'bundled openclaw-lark manifest')
-  ensureFile(pluginPackagePath, 'bundled openclaw-lark package.json')
-  ensureDirectory(pluginNodeModulesPath, 'bundled openclaw-lark node_modules')
+  ensureDirectory(pluginRoot, `bundled ${pluginId} plugin root`)
+  ensureFile(pluginManifestPath, `bundled ${pluginId} manifest`)
+  ensureFile(pluginPackagePath, `bundled ${pluginId} package.json`)
+  ensureDirectory(pluginNodeModulesPath, `bundled ${pluginId} node_modules`)
 
   const pluginManifest = readJson(pluginManifestPath)
   const pluginPackage = readJson(pluginPackagePath)
@@ -191,12 +189,12 @@ function validateManagedPlugin(bundleRoot, manifest) {
   const packageVersion = String(pluginPackage?.version || '').trim()
   const packageName = String(pluginPackage?.name || '').trim()
 
-  if (manifestId !== 'openclaw-lark') {
-    fail(`Bundled openclaw-lark manifest id mismatch: ${manifestId || 'missing'}`)
+  if (manifestId !== pluginId) {
+    fail(`Bundled ${pluginId} manifest id mismatch: ${manifestId || 'missing'}`)
   }
-  if (packageVersion !== String(feishuPlugin.version || '').trim()) {
+  if (packageVersion !== String(artifact.version || '').trim()) {
     fail(
-      `Bundled openclaw-lark package version mismatch: package=${packageVersion || 'missing'}, manifest=${String(feishuPlugin.version || '').trim()}`
+      `Bundled ${pluginId} package version mismatch: package=${packageVersion || 'missing'}, manifest=${String(artifact.version || '').trim()}`
     )
   }
 
@@ -204,30 +202,35 @@ function validateManagedPlugin(bundleRoot, manifest) {
     ? pluginPackage.openclaw.extensions.map((entry) => String(entry || '').trim()).filter(Boolean)
     : []
   if (extensionEntries.length === 0) {
-    fail('Bundled openclaw-lark package.json is missing openclaw.extensions.')
+    fail(`Bundled ${pluginId} package.json is missing openclaw.extensions.`)
   }
 
   for (const extensionEntry of extensionEntries) {
-    ensureFile(path.join(pluginRoot, extensionEntry), `bundled openclaw-lark entry ${extensionEntry}`)
+    ensureFile(path.join(pluginRoot, extensionEntry), `bundled ${pluginId} entry ${extensionEntry}`)
   }
 
   const channelIds = Array.isArray(pluginManifest?.channels)
     ? pluginManifest.channels.map((entry) => String(entry || '').trim()).filter(Boolean)
     : []
-  if (!channelIds.includes('feishu')) {
-    fail('Bundled openclaw-lark manifest is missing the feishu channel.')
+  const expectedChannelIds = Array.isArray(artifact?.channels)
+    ? artifact.channels.map((entry) => String(entry || '').trim()).filter(Boolean)
+    : []
+  for (const channelId of expectedChannelIds) {
+    if (!channelIds.includes(channelId)) {
+      fail(`Bundled ${pluginId} manifest is missing channel ${channelId}.`)
+    }
   }
   if (!packageName) {
-    fail('Bundled openclaw-lark package.json is missing package name metadata.')
+    fail(`Bundled ${pluginId} package.json is missing package name metadata.`)
   }
 
   info(`Validated bundled managed plugin: ${pluginRoot}`)
 
   return {
-    pluginId: 'openclaw-lark',
+    pluginId,
     pluginRoot,
     pluginSpec: packageName,
-    channelIds,
+    channelIds: expectedChannelIds.length > 0 ? expectedChannelIds : channelIds,
   }
 }
 
@@ -237,9 +240,6 @@ function writeTrustedPluginProbeConfig(tempHome, managedPlugin, pluginTarget) {
     plugins: {
       allow: [managedPlugin.pluginId],
       entries: {
-        feishu: {
-          enabled: false,
-        },
         [managedPlugin.pluginId]: {
           enabled: true,
         },
@@ -281,14 +281,14 @@ function verifyPluginLoadsWithPackagedRuntime(runtime, managedPlugin) {
 
     if (result.status !== 0) {
       fail(
-        `Packaged runtime failed to inspect bundled openclaw-lark: ${stderr || stdout || `exit ${result.status ?? 'unknown'}`}`
+        `Packaged runtime failed to inspect bundled ${managedPlugin.pluginId}: ${stderr || stdout || `exit ${result.status ?? 'unknown'}`}`
       )
     }
 
     const warningCorpus = `${stdout}\n${stderr}`
     if (/plugins\.allow is empty/i.test(warningCorpus) || /install\/load-path provenance/i.test(warningCorpus)) {
       fail(
-        `Packaged runtime emitted plugin trust warnings during bundled openclaw-lark verification: ${stderr || stdout}`
+        `Packaged runtime emitted plugin trust warnings during bundled ${managedPlugin.pluginId} verification: ${stderr || stdout}`
       )
     }
 
@@ -299,17 +299,30 @@ function verifyPluginLoadsWithPackagedRuntime(runtime, managedPlugin) {
       : []
 
     if (status !== 'loaded') {
-      fail(`Packaged runtime did not load bundled openclaw-lark: status=${status || 'missing'}`)
+      fail(`Packaged runtime did not load bundled ${managedPlugin.pluginId}: status=${status || 'missing'}`)
     }
     for (const channelId of managedPlugin.channelIds) {
       if (!loadedChannels.includes(channelId)) {
-        fail(`Packaged runtime loaded openclaw-lark but channel ${channelId} was missing.`)
+        fail(`Packaged runtime loaded ${managedPlugin.pluginId} but channel ${channelId} was missing.`)
       }
     }
 
     info(`Packaged runtime loaded bundled ${managedPlugin.pluginId} with channels: ${loadedChannels.join(',')}`)
   } finally {
     fs.rmSync(tempHome, { recursive: true, force: true })
+  }
+}
+
+function validateWindowsOnlyRuntimePayload(bundleRoot) {
+  const runtimeRoot = path.join(bundleRoot, 'runtime')
+  ensureDirectory(runtimeRoot, 'packaged openclaw runtime root')
+
+  const forbiddenRuntimeDirs = ['darwin-x64', 'darwin-arm64', 'linux-x64', 'linux-arm64']
+  for (const directoryName of forbiddenRuntimeDirs) {
+    const forbiddenPath = path.join(runtimeRoot, directoryName)
+    if (exists(forbiddenPath)) {
+      fail(`Windows artifact must not include non-Windows runtime directory: ${forbiddenPath}`)
+    }
   }
 }
 
@@ -327,9 +340,22 @@ export function verifyWinPackagedOpenClawBundle(options = {}) {
   ensureFile(manifestPath, 'packaged openclaw-bundle manifest')
 
   const manifest = readJson(manifestPath)
+  validateWindowsOnlyRuntimePayload(bundleRoot)
   const runtime = validateRuntime(bundleRoot, manifest)
-  const managedPlugin = validateManagedPlugin(bundleRoot, manifest)
-  verifyPluginLoadsWithPackagedRuntime(runtime, managedPlugin)
+  const managedPluginArtifacts = Array.isArray(manifest?.artifacts?.managedPlugins)
+    ? manifest.artifacts.managedPlugins
+    : []
+  const requiredManagedPluginIds = ['openclaw-lark', 'openclaw-weixin']
+  for (const pluginId of requiredManagedPluginIds) {
+    if (!managedPluginArtifacts.some((artifact) => String(artifact?.id || '').trim() === pluginId)) {
+      fail(`Manifest is missing the bundled ${pluginId} managed plugin artifact.`)
+    }
+  }
+
+  for (const artifact of managedPluginArtifacts) {
+    const managedPlugin = validateManagedPluginArtifact(bundleRoot, artifact)
+    verifyPluginLoadsWithPackagedRuntime(runtime, managedPlugin)
+  }
 
   info(`Packaged OpenClaw bundle verification passed: ${winUnpackedDir}`)
   return {

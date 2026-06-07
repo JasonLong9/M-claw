@@ -256,7 +256,9 @@ export async function guardedWriteConfig(
   }
 
   try {
-    const currentConfig = await readConfig()
+    const currentConfig = await readConfig({
+      candidate: preparation.candidate,
+    })
     const changedJsonPaths = collectChangedJsonPaths(currentConfig, request.config)
 
     if (changedJsonPaths.length === 0) {
@@ -274,7 +276,9 @@ export async function guardedWriteConfig(
       }
     }
 
-    await writeConfig(request.config)
+    await writeConfig(request.config, {
+      candidate: preparation.candidate,
+    })
     const ownershipEntry = await recordManagedConfigWrite(preparation.candidate, {
       filePath: preparation.candidate.configPath,
       jsonPaths: changedJsonPaths,
@@ -328,7 +332,9 @@ export async function guardedWriteEnvFile(
   }
 
   try {
-    const currentEnv = await readEnvFile()
+    const currentEnv = await readEnvFile({
+      candidate: preparation.candidate,
+    })
     const changedJsonPaths = Object.keys(request.updates)
       .filter((key) => currentEnv[key] !== request.updates[key])
       .map((key) => `$.${key}`)
@@ -349,7 +355,9 @@ export async function guardedWriteEnvFile(
       }
     }
 
-    await writeEnvFile(request.updates)
+    await writeEnvFile(request.updates, {
+      candidate: preparation.candidate,
+    })
     const openClawPaths = resolveOpenClawPathsFromStateRoot({
       stateRoot: preparation.candidate.stateRoot,
       configFile: preparation.candidate.configPath,

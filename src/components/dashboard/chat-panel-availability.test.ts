@@ -7,7 +7,7 @@ describe('deriveChatPanelAvailabilityView', () => {
       availabilityState: 'degraded',
       canSend: true,
       connectedModels: ['openai/gpt-5.4-pro'],
-      availabilityMessage: '网关连接不稳定，正在自动恢复',
+      availabilityMessage: '本机服务连接不稳定，正在自动恢复',
       preserveConversation: true,
     })
 
@@ -39,13 +39,13 @@ describe('deriveChatPanelAvailabilityView', () => {
       availabilityState: 'offline',
       canSend: false,
       connectedModels: ['openai/gpt-5.4-pro'],
-      availabilityMessage: '模型已配置，但网关当前未运行',
+      availabilityMessage: '模型已配置，但本机服务当前未运行',
       preserveConversation: true,
     })
 
     expect(view.showAvailabilityBanner).toBe(true)
     expect(view.showAvailabilityEmptyState).toBe(false)
-    expect(view.headerBadgeLabel).toBe('网关离线')
+    expect(view.headerBadgeLabel).toBe('本机服务离线')
     expect(view.statusDetail).toContain('恢复后可继续查看或发送')
   })
 })

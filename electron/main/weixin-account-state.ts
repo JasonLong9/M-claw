@@ -13,6 +13,19 @@ export interface WeixinAccountState {
   name?: string
 }
 
+export interface WeixinStatePathDiagnostic {
+  activeStateDir: string
+  defaultStateDir: string
+  usingNonDefaultStateDir: boolean
+  activeAccountsDirExists: boolean
+  defaultAccountsDirExists: boolean
+  activeConfiguredAccounts: number
+  defaultConfiguredAccounts: number
+  activeCredentialFiles: number
+  defaultCredentialFiles: number
+  possiblePathMismatch: boolean
+}
+
 interface WeixinStoredAccountData {
   token?: string
   baseUrl?: string
@@ -39,6 +52,10 @@ async function resolveOpenClawStateDir(): Promise<string> {
   return path.join(process.env.HOME || process.env.USERPROFILE || '', '.openclaw')
 }
 
+function resolveDefaultOpenClawStateDir(): string {
+  return path.join(process.env.HOME || process.env.USERPROFILE || '', '.openclaw')
+}
+
 async function resolveWeixinStatePaths(): Promise<{
   stateDir: string
   weixinStateDir: string
@@ -47,6 +64,16 @@ async function resolveWeixinStatePaths(): Promise<{
   credentialsDir: string
 }> {
   const stateDir = await resolveOpenClawStateDir()
+  return resolveWeixinStatePathsForStateDir(stateDir)
+}
+
+function resolveWeixinStatePathsForStateDir(stateDir: string): {
+  stateDir: string
+  weixinStateDir: string
+  accountsDir: string
+  accountIndexPath: string
+  credentialsDir: string
+} {
   const weixinStateDir = path.join(stateDir, 'openclaw-weixin')
   return {
     stateDir,
@@ -107,11 +134,119 @@ function readStoredWeixinAccount(accountsDir: string, accountId: string): Weixin
   return readJsonFile<WeixinStoredAccountData>(path.join(accountsDir, `${rawAccountId}.json`))
 }
 
+function countConfiguredAccounts(paths: { accountsDir: string; accountIndexPath: string }): number {
+  const indexedAccountIds = listIndexedAccountIds(paths.accountIndexPath)
+  let count = 0
+  for (const accountId of indexedAccountIds) {
+    const stored = readStoredWeixinAccount(paths.accountsDir, accountId)
+    if (stored?.token && String(stored.token).trim()) {
+      count += 1
+    }
+  }
+  return count
+}
+
+function ensureJsonParentDir(filePath: string): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+}
+
+function appendIndexedAccountId(accountIndexPath: string, accountId: string): void {
+  const normalized = sanitizeAccountId(accountId)
+  if (!normalized) return
+  const nextIndex = Array.from(new Set([...listIndexedAccountIds(accountIndexPath), normalized]))
+  ensureJsonParentDir(accountIndexPath)
+  fs.writeFileSync(accountIndexPath, JSON.stringify(nextIndex, null, 2), 'utf-8')
+}
+
+function resolveAccountJsonCandidates(accountsDir: string, accountId: string): string[] {
+  const rawAccountId = deriveRawAccountId(accountId)
+  return Array.from(
+    new Set(
+      [path.join(accountsDir, `${accountId}.json`), rawAccountId ? path.join(accountsDir, `${rawAccountId}.json`) : ''].filter(Boolean)
+    )
+  )
+}
+
+function mirrorFallbackWeixinAccountIntoActiveState(params: {
+  accountId: string
+  activeAccountsDir: string
+  activeAccountIndexPath: string
+  fallbackAccountsDir: string
+}): boolean {
+  const normalizedAccountId = sanitizeAccountId(params.accountId)
+  if (!normalizedAccountId) return false
+
+  const activeCandidates = resolveAccountJsonCandidates(params.activeAccountsDir, normalizedAccountId)
+  if (activeCandidates.some((candidatePath) => fs.existsSync(candidatePath))) {
+    appendIndexedAccountId(params.activeAccountIndexPath, normalizedAccountId)
+    return false
+  }
+
+  const fallbackCandidates = resolveAccountJsonCandidates(params.fallbackAccountsDir, normalizedAccountId)
+  const fallbackSource = fallbackCandidates.find((candidatePath) => fs.existsSync(candidatePath))
+  if (!fallbackSource) return false
+
+  const activeTarget = path.join(params.activeAccountsDir, path.basename(fallbackSource))
+  ensureJsonParentDir(activeTarget)
+  fs.copyFileSync(fallbackSource, activeTarget)
+  appendIndexedAccountId(params.activeAccountIndexPath, normalizedAccountId)
+  return true
+}
+
+function countCredentialFiles(credentialsDir: string): number {
+  try {
+    if (!fs.existsSync(credentialsDir)) return 0
+    const entries = fs.readdirSync(credentialsDir, { withFileTypes: true })
+    return entries.filter((entry) => entry.isFile() && entry.name.toLowerCase().includes('openclaw-weixin')).length
+  } catch {
+    return 0
+  }
+}
+
+export async function getWeixinStatePathDiagnostic(): Promise<WeixinStatePathDiagnostic> {
+  const activeStateDir = await resolveOpenClawStateDir()
+  const defaultStateDir = resolveDefaultOpenClawStateDir()
+  const activePaths = resolveWeixinStatePathsForStateDir(activeStateDir)
+  const defaultPaths = resolveWeixinStatePathsForStateDir(defaultStateDir)
+  const activeCredentialFiles = countCredentialFiles(path.join(activeStateDir, 'credentials'))
+  const defaultCredentialFiles = countCredentialFiles(path.join(defaultStateDir, 'credentials'))
+  const activeConfiguredAccounts = countConfiguredAccounts(activePaths)
+  const defaultConfiguredAccounts = countConfiguredAccounts(defaultPaths)
+  const usingNonDefaultStateDir = activeStateDir !== defaultStateDir
+  return {
+    activeStateDir,
+    defaultStateDir,
+    usingNonDefaultStateDir,
+    activeAccountsDirExists: fs.existsSync(activePaths.accountsDir),
+    defaultAccountsDirExists: fs.existsSync(defaultPaths.accountsDir),
+    activeConfiguredAccounts,
+    defaultConfiguredAccounts,
+    activeCredentialFiles,
+    defaultCredentialFiles,
+    possiblePathMismatch:
+      usingNonDefaultStateDir
+      && (defaultConfiguredAccounts > 0 || defaultCredentialFiles > 0 || fs.existsSync(defaultPaths.accountsDir))
+      && activeConfiguredAccounts === 0
+      && activeCredentialFiles === 0,
+  }
+}
+
 export async function listWeixinAccountState(): Promise<WeixinAccountState[]> {
   const [paths, config] = await Promise.all([resolveWeixinStatePaths(), readConfig().catch(() => null)])
   const configAccounts = resolveWeixinAccountConfigMap(config)
   const indexedAccountIds = listIndexedAccountIds(paths.accountIndexPath)
+  const fallbackStateDir = resolveDefaultOpenClawStateDir()
+  const fallbackAccountsDir = path.join(fallbackStateDir, 'openclaw-weixin', 'accounts')
+  const fallbackAccountIndexPath = path.join(fallbackStateDir, 'openclaw-weixin', 'accounts.json')
+  const fallbackIndexedAccountIds =
+    fallbackStateDir !== paths.stateDir
+      ? listIndexedAccountIds(fallbackAccountIndexPath)
+      : []
   const mergedAccountIds = new Set<string>(indexedAccountIds)
+  for (const accountId of fallbackIndexedAccountIds) {
+    const normalized = sanitizeAccountId(accountId)
+    if (normalized) mergedAccountIds.add(normalized)
+  }
 
   for (const accountId of Object.keys(configAccounts)) {
     const normalized = sanitizeAccountId(accountId)
@@ -120,7 +255,18 @@ export async function listWeixinAccountState(): Promise<WeixinAccountState[]> {
 
   const accounts: WeixinAccountState[] = []
   for (const accountId of mergedAccountIds) {
-    const stored = readStoredWeixinAccount(paths.accountsDir, accountId)
+    let stored = readStoredWeixinAccount(paths.accountsDir, accountId)
+    if (!stored && fallbackStateDir !== paths.stateDir) {
+      stored = readStoredWeixinAccount(fallbackAccountsDir, accountId)
+      if (stored) {
+        mirrorFallbackWeixinAccountIntoActiveState({
+          accountId,
+          activeAccountsDir: paths.accountsDir,
+          activeAccountIndexPath: paths.accountIndexPath,
+          fallbackAccountsDir,
+        })
+      }
+    }
     const configEntry = hasOwnRecord(configAccounts[accountId]) ? configAccounts[accountId] : {}
     accounts.push({
       accountId,
@@ -205,20 +351,30 @@ export async function removeWeixinAccountState(accountIdInput: string): Promise<
     return { ok: false }
   }
 
-  const paths = await resolveWeixinStatePaths()
+  const activePaths = await resolveWeixinStatePaths()
+  const defaultStateDir = resolveDefaultOpenClawStateDir()
+  const pathSets = [
+    activePaths,
+    ...(defaultStateDir !== activePaths.stateDir ? [resolveWeixinStatePathsForStateDir(defaultStateDir)] : []),
+  ]
   const rawAccountId = deriveRawAccountId(accountId)
   const candidateIds = Array.from(new Set([accountId, rawAccountId].filter(Boolean) as string[]))
 
   await Promise.all(
-    candidateIds.flatMap((candidateId) => [
-      removeIfExists(path.join(paths.accountsDir, `${candidateId}.json`)),
-      removeIfExists(path.join(paths.accountsDir, `${candidateId}.sync.json`)),
-      removeIfExists(
-        path.join(paths.credentialsDir, `${safeFrameworkKey('openclaw-weixin')}-${safeFrameworkKey(candidateId)}-allowFrom.json`)
-      ),
-    ])
+    pathSets.flatMap((paths) =>
+      candidateIds.flatMap((candidateId) => [
+        removeIfExists(path.join(paths.accountsDir, `${candidateId}.json`)),
+        removeIfExists(path.join(paths.accountsDir, `${candidateId}.sync.json`)),
+        removeIfExists(path.join(paths.accountsDir, `${candidateId}.context-tokens.json`)),
+        removeIfExists(
+          path.join(paths.credentialsDir, `${safeFrameworkKey('openclaw-weixin')}-${safeFrameworkKey(candidateId)}-allowFrom.json`)
+        ),
+      ])
+    )
   )
 
-  removeFromAccountIndex(paths.accountIndexPath, accountId)
+  for (const paths of pathSets) {
+    removeFromAccountIndex(paths.accountIndexPath, accountId)
+  }
   return { ok: true }
 }

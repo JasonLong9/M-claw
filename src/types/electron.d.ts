@@ -22,6 +22,12 @@ import type {
   OpenClawVersionPolicyState,
   OpenClawVersionTargetAction,
 } from '../shared/openclaw-version-policy'
+import type {
+  ClaudeCodeInstallResult,
+  ClaudeCodeStatusSnapshot,
+  CodingModelProfileId,
+  CodingWorkspaceStatusSnapshot,
+} from '../shared/coding-mode'
 
 interface CliResult {
   ok: boolean
@@ -29,6 +35,7 @@ interface CliResult {
   stderr: string
   code: number | null
   canceled?: boolean
+  securityErrorCode?: string
   npmRegistryAttempts?: Array<{
     mirrorId: string
     label: string
@@ -174,6 +181,113 @@ interface WecomQrCheckResult {
   error?: string
 }
 
+type SkillStaticSeverity = 'low' | 'medium' | 'high' | 'critical'
+
+interface SkillStaticFinding {
+  ruleId: string
+  severity: SkillStaticSeverity
+  message: string
+  filePath: string
+  sample: string
+}
+
+interface SkillStaticScanResult {
+  skillSlug: string
+  scannedAt: string
+  scannedFiles: number
+  findings: SkillStaticFinding[]
+  highestSeverity: SkillStaticSeverity | 'none'
+  riskScore: number
+  blocked: boolean
+}
+
+interface SkillsStaticScanReport {
+  summary: { scannedAt: string; total: number; blocked: number } | null
+  results: SkillStaticScanResult[]
+}
+
+type SkillDynamicVerdict = 'allow' | 'warn' | 'block'
+type SkillDynamicTraceType = 'file' | 'network' | 'subprocess'
+
+interface SkillDynamicTrace {
+  type: SkillDynamicTraceType
+  eventType: 'exec' | 'file_write' | 'file_read_sensitive' | 'network_external' | 'env_sensitive_access'
+  filePath: string
+  sample: string
+  risk: number
+}
+
+interface SkillDynamicSandboxResult {
+  skillSlug: string
+  scannedAt: string
+  timeoutMs: number
+  scannedFiles: number
+  traces: SkillDynamicTrace[]
+  riskScore: number
+  verdict: SkillDynamicVerdict
+}
+
+interface SkillAuditItem {
+  skillSlug: string
+  staticScan: SkillStaticScanResult
+  dynamicProbe: SkillDynamicSandboxResult | null
+}
+
+interface SkillAuditDelta {
+  addedSkills: string[]
+  removedSkills: string[]
+  changedSkills: Array<{
+    skillSlug: string
+    staticRiskDelta: number
+    dynamicRiskDelta: number
+    findingsDelta: number
+    staticRuleDelta: {
+      added: string[]
+      removed: string[]
+    }
+    dynamicTraceTypeDelta: {
+      added: string[]
+      removed: string[]
+    }
+  }>
+}
+
+interface SkillContinuousAuditSnapshot {
+  auditId: string
+  auditedAt: string
+  totalSkills: number
+  blockedSkills: string[]
+  items: SkillAuditItem[]
+  delta: SkillAuditDelta
+}
+
+interface SkillsAuditSchedulerState {
+  enabled: boolean
+  intervalMs: number
+  lastRunAt: string | null
+  lastError: string | null
+}
+
+type SkillRiskLevel = 'low' | 'medium' | 'high' | 'critical'
+type SkillRemediationAction = 'notify' | 'restrict' | 'quarantine'
+
+interface SkillRemediationRecord {
+  timestamp: string
+  skillSlug: string
+  level: SkillRiskLevel
+  action: SkillRemediationAction
+  reason?: string
+  operator: 'system' | 'manual'
+}
+
+interface SkillFalsePositiveExemption {
+  skillSlug: string
+  reason: string
+  reviewer: string
+  createdAt: string
+  expiresAt: string
+}
+
 interface CommandProgress {
   step: string
   message?: string
@@ -253,6 +367,17 @@ interface WeixinAccountState {
   userId?: string
   enabled: boolean
   name?: string
+}
+
+interface WeixinStatePathDiagnostic {
+  activeStateDir: string
+  defaultStateDir: string
+  usingNonDefaultStateDir: boolean
+  activeAccountsDirExists: boolean
+  defaultAccountsDirExists: boolean
+  activeCredentialFiles: number
+  defaultCredentialFiles: number
+  possiblePathMismatch: boolean
 }
 
 interface PairingAllowFromUser {
@@ -1458,6 +1583,7 @@ type ChatMessageRole = 'user' | 'assistant' | 'system'
 type ChatMessageStatus = 'pending' | 'sent' | 'error'
 
 type ChatThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high'
+type ChatTaskMode = 'normal-chat' | 'coding-executor'
 type ChatMemoryScope = 'user' | 'session'
 type ChatMemorySource = 'auto' | 'manual'
 
@@ -1652,6 +1778,9 @@ interface ChatSendRequest {
   sessionId: string
   text: string
   thinking?: ChatThinkingLevel
+  taskMode?: ChatTaskMode
+  workspacePath?: string
+  codingModelProfileId?: CodingModelProfileId
 }
 
 interface ChatSendResult {
@@ -1825,8 +1954,8 @@ interface ElectronApi {
   getStatus: () => Promise<CliResult>
 
   // Config
-  readConfig: () => Promise<Record<string, any> | null>
-  readConfigRedacted: () => Promise<Record<string, any> | null>
+  readConfig: (candidate?: OpenClawInstallCandidate | null) => Promise<Record<string, any> | null>
+  readConfigRedacted: (candidate?: OpenClawInstallCandidate | null) => Promise<Record<string, any> | null>
 
   // Env file
   readEnvFile: () => Promise<Record<string, string>>
@@ -1878,15 +2007,22 @@ interface ElectronApi {
   onWeixinInstallerEvent: (listener: (payload: WeixinInstallerSessionEvent) => void) => () => void
   listWeixinAccounts: () => Promise<WeixinAccountState[]>
   removeWeixinAccount: (accountId: string) => Promise<{ ok: boolean }>
+  getWeixinPathDiagnostic: () => Promise<WeixinStatePathDiagnostic>
 
   // Channels
   channelsAdd: (channel: string, token: string) => Promise<CliResult>
   setupDingtalkOfficialChannel: (formData: Record<string, string>) => Promise<DingtalkOfficialSetupResult>
   getOfficialChannelStatus: (channelId: 'feishu' | 'dingtalk') => Promise<OfficialChannelStatusView>
   repairOfficialChannel: (channelId: 'feishu' | 'dingtalk') => Promise<OfficialChannelActionResult>
-  getManagedChannelPluginStatus: (channelId: string) => Promise<ManagedChannelPluginStatusView>
-  prepareManagedChannelPluginForSetup: (channelId: string) => Promise<ManagedChannelPluginPrepareResult>
-  repairManagedChannelPlugin: (channelId: string) => Promise<ManagedChannelPluginRepairResult>
+    getManagedChannelPluginStatus: (
+      channelId: string,
+      candidate?: OpenClawInstallCandidate | null
+    ) => Promise<ManagedChannelPluginStatusView>
+    prepareManagedChannelPluginForSetup: (channelId: string) => Promise<ManagedChannelPluginPrepareResult>
+    repairManagedChannelPlugin: (
+      channelId: string,
+      candidate?: OpenClawInstallCandidate | null
+    ) => Promise<ManagedChannelPluginRepairResult>
 
   // Dashboard
   openDashboard: () => Promise<CliResult>
@@ -1899,6 +2035,9 @@ interface ElectronApi {
   listChatTraceEntries: (limit?: number) => Promise<ChatTraceEntry[]>
   patchChatSessionModel: (request: ChatPatchSessionModelRequest) => Promise<ChatPatchSessionModelResult>
   getChatTranscript: (sessionId: string) => Promise<ChatTranscript>
+  getClaudeCodeStatus: () => Promise<ClaudeCodeStatusSnapshot>
+  installClaudeCode: () => Promise<ClaudeCodeInstallResult>
+  inspectCodingWorkspacePath: (workspacePath?: string) => Promise<CodingWorkspaceStatusSnapshot>
   sendChatMessage: (request: ChatSendRequest) => Promise<ChatSendResult>
   cancelChatMessage: () => Promise<boolean>
   getActiveChatSendState: () => Promise<ActiveChatSendState>
@@ -2122,6 +2261,75 @@ interface ElectronApi {
   skillsInstall: (name: string) => Promise<CliResult>
   clawhubSearch: (query: string, limit?: number) => Promise<{ ok: boolean; skills: { slug: string; name: string; score: number }[]; error?: string }>
   clawhubInstall: (slug: string) => Promise<CliResult>
+  getSkillsSecuritySummary: () => Promise<{
+    total: number
+    allowed: number
+    blocked: number
+    byErrorCode: Record<string, number>
+  }>
+  exportSkillsSecurityAuditLog: () => Promise<string>
+  getSkillsRuntimeRiskSummary: () => Promise<{
+    riskBySkill: Record<string, number>
+    disabledSkills: string[]
+    recentEvents: Array<{ skillSlug: string; type: string; detail?: string; timestamp: string }>
+  }>
+  scanOneSkillSecurity: (slug: string) => Promise<SkillStaticScanResult | null>
+  scanAllSkillsSecurity: () => Promise<SkillStaticScanResult[]>
+  getSkillsScanReport: () => Promise<SkillsStaticScanReport>
+  probeSkillDynamicSecurity: (
+    slug: string,
+    options?: { timeoutMs?: number; maxFiles?: number }
+  ) => Promise<SkillDynamicSandboxResult | null>
+  runSkillsContinuousAudit: () => Promise<SkillContinuousAuditSnapshot>
+  getLatestSkillsAuditSnapshot: () => Promise<SkillContinuousAuditSnapshot | null>
+  listSkillsAuditSnapshots: (limit?: number) => Promise<SkillContinuousAuditSnapshot[]>
+  startSkillsAuditScheduler: (options?: { intervalMs?: number }) => Promise<{
+    ok: boolean
+    enabled: boolean
+    intervalMs: number
+  }>
+  stopSkillsAuditScheduler: () => Promise<{ ok: boolean }>
+  getSkillsAuditSchedulerState: () => Promise<SkillsAuditSchedulerState>
+  applySkillRemediation: (payload: {
+    skillSlug: string
+    level: SkillRiskLevel
+    reason?: string
+    operator?: 'system' | 'manual'
+  }) => Promise<{
+    ok: boolean
+    action: SkillRemediationAction
+    skillSlug: string
+  }>
+  restoreSkillRemediation: (payload: {
+    skillSlug: string
+    reason?: string
+    operator?: 'system' | 'manual'
+  }) => Promise<{ ok: boolean; skillSlug: string }>
+  getSkillRemediationState: () => Promise<{
+    restrictedSkills: string[]
+    quarantinedSkills: string[]
+    runtimeDisabledSkills: string[]
+    exemptions: SkillFalsePositiveExemption[]
+    records: SkillRemediationRecord[]
+  }>
+  upsertSkillRemediationExemption: (payload: {
+    skillSlug: string
+    reason: string
+    reviewer: string
+    expiresInHours: number
+  }) => Promise<{ ok: boolean; record?: SkillFalsePositiveExemption; error?: string }>
+  removeSkillRemediationExemption: (skillSlug: string) => Promise<{ ok: boolean }>
+  listSkillRemediationExemptions: () => Promise<SkillFalsePositiveExemption[]>
+  autoApplyRemediationFromLatestAudit: () => Promise<
+    | {
+        ok: true
+        summary: { total: number; quarantined: number; restricted: number; notified: number; skippedByExemption: number }
+      }
+    | {
+        ok: false
+        error: string
+      }
+  >
   depsInstallBin: (bin: string) => Promise<CliResult>
   depsInstallSkillDeps: (skillName: string) => Promise<CliResult>
   onDepsInstallLog: (listener: (msg: string) => void) => () => void

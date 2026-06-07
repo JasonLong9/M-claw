@@ -22,8 +22,10 @@ export type ChatMessageRole = 'user' | 'assistant' | 'system'
 export type ChatMessageStatus = 'pending' | 'sent' | 'error'
 
 import type { ChatMemoryEntry } from './chat-memory'
+import type { CodingModelProfileId } from './coding-mode'
 
 export type ChatThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high'
+export type ChatTaskMode = 'normal-chat' | 'coding-executor'
 
 export type ChatSendErrorCode =
   | 'gateway-offline'
@@ -85,6 +87,9 @@ export interface ChatSessionSummary {
   sessionKey?: string
   upstreamConfirmed?: boolean
   agentId: string
+  title?: string
+  previewText?: string
+  messageCount?: number
   model?: string
   selectedModel?: string
   canPatchModel?: boolean
@@ -114,6 +119,9 @@ export interface DashboardChatSessionStatus {
 }
 
 export interface DashboardChatHistorySummary {
+  title: string
+  previewText?: string
+  sourceDetail?: string
   originBadge: string
   secondaryBadge?: string
   modelDetail: string
@@ -204,6 +212,9 @@ export interface ChatSendRequest {
   // Deliberately no `model` field here. Session model changes must go through
   // `patchChatSessionModel()` so Qclaw mirrors OpenClaw Control UI semantics.
   thinking?: ChatThinkingLevel
+  taskMode?: ChatTaskMode
+  workspacePath?: string
+  codingModelProfileId?: CodingModelProfileId
 }
 
 export interface ChatSendResult {

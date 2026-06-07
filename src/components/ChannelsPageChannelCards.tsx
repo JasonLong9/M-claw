@@ -14,6 +14,7 @@ interface ChannelsPageChannelCardsProps {
     }
   >
   togglingChannelId?: string | null
+  removingChannelId?: string | null
   repairingPluginChannelId?: string | null
   getPlatformInfo: (channelId: string, platform: string) => ChannelsPageChannelCardPlatformInfo
   getStatusBadges: (channel: ChannelsPageChannelCardChannel) => ChannelsPageChannelCardBadge[]
@@ -33,6 +34,7 @@ interface ChannelsPageChannelCardsProps {
 export default function ChannelsPageChannelCards({
   channels,
   togglingChannelId = null,
+  removingChannelId = null,
   repairingPluginChannelId = null,
   getPlatformInfo,
   getStatusBadges,
@@ -53,8 +55,10 @@ export default function ChannelsPageChannelCards({
       {channels.map((channel) => {
         const platformInfo = getPlatformInfo(channel.id, channel.platform)
         const isToggling = togglingChannelId === channel.id
+        const isRemoving = removingChannelId === channel.id
         const togglingAnyChannel = Boolean(togglingChannelId)
         const togglingAnotherChannel = Boolean(togglingChannelId && togglingChannelId !== channel.id)
+        const removingAnyChannel = Boolean(removingChannelId)
         const feishuStatusAlert = getFeishuSharedStatusAlert(channel)
         const channelStatusBadges = getStatusBadges(channel)
         const channelCardSummary = getSummary(channel, platformInfo.name)
@@ -71,8 +75,10 @@ export default function ChannelsPageChannelCards({
             feishuSharedStatusAlert={feishuStatusAlert}
             showPluginStatus={shouldShowPluginStatus(channel)}
             togglingAnyChannel={togglingAnyChannel}
+            removingAnyChannel={removingAnyChannel}
             togglingAnotherChannel={togglingAnotherChannel}
             isToggling={isToggling}
+            isRemoving={isRemoving}
             showRepairAction={shouldShowRepairAction(channel)}
             repairDisabled={
               togglingAnyChannel

@@ -97,7 +97,7 @@ export function buildOpenClawInstallFailureGuidance(result: CliResultLikeForGuid
           .filter(Boolean)
       : []
 
-  const lines: string[] = ['OpenClaw 本地内置本体释放失败，且网络兜底部署也未完成。']
+  const lines: string[] = ['Mclaw 本机运行组件释放失败，且网络兜底部署也未完成。']
 
   if (attemptedMirrors.length > 0) {
     lines.push(`Mclaw 仅在本地内置载荷不可用时才会触发网络兜底，本次已尝试以下源：${attemptedMirrors.join('、')}。`)
@@ -152,7 +152,7 @@ export function buildOpenClawInstallFailureGuidance(result: CliResultLikeForGuid
     lines.push('检测到网络连接失败，请确认当前网络、代理或防火墙没有拦截公共下载请求。')
   }
 
-  lines.push('如反复失败，您仍可临时手动补装外部 OpenClaw 运行环境作为兜底路径；完成后重启 Mclaw：')
+  lines.push('如反复失败，您仍可临时手动补装外部运行组件作为兜底路径；完成后重启 Mclaw：')
   for (const command of OPENCLAW_MANUAL_INSTALL_COMMANDS) {
     lines.push(command)
   }
@@ -348,10 +348,10 @@ export function resolveOpenClawInstallBehavior(): EnvCheckOpenClawInstallBehavio
     installedDescription: '已安装',
     refreshDescription: '刷新环境变量...',
     resolveRecheckDescription: (needOpenClawRuntimeRecovery: boolean) =>
-      needOpenClawRuntimeRecovery ? '正在验证 OpenClaw 运行环境...' : '重新检测 OpenClaw 运行环境...',
+      needOpenClawRuntimeRecovery ? '正在验证本机运行组件...' : '重新检测本机运行组件...',
     missingAfterInstallError: '安装后仍无法检测到',
     missingAfterInstallMessage: [
-      'OpenClaw 运行环境准备流程已执行，但当前仍无法检测到可用命令。',
+      '本机运行组件准备流程已执行，但当前仍无法检测到可用命令。',
       '这通常表示内置本体释放和 PATH 生效之间仍存在异常。',
       '请先重启 Mclaw 再试一次。',
       '如果仍失败，可临时在 PowerShell 中手动执行以下命令之一，再重新打开 Mclaw：',
@@ -362,9 +362,9 @@ export function resolveOpenClawInstallBehavior(): EnvCheckOpenClawInstallBehavio
 
 export function resolveGatewayBehavior(): EnvCheckGatewayBehavior {
   return {
-    deferredCheckingDescription: '当前先完成模型配置；点击进入控制面板后，Mclaw 会先自动启动并确认 Gateway，再进入主界面。',
+    deferredCheckingDescription: '当前先完成模型配置；点击进入控制面板后，Mclaw 会先准备本机服务并确认本地对话入口，再进入主界面。',
     deferredStepVersion: '自动启动',
-    deferredReadyDescription: '进入控制面板时会自动启动 Gateway 并确认本地对话可用，无需手动打开终端。',
+    deferredReadyDescription: '进入控制面板时会自动准备本机服务并确认本地对话可用，无需手动打开终端。',
     resolveContinueLabel: (sharedConfigInitialized: boolean) =>
       sharedConfigInitialized ? '进入控制面板' : '开始配置',
   }
@@ -490,15 +490,6 @@ export interface OpenClawTakeoverSummary {
 }
 
 type PluginRepairResult = Awaited<ReturnType<typeof window.api.repairIncompatiblePlugins>>
-
-export function kickoffStartupPluginRepair(
-  startRepair?: () => Promise<PluginRepairResult | null>
-): void {
-  if (!startRepair) return
-
-  // Startup plugin repair is best-effort and should not block the first env check render/update.
-  void startRepair().catch(() => null)
-}
 
 export interface OpenClawTakeoverFailure {
   candidateId: string
@@ -641,8 +632,8 @@ export function buildOpenClawGateState(
             : `需升级至 ${targetVersionLabel}`,
         message:
           upgradeCheck.targetAction === 'downgrade'
-            ? `检测到超出支持范围的 OpenClaw 版本，正在自动回退至 ${targetVersionLabel}`
-            : `检测到不受支持的 OpenClaw 版本，正在自动升级至 ${targetVersionLabel}`,
+            ? `检测到超出支持范围的本机运行组件版本，正在自动回退至 ${targetVersionLabel}`
+            : `检测到不受支持的本机运行组件版本，正在自动升级至 ${targetVersionLabel}`,
       }
     case 'manual_block':
       if (!upgradeCheck.blocksContinue) {
@@ -672,7 +663,7 @@ export function buildOpenClawGateState(
         statusLabel: `需手动调整至 ${targetVersionLabel}`,
         message:
           upgradeCheck.manualHint ||
-          `当前 OpenClaw 版本不在支持范围内，且当前安装来源暂不支持程序内自动纠偏，请先手动调整至 ${targetVersionLabel}`,
+          `当前本机运行组件版本不在支持范围内，且当前安装来源暂不支持程序内自动纠偏，请先手动调整至 ${targetVersionLabel}`,
         manualHint: upgradeCheck.manualHint,
       }
     case 'none':
@@ -686,7 +677,7 @@ export function buildOpenClawGateState(
         canAutoCorrect: false,
         blocksContinue: false,
         statusLabel: '已处于受支持上限',
-        message: withTakeoverSuffix('当前 OpenClaw 已是受支持上限版本'),
+        message: withTakeoverSuffix('当前本机运行组件已是受支持上限版本'),
       }
   }
 }
@@ -705,10 +696,10 @@ export function buildOpenClawAutoCorrectionConsentMessage(
   const action = gateState?.upgradeCheck?.targetAction === 'downgrade' ? '回退' : '升级'
 
   return [
-    '检测到当前 OpenClaw 版本不在 Mclaw 的支持范围内。',
+    '检测到当前本机运行组件版本不在 Mclaw 的支持范围内。',
     `当前版本：${currentVersion}`,
     `目标版本：${targetVersion}`,
-    `Mclaw 将自动${action} OpenClaw 到受支持版本后再继续。`,
+    `Mclaw 将自动${action}本机运行组件到受支持版本后再继续。`,
     '如果你不接受本次自动处理，Mclaw 将立即退出。',
     '',
     '是否继续？',
@@ -740,7 +731,7 @@ export function resolveOpenClawSourceBadgeState(
     case 'bundled-runtime':
       return {
         label: '内置本体',
-        title: '当前使用安装包内置的 OpenClaw 运行本体。',
+        title: '当前使用安装包内置的本机运行组件。',
       }
     case 'bundled-fallback':
       return {
@@ -755,7 +746,7 @@ export function resolveOpenClawSourceBadgeState(
     case 'external':
       return {
         label: '外部环境',
-        title: '当前使用的是系统中已有的 OpenClaw 运行环境。',
+        title: '当前使用的是系统中已有的本机运行组件。',
       }
     default:
       break
@@ -766,12 +757,12 @@ export function resolveOpenClawSourceBadgeState(
     case 'npm-global':
       return {
         label: '全局 npm',
-        title: '当前使用的是系统全局 npm 安装的 OpenClaw 运行环境。',
+        title: '当前使用的是系统全局 npm 安装的本机运行组件。',
       }
     case 'homebrew':
       return {
         label: 'Homebrew',
-        title: '当前使用的是 Homebrew 安装的 OpenClaw 运行环境。',
+        title: '当前使用的是 Homebrew 安装的本机运行组件。',
       }
     case 'nvm':
     case 'fnm':
@@ -780,23 +771,23 @@ export function resolveOpenClawSourceBadgeState(
     case 'volta':
       return {
         label: installSource,
-        title: `当前使用的是 ${installSource} 环境中的 OpenClaw。`,
+        title: `当前使用的是 ${installSource} 环境中的本机运行组件。`,
       }
     case 'custom':
       return {
         label: '自定义安装',
-        title: '当前使用的是用户自定义路径中的 OpenClaw 运行环境。',
+        title: '当前使用的是用户自定义路径中的本机运行组件。',
       }
     case 'unknown':
       return {
         label: '未知来源',
-        title: '当前 OpenClaw 来源暂未识别。',
+        title: '当前本机运行组件来源暂未识别。',
       }
     default:
       return installSource
         ? {
             label: installSource,
-            title: `当前 OpenClaw 来源：${installSource}`,
+            title: `当前本机运行组件来源：${installSource}`,
           }
         : null
   }
@@ -815,7 +806,7 @@ export function resolveOpenClawDeliveryNoticeState(
   return {
     color: currentMode === 'bundled-fallback' && targetMode === 'bundled-runtime' ? 'yellow' : 'blue',
     title: '运行来源',
-    message: `当前 OpenClaw 交付模式为 ${currentMode}，目标模式为 ${targetMode}。这通常表示当前平台没有命中目标本体路径，或当前安装包中的该平台内置 runtime 载荷缺失、损坏或打包不完整。`,
+    message: `当前本机运行组件交付模式为 ${currentMode}，目标模式为 ${targetMode}。这通常表示当前平台没有命中目标本体路径，或当前安装包中的该平台内置 runtime 载荷缺失、损坏或打包不完整。`,
   }
 }
 
@@ -842,8 +833,8 @@ function formatCancelDomainSummary(domains: string[]): string {
 
 const INITIAL_STEPS: Step[] = [
   { id: 'node', label: 'Node.js 运行时', description: '检查或补齐 Node.js 依赖', status: 'pending' },
-  { id: 'openclaw', label: 'OpenClaw 核心', description: '优先释放内置 OpenClaw 本体', status: 'pending' },
-  { id: 'gateway', label: 'Gateway 服务', description: '完成模型配置后启动 Gateway，并验证本地直聊', status: 'pending' },
+  { id: 'openclaw', label: '本机运行组件', description: '优先释放 Mclaw 内置运行组件', status: 'pending' },
+  { id: 'gateway', label: '本机服务', description: '完成模型配置后准备本机服务，并验证本地直聊', status: 'pending' },
 ]
 
 function createInitialSteps(): Step[] {
@@ -937,7 +928,7 @@ export function resolveEnvCheckNodeStepState(options: {
     return {
       status: 'pending-install',
       version: options.nodeResult.version,
-      description: `OpenClaw 需要 Node.js ${options.nodeCheckState.requiredVersion} 或更高版本。当前版本过低，请先手动升级 Node.js 后再继续。`,
+      description: `Mclaw 本机运行组件需要 Node.js ${options.nodeCheckState.requiredVersion} 或更高版本。当前版本过低，请先手动升级 Node.js 后再继续。`,
       progress: 20,
       latestNodeVersion,
       blocksContinue: true,
@@ -1068,8 +1059,8 @@ function TakeoverNotification({
     const id = 'takeover-notice'
     notifications.show({
       id,
-      title: '检测到已有 OpenClaw',
-      message: `Mclaw 将额外备份配置数据，继续使用原有 OpenClaw。备份目录：${backupRootDirectory}`,
+      title: '检测到已有本机运行组件',
+      message: `Mclaw 将额外备份配置数据，继续使用原有本机运行组件。备份目录：${backupRootDirectory}`,
       color: 'brand',
       autoClose: 8000,
     })
@@ -1219,13 +1210,11 @@ export default function EnvCheck({
   pluginRepairRunning = false,
   pluginRepairResult = null,
   onRepairPlugins,
-  onEnsurePluginRepairReady,
 }: {
   onReady: (payload: EnvCheckReadyPayload) => void
   pluginRepairRunning?: boolean
   pluginRepairResult?: PluginRepairResult | null
   onRepairPlugins?: () => Promise<PluginRepairResult | null>
-  onEnsurePluginRepairReady?: () => Promise<PluginRepairResult | null>
 }) {
   const envCheckTiming = UI_RUNTIME_DEFAULTS.envCheck
   const loadingTips = ENV_CHECK_UI_POLICY.loadingTips
@@ -1361,7 +1350,7 @@ export default function EnvCheck({
     setOpenClawUpgradeError('')
     updateStep('openclaw', {
       status: 'checking',
-      description: options.manualRefresh ? '正在刷新 OpenClaw 版本信息...' : '正在识别已有 OpenClaw 安装...',
+      description: options.manualRefresh ? '正在刷新本机运行组件版本信息...' : '正在识别已有本机运行组件...',
       progress,
     })
 
@@ -1388,7 +1377,7 @@ export default function EnvCheck({
     if (takeoverCandidates.length > 0 && nextDiscovery) {
       updateStep('openclaw', {
         status: 'checking',
-        description: `正在为 ${takeoverCandidates.length} 个 OpenClaw 安装执行接管备份...`,
+        description: `正在为 ${takeoverCandidates.length} 个本机运行组件执行接管备份...`,
         progress,
       })
 
@@ -1449,7 +1438,7 @@ export default function EnvCheck({
         updateStep('openclaw', {
           status: 'pending-install',
           version: nextGateState.activeCandidate?.version || activeCandidate.version,
-          description: '你未接受 OpenClaw 自动版本处理，Mclaw 即将退出。',
+          description: '你未接受本机运行组件自动版本处理，Mclaw 即将退出。',
           progress: 100,
         })
         void window.api.quitApp().catch(() => null)
@@ -1464,7 +1453,7 @@ export default function EnvCheck({
 
       const correctionResult = await window.api.runOpenClawUpgrade()
       if (!correctionResult.ok) {
-        const failureMessage = correctionResult.message || 'OpenClaw 版本自动纠偏失败'
+        const failureMessage = correctionResult.message || '本机运行组件版本自动纠偏失败'
         setOpenClawUpgradeError(failureMessage)
         setOpenClawGateState(nextGateState)
         setIsRefreshingOpenClawVersion(false)
@@ -1613,7 +1602,7 @@ export default function EnvCheck({
       setHistoryOnlyRecoveryConfirmOpened(false)
       notifications.show({
         title: '已记录手动备份确认',
-        message: '将重新执行环境检查，并继续恢复历史 OpenClaw 运行环境。',
+        message: '将重新执行环境检查，并继续恢复历史本机运行组件。',
         color: 'brand',
         autoClose: 5000,
       })
@@ -1634,12 +1623,12 @@ export default function EnvCheck({
     if (isRunning || isRefreshingOpenClawVersion || isUpgradingOpenClaw || activeTakeoverBackupBlocked) return
     setIsUpgradingOpenClaw(true)
     setOpenClawUpgradeError('')
-    updateStep('openclaw', { status: 'installing', description: '正在升级 OpenClaw 运行环境...', progress: 92 })
+    updateStep('openclaw', { status: 'installing', description: '正在升级本机运行组件...', progress: 92 })
 
     try {
       const upgradeResult = await window.api.runOpenClawUpgrade()
       if (!upgradeResult.ok) {
-        throw new Error(upgradeResult.message || 'OpenClaw 升级失败')
+        throw new Error(upgradeResult.message || '本机运行组件升级失败')
       }
 
       await window.api.refreshEnvironment()
@@ -1649,7 +1638,7 @@ export default function EnvCheck({
       setOpenClawUpgradeError(message)
       updateStep('openclaw', {
         status: openClawGateState?.blocksContinue ? 'pending-install' : 'ok',
-        description: openClawGateState?.message || 'OpenClaw 升级失败，请稍后重试',
+        description: openClawGateState?.message || '本机运行组件升级失败，请稍后重试',
         error: '',
       })
       setIsUpgradingOpenClaw(false)
@@ -1662,20 +1651,20 @@ export default function EnvCheck({
   const recoverHistoryOnlyOpenClaw = async (progress: number): Promise<HistoryOnlyRecoveryResult | null> => {
     updateStep('openclaw', {
       status: 'checking',
-      description: '正在重新识别历史 OpenClaw 数据...',
+      description: '正在重新识别历史本机运行组件数据...',
       progress,
     })
 
     const recoveredDiscovery = await window.api.discoverOpenClaw().catch(() => null)
     const recoveredCandidate = resolveActiveOpenClawCandidate(recoveredDiscovery)
     if (!recoveredDiscovery || !recoveredCandidate) {
-      showFatalMessage('历史 OpenClaw 运行环境补装后，仍无法识别可接管的安装。请重试或检查旧数据目录是否完整。')
+      showFatalMessage('历史本机运行组件补装后，仍无法识别可接管的安装。请重试或检查旧数据目录是否完整。')
       return null
     }
 
     updateStep('openclaw', {
       status: 'checking',
-      description: '正在备份历史 OpenClaw 数据...',
+      description: '正在备份历史本机运行组件数据...',
       progress: Math.min(100, progress + 3),
     })
 
@@ -1688,7 +1677,7 @@ export default function EnvCheck({
       )
       const warning = backupResult.manualBackupAction
         ? buildManualBackupWarning(backupResult.manualBackupAction)
-        : backupResult.message || '历史 OpenClaw 数据备份失败，请稍后重试。'
+        : backupResult.message || '历史本机运行组件数据备份失败，请稍后重试。'
       setHistoryOnlyRecoveryFailure({
         candidate: recoveredCandidate,
         failure,
@@ -1716,7 +1705,7 @@ export default function EnvCheck({
     updateStep('openclaw', {
       status: 'ok',
       version: managedCandidate.version,
-      description: '已恢复历史 OpenClaw 运行环境并完成备份接管',
+      description: '已恢复历史本机运行组件并完成备份接管',
       progress: 100,
     })
     setCurrentStep(2)
@@ -1869,7 +1858,6 @@ export default function EnvCheck({
     setIsUpgradingOpenClaw(false)
 
     try {
-      kickoffStartupPluginRepair(onEnsurePluginRepairReady)
       if (nodeInstallPlatformBehavior.shouldPrepareMacDeveloperTools) {
         updateStep('node', {
           status: 'checking',
@@ -1948,7 +1936,7 @@ export default function EnvCheck({
     }
 
     // 第二步：检测 OpenClaw 运行环境
-    updateStep('openclaw', { status: 'checking', description: '正在检查 OpenClaw 运行环境...', progress: needNode ? 25 : 20 })
+    updateStep('openclaw', { status: 'checking', description: '正在检查本机运行组件...', progress: needNode ? 25 : 20 })
     await delay(envCheckTiming.transitionShortMs)
     const openclawResult = await window.api.checkOpenClaw()
     const initialDiscovery = await window.api.discoverOpenClaw().catch(() => null)
@@ -1977,13 +1965,13 @@ export default function EnvCheck({
     if (installDecision.requiresRecovery) {
       updateStep('openclaw', {
         status: 'pending-install',
-        description: '检测到历史 OpenClaw 数据，待恢复运行环境',
+        description: '检测到历史本机运行组件数据，待恢复运行环境',
         progress: needNode ? 30 : 25,
       })
     } else if (needOpenClawInstall) {
       updateStep('openclaw', {
         status: 'pending-install',
-        description: '未检测到可用 OpenClaw 运行环境，将优先释放内置本体，必要时再回退公共下载源',
+        description: '未检测到可用本机运行组件，将优先释放 Mclaw 内置组件，必要时再回退公共下载源',
         progress: needNode ? 30 : 25,
       })
     } else {
@@ -2065,7 +2053,7 @@ export default function EnvCheck({
     if (shouldInstallOpenClawRuntime) {
       updateStep('openclaw', {
         status: 'installing',
-        description: needOpenClawRuntimeRecovery ? '正在恢复 OpenClaw 运行环境...' : '等待安装...',
+        description: needOpenClawRuntimeRecovery ? '正在恢复本机运行组件...' : '等待安装...',
         progress: needNode ? 55 : 45,
       })
     }
@@ -2076,7 +2064,7 @@ export default function EnvCheck({
     } else if (installProgressStepId === 'openclaw') {
       updateStep('openclaw', {
         status: 'installing',
-        description: needOpenClawRuntimeRecovery ? '正在恢复 OpenClaw 运行环境...' : '正在准备 OpenClaw 运行环境...',
+        description: needOpenClawRuntimeRecovery ? '正在恢复本机运行组件...' : '正在准备本机运行组件...',
         progress: 60,
       })
     }
@@ -2442,7 +2430,7 @@ export default function EnvCheck({
                     color="gray"
                     onClick={() => void handleOpenClawRefresh()}
                     disabled={isRefreshingOpenClawVersion || isUpgradingOpenClaw}
-                    title="刷新 OpenClaw 版本"
+                    title="刷新本机运行组件版本"
                   >
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
@@ -2472,7 +2460,7 @@ export default function EnvCheck({
         <div className="mb-4 rounded-lg p-3" style={{ backgroundColor: 'var(--app-bg-inset)', border: '1px solid var(--mantine-color-red-5)' }}>
           {openClawSourceBadge && (
             <Text size="xs" c="dimmed" mb="xs">
-              OpenClaw 来源：{openClawSourceBadge.label}
+              运行组件来源：{openClawSourceBadge.label}
             </Text>
           )}
           <Text size="xs" c="red">{openClawUpgradeError}</Text>
@@ -2483,12 +2471,12 @@ export default function EnvCheck({
         <Alert
           color="yellow"
           variant="light"
-          title="OpenClaw 需要手动处理版本"
+          title="本机运行组件需要手动处理版本"
           mb="sm"
         >
           {openClawSourceBadge && (
             <Text size="xs" c="dimmed" mb="xs">
-              OpenClaw 来源：{openClawSourceBadge.label}
+              运行组件来源：{openClawSourceBadge.label}
             </Text>
           )}
           <Text size="xs" c="dimmed">{openClawGateState.manualHint}</Text>
@@ -2510,12 +2498,12 @@ export default function EnvCheck({
         <Alert
           color={openClawMigrationSmoke.requiresConservativeMode ? 'yellow' : 'blue'}
           variant="light"
-          title="OpenClaw 迁移 Smoke"
+          title="本机运行组件迁移检查"
           mb="sm"
         >
           {openClawSourceBadge && (
             <Text size="xs" c="dimmed" mb="xs">
-              OpenClaw 来源：{openClawSourceBadge.label}
+              运行组件来源：{openClawSourceBadge.label}
             </Text>
           )}
           <Text size="xs" c="dimmed">
@@ -2581,7 +2569,7 @@ export default function EnvCheck({
         <div className="rounded-lg p-3" style={{ backgroundColor: 'var(--app-bg-inset)', border: '1px solid var(--mantine-color-red-5)' }}>
           {openClawSourceBadge && (
             <Text size="xs" c="dimmed" mb="xs">
-              OpenClaw 来源：{openClawSourceBadge.label}
+              运行组件来源：{openClawSourceBadge.label}
             </Text>
           )}
           <Text size="xs" c="red" mb="xs">{fatalIssue.message}</Text>
@@ -2653,7 +2641,7 @@ export default function EnvCheck({
         >
           <div className="space-y-4">
             <Text size="sm">
-              请确认你已经完成手动备份，再继续恢复并接管历史 OpenClaw 运行环境。
+              请确认你已经完成手动备份，再继续恢复并接管历史本机运行组件。
             </Text>
             <Text size="xs" c="dimmed">
               {formatTakeoverFailureManualBackupWarning(historyOnlyRecoveryFailure.failure)}
@@ -2685,13 +2673,13 @@ export default function EnvCheck({
         <Alert
           color="yellow"
           variant="light"
-          title="历史 OpenClaw 备份失败"
+          title="历史本机运行组件备份失败"
           mb="sm"
           styles={{ title: { fontSize: 'var(--mantine-font-size-sm)' } }}
         >
           {openClawSourceBadge && (
             <Text size="xs" c="dimmed" mb="xs">
-              OpenClaw 来源：{openClawSourceBadge.label}
+              运行组件来源：{openClawSourceBadge.label}
             </Text>
           )}
           <Text size="xs" c="dimmed">

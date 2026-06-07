@@ -106,7 +106,9 @@ import {
 import { resolveOpenClawBinaryPath, resolveOpenClawBinaryPathFromNpmPrefix } from './openclaw-package'
 import { buildOnboardCommand, collectOnboardValueFlags } from './openclaw-command-builder'
 import type { RepairStalePluginConfigFromCommandResult } from './openclaw-config-warnings'
+import type { OpenClawInstallCandidate } from '../../src/shared/openclaw-phase1'
 import type { OpenClawPaths } from './openclaw-paths'
+import { resolveOpenClawPathsFromStateRoot } from './openclaw-paths'
 import { rerunReadOnlyCommandAfterStalePluginRepair } from './openclaw-readonly-stale-plugin-repair'
 import { resetRuntimeOpenClawPathsCache, resolveRuntimeOpenClawPaths } from './openclaw-runtime-paths'
 import { isProviderConfiguredInStatus } from './openclaw-status'
@@ -346,7 +348,38 @@ export interface RunCliStreamOptions {
   binaryPath?: string
 }
 
-export async function getOpenClawPaths(): Promise<OpenClawPaths> {
+export interface OpenClawPathTarget {
+  stateRoot?: string | null
+  configPath?: string | null
+  candidate?: Pick<OpenClawInstallCandidate, 'stateRoot' | 'configPath'> | null
+}
+
+function resolveOpenClawPathTarget(target?: OpenClawPathTarget | null): {
+  stateRoot: string
+  configPath: string
+} | null {
+  const candidateStateRoot = String(target?.candidate?.stateRoot || '').trim()
+  const candidateConfigPath = String(target?.candidate?.configPath || '').trim()
+  const stateRoot = String(target?.stateRoot || candidateStateRoot).trim()
+  const configPath = String(target?.configPath || candidateConfigPath).trim()
+
+  if (!stateRoot && !configPath) return null
+
+  return {
+    stateRoot,
+    configPath,
+  }
+}
+
+export async function getOpenClawPaths(target?: OpenClawPathTarget | null): Promise<OpenClawPaths> {
+  const resolvedTarget = resolveOpenClawPathTarget(target)
+  if (resolvedTarget) {
+    return resolveOpenClawPathsFromStateRoot({
+      stateRoot: resolvedTarget.stateRoot || dirname(resolvedTarget.configPath),
+      configFile: resolvedTarget.configPath || undefined,
+    })
+  }
+
   return resolveRuntimeOpenClawPaths()
 }
 
@@ -3487,11 +3520,11 @@ export async function getStatus(): Promise<CliResult> {
   return runCli(['status', '--json'], MAIN_RUNTIME_POLICY.cli.statusTimeoutMs, 'gateway')
 }
 
-export async function readConfig(): Promise<Record<string, any> | null> {
+export async function readConfig(target?: OpenClawPathTarget | null): Promise<Record<string, any> | null> {
   try {
     return await runFsWithPermissionAutoRepair(
       async () => {
-        const openClawPaths = await getOpenClawPaths()
+        const openClawPaths = await getOpenClawPaths(target)
         const raw = await readFile(openClawPaths.configFile, 'utf-8')
         return JSON.parse(raw)
       },
@@ -3506,10 +3539,13 @@ export async function readConfig(): Promise<Record<string, any> | null> {
   }
 }
 
-export async function writeConfig(config: Record<string, any>): Promise<void> {
+export async function writeConfig(
+  config: Record<string, any>,
+  target?: OpenClawPathTarget | null
+): Promise<void> {
   await runFsWithPermissionAutoRepair(
     async () => {
-      const openClawPaths = await getOpenClawPaths()
+      const openClawPaths = await getOpenClawPaths(target)
       await mkdir(openClawPaths.homeDir, { recursive: true })
       const repairedConfig = repairKnownProviderConfigGaps(config).config || config
       const sanitizedConfig = sanitizeManagedPluginConfig(repairedConfig).config
@@ -3526,11 +3562,11 @@ export async function writeConfig(config: Record<string, any>): Promise<void> {
 }
 
 /** Read and parse .env file as key-value pairs */
-export async function readEnvFile(): Promise<Record<string, string>> {
+export async function readEnvFile(target?: OpenClawPathTarget | null): Promise<Record<string, string>> {
   try {
     return await runFsWithPermissionAutoRepair(
       async () => {
-        const openClawPaths = await getOpenClawPaths()
+        const openClawPaths = await getOpenClawPaths(target)
         const raw = await readFile(openClawPaths.envFile, 'utf-8')
         const env: Record<string, string> = {}
         for (const line of raw.split('\n')) {
@@ -3557,10 +3593,13 @@ export async function readEnvFile(): Promise<Record<string, string>> {
 }
 
 /** Write key-value pairs to .env file, preserving comments */
-export async function writeEnvFile(updates: Record<string, string | null | undefined>): Promise<void> {
+export async function writeEnvFile(
+  updates: Record<string, string | null | undefined>,
+  target?: OpenClawPathTarget | null
+): Promise<void> {
   await runFsWithPermissionAutoRepair(
     async () => {
-      const openClawPaths = await getOpenClawPaths()
+      const openClawPaths = await getOpenClawPaths(target)
       await mkdir(openClawPaths.homeDir, { recursive: true })
 
       let existing = ''

@@ -29,6 +29,7 @@ describe('ChannelConfigModalShell', () => {
     expect(configModalShellSource).toContain("maxHeight: 'calc(100vh - 120px)'")
     expect(configModalShellSource).toContain("configStep === 'channel-connect'")
     expect(configModalShellSource).toContain('<ChannelConnect')
+    expect(configModalShellSource).toContain("key={`channel-connect:${opened ? 'open' : 'closed'}:${selectedChannelId ?? 'none'}`}")
     expect(configModalShellSource).toContain('initialChannelId={selectedChannelId ?? undefined}')
     expect(configModalShellSource).toContain('onNext={onChannelConnectNext}')
     expect(configModalShellSource).toContain('onBack={onClose}')

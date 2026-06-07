@@ -11,9 +11,9 @@ import type { OpenClawInstallCandidate } from '../shared/openclaw-phase1'
 type CleanupMode = 'remove-openclaw' | 'uninstall-qclaw'
 
 function optionLabel(actionType: OpenClawCleanupActionType): string {
-  if (actionType === 'remove-openclaw') return '彻底删除 OpenClaw'
-  if (actionType === 'qclaw-uninstall-keep-openclaw') return '仅卸载 Qclaw，保留 OpenClaw'
-  return '卸载 Qclaw，同时删除 OpenClaw'
+  if (actionType === 'remove-openclaw') return '清理本机运行组件'
+  if (actionType === 'qclaw-uninstall-keep-openclaw') return '仅卸载 Mclaw，保留本机运行组件'
+  return '卸载 Mclaw，同时清理本机运行组件'
 }
 
 export default function CleanupDialog({
@@ -207,7 +207,7 @@ export default function CleanupDialog({
               {mode === 'remove-openclaw' ? 'Cleanup Center' : 'Uninstall Prep'}
             </Text>
             <Title order={3} mt="xs" size="lg" fw={600} className="app-text-primary">
-              {mode === 'remove-openclaw' ? '清理 OpenClaw' : '准备卸载 Qclaw'}
+          {mode === 'remove-openclaw' ? '清理本机运行组件' : '准备卸载 Mclaw'}
             </Title>
           </div>
           <Button variant="subtle" size="xs" onClick={onClose} className="app-text-muted transition hover:app-text-secondary">
@@ -414,7 +414,7 @@ export default function CleanupDialog({
                 disabled={running || !preview.canRun || (requiresCandidateSelection && !hasSelectedCandidates)}
               >
                 {mode === 'remove-openclaw'
-                  ? '确认清理 OpenClaw'
+                    ? '确认清理本机运行组件'
                   : '执行卸载准备'}
               </Button>
             </div>
@@ -426,13 +426,13 @@ export default function CleanupDialog({
               size="sm"
               title={
                 <Text fw={600} c="red">
-                  {mode === 'remove-openclaw' ? '⚠️ 确认清理 OpenClaw' : '⚠️ 确认执行卸载准备'}
+                    {mode === 'remove-openclaw' ? '⚠️ 确认清理本机运行组件' : '⚠️ 确认执行卸载准备'}
                 </Text>
               }
             >
               <Text size="sm">
                 {mode === 'remove-openclaw'
-                  ? '此操作将清理 OpenClaw 相关数据，清理后当前配置将不可恢复。'
+                      ? '此操作将清理本机运行组件相关数据，清理后当前配置将不可恢复。'
                   : '此操作将执行卸载准备，相关数据可能被删除且不可恢复。'}
               </Text>
               <Text size="sm" mt="sm" fw={500} c="brand">

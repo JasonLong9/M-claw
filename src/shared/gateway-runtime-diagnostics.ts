@@ -197,6 +197,27 @@ export function classifyGatewayRuntimeState(
   })
 
   if (explicitStateCode && explicitStateCode !== 'unknown_runtime_failure') {
+    if (explicitStateCode === 'plugin_load_failure' && isPluginAllowlistWarning(corpus)) {
+      const hasHardPluginFailureSignal =
+        /failed to load plugin|plugin not found|unknown channel id|manifest.*(invalid|mismatch)|export id/i.test(corpus)
+      if (!hasHardPluginFailureSignal) {
+        const explicitSummary = resolveExplicitSummary(typed)
+        trace?.add({
+          phase: 'classify',
+          step: 'explicit_state_code_downgrade_allowlist',
+          decision: 'explicit plugin_load_failure downgraded to plugin_allowlist_warning (no hard plugin failure signal)',
+          result: 'plugin_allowlist_warning',
+        })
+        return buildClassification(
+          typed,
+          'plugin_allowlist_warning',
+          explicitSummary || 'Gateway 检测到外部插件 allowlist 提示',
+          true,
+          reasonDetail
+        )
+      }
+    }
+
     const explicitSummary = resolveExplicitSummary(typed)
     trace?.add({
       phase: 'classify',

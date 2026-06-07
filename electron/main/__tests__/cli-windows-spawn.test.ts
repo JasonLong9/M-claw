@@ -8,9 +8,10 @@ describe('windows cli spawn visibility', () => {
     const cliSource = await readFile(path.join(process.cwd(), 'electron/main/cli.ts'), 'utf8')
 
     expect(cliSource).toContain('resolveHiddenWindowsShellInvocation')
-    expect(cliSource).toContain("shell: windowsShellInvocation ? false : resolvedCommand.shell,\n      windowsHide: true,")
-    expect(cliSource).toContain("shell: windowsShellInvocation ? false : useShell,\n        timeout,\n        windowsHide: true,")
-    expect(cliSource).toContain("cwd: resolveManagedSpawnCwd(),\n      timeout,\n      windowsHide: true,")
+    expect(cliSource).toContain("shell: windowsShellInvocation ? false : resolvedCommand.shell,")
+    expect(cliSource).toContain("shell: windowsShellInvocation ? false : useShell,")
+    expect(cliSource).toContain("cwd: normalizedOptions.cwd || resolveManagedSpawnCwd(),")
+    expect(cliSource).toContain('windowsHide: true,')
     expect(cliSource).toMatch(/resolveOpenClawCommand\(args, \{[\s\S]*commandPath: explicitBinaryPath \|\| undefined,[\s\S]*env: mergedEnv,[\s\S]*\}\)/)
     expect(cliSource).toMatch(/resolveOpenClawCommand\(args, \{[\s\S]*commandPath: binaryPath \|\| undefined,[\s\S]*env: mergedEnv,[\s\S]*\}\)/)
   })

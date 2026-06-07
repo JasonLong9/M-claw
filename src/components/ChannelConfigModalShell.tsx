@@ -74,6 +74,7 @@ export default function ChannelConfigModalShell({
     >
       {configStep === 'channel-connect' && (
         <ChannelConnect
+          key={`channel-connect:${opened ? 'open' : 'closed'}:${selectedChannelId ?? 'none'}`}
           initialChannelId={selectedChannelId ?? undefined}
           onNext={onChannelConnectNext}
           onBack={onClose}

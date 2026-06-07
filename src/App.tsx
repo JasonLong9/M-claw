@@ -106,7 +106,7 @@ function resolveOpenClawNoticeTitleBase(
   currentVersion: string | null | undefined,
   is322Band: boolean
 ): string {
-  if (is322Band) return 'OpenClaw 3.22'
+  if (is322Band) return '本机运行组件 3.22'
   return formatOpenClawVersionLabel(currentVersion)
 }
 
@@ -114,7 +114,7 @@ function buildFutureCandidateNoticeMessage(
   currentVersion: string | null | undefined
 ): string {
   const displayVersion = normalizeOpenClawVersionDisplay(currentVersion) || '当前版本'
-  return `${buildOpenClawConservativeCompatibilityGuidance(displayVersion)} 进入 Dashboard 前请优先确认记忆目录、Agent 协同与升级回退链路。`
+  return `${buildOpenClawConservativeCompatibilityGuidance(displayVersion)} 进入面板前请优先确认记忆目录、智能体协同与升级回退链路。`
 }
 
 function isHealthDerivedRuntimeBlock(reason: GatewayBlockingReason): boolean {
@@ -157,7 +157,7 @@ function describeBlockingReason(
     case 'provider_plugin_not_ready':
       return 'provider plugin 还未完成运行时就绪'
     case 'control_ui_handshake_failed':
-      return '控制界面与 Gateway 握手失败'
+      return '控制界面与本机服务连接失败'
     case 'service_generation_stale':
       return '守护进程仍在使用旧 generation'
     case 'legacy_env_alias_detected':
@@ -180,7 +180,7 @@ export function buildOpenClaw322Notice(
   const capabilities = snapshot.capabilities
   const gatewayRunning = snapshot.gatewayRunning === true
   const messageParts: string[] = []
-  let title = 'OpenClaw 3.22 兼容提示'
+  let title = '本机运行组件 3.22 兼容提示'
   let color: 'blue' | 'yellow' | 'red' = 'yellow'
 
   const displayVersion = normalizeOpenClawVersionDisplay(compatibility?.currentVersion)
@@ -207,7 +207,7 @@ export function buildOpenClaw322Notice(
   }
 
   if (displayVersion) {
-    messageParts.push(`当前检测到 OpenClaw ${displayVersion}。`)
+    messageParts.push(`当前检测到本机运行组件 ${displayVersion}。`)
   }
 
   if (candidateNeedsAttention) {
@@ -220,13 +220,13 @@ export function buildOpenClaw322Notice(
 
   if (runtimeNeedsAttention && runtime) {
     if (runtime.stateCode === 'blocked') {
-      title = is322Band ? 'OpenClaw 3.22 收敛被阻塞' : `${titleBase} 运行时被阻塞`
+      title = is322Band ? '本机运行组件 3.22 收敛被阻塞' : `${titleBase} 运行时被阻塞`
       color = 'red'
     } else if (runtime.stateCode === 'degraded') {
-      title = is322Band ? 'OpenClaw 3.22 收敛存在降级项' : `${titleBase} 运行时存在降级项`
+      title = is322Band ? '本机运行组件 3.22 收敛存在降级项' : `${titleBase} 运行时存在降级项`
       color = 'yellow'
     } else {
-      title = is322Band ? 'OpenClaw 3.22 正在收敛运行时状态' : `${titleBase} 正在收敛运行时状态`
+      title = is322Band ? '本机运行组件 3.22 正在收敛运行时状态' : `${titleBase} 正在收敛运行时状态`
       color = 'blue'
     }
 
@@ -253,11 +253,11 @@ export function buildOpenClaw322Notice(
   if (authRegistryDegraded && capabilities) {
     const registryMessage = String(capabilities.authRegistry.message || '').trim()
     messageParts.push(
-      registryMessage || '当前 OpenClaw 认证元数据不完整，模型中心会按可识别结果降级展示认证方式。'
+      registryMessage || '当前本机认证元数据不完整，模型中心会按可识别结果降级展示认证方式。'
     )
     if (color === 'blue') {
       color = 'yellow'
-      title = is322Band ? 'OpenClaw 3.22 兼容提示' : `${titleBase} 兼容提示`
+      title = is322Band ? '本机运行组件 3.22 兼容提示' : `${titleBase} 兼容提示`
     }
   }
 
@@ -334,7 +334,6 @@ function App() {
   })
   const pluginRepairPromiseRef = useRef<ActivePluginRepairTask | null>(null)
   const startupPluginRepairCacheRef = useRef(new Map<string, PluginRepairResult>())
-  const startupRepairAttemptedRef = useRef(false)
 
   const applyEnvSummaryToDiscovery = (
     nextDiscoveryResult: OpenClawDiscoveryResult | null,
@@ -353,9 +352,9 @@ function App() {
           ? { ...candidate, ownershipState: 'qclaw-installed' }
           : candidate
       ),
-      warnings: nextDiscoveryResult.warnings.includes('本次启动已由 Qclaw 安装 OpenClaw。')
+      warnings: nextDiscoveryResult.warnings.includes('本次启动已由 Mclaw 准备本机运行组件。')
         ? nextDiscoveryResult.warnings
-        : [...nextDiscoveryResult.warnings, '本次启动已由 Qclaw 安装 OpenClaw。'],
+        : [...nextDiscoveryResult.warnings, '本次启动已由 Mclaw 准备本机运行组件。'],
     }
   }
 
@@ -622,12 +621,6 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (startupRepairAttemptedRef.current) return
-    startupRepairAttemptedRef.current = true
-    void runPluginRepair('startup')
-  }, [runPluginRepair])
-
-  useEffect(() => {
     return window.api.onOpenModelsPage(() => {
       setPendingOpenUpdateCenter(false)
       setUpdateCenterOpen(false)
@@ -695,28 +688,7 @@ function App() {
   }, [appState])
 
   useEffect(() => {
-    const shouldShowCompatibilityNotice =
-      appState === 'setup' || appState === 'gateway-bootstrap' || appState === 'dashboard'
-
-    if (!shouldShowCompatibilityNotice) {
-      notifications.hide(OPENCLAW_322_NOTICE_ID)
-      return
-    }
-
-    const notice = buildOpenClaw322Notice(entryCompatibilitySnapshot)
-    if (!notice) {
-      notifications.hide(OPENCLAW_322_NOTICE_ID)
-      return
-    }
-
-    notifications.show({
-      id: OPENCLAW_322_NOTICE_ID,
-      title: notice.title,
-      message: notice.message,
-      color: notice.color,
-      autoClose: false,
-      withCloseButton: true,
-    })
+    notifications.hide(OPENCLAW_322_NOTICE_ID)
   }, [appState, entryCompatibilitySnapshot])
 
   const renderFrame = (content: ReactNode, scrollable = true) => (
@@ -726,7 +698,7 @@ function App() {
           <BrandWordmark compact muted />
         </div>
       </div>
-      <div className={`flex-1 flex items-center justify-center px-6 pb-6 ${scrollable ? 'overflow-y-auto' : 'overflow-hidden'}`}>{content}</div>
+      <div className={`flex-1 flex justify-center px-6 ${scrollable ? 'items-start overflow-y-auto py-4' : 'items-center overflow-hidden'}`}>{content}</div>
     </div>
   )
 
@@ -744,7 +716,7 @@ function App() {
       <div className="w-full max-w-md px-2">
         <Welcome onAccept={() => setAppState('env-check')} />
       </div>
-    , false))
+    ))
   }
 
   if (appState === 'env-check') {
@@ -755,7 +727,6 @@ function App() {
           pluginRepairRunning={pluginRepairRunning}
           pluginRepairResult={pluginRepairResult}
           onRepairPlugins={() => runPluginRepair('manual')}
-          onEnsurePluginRepairReady={() => runPluginRepair('startup')}
         />
       </div>
     ))
@@ -766,7 +737,8 @@ function App() {
       <GatewayBootstrapGate
         onReady={handleGatewayBootstrapReady}
         onReconfigure={handleReconfigure}
-      />
+      />,
+      false
     ))
   }
 

@@ -37,7 +37,7 @@ export default function QClawUpdateDialog({
       const nextStatus = activeCheck ? await window.api.checkQClawUpdate() : await window.api.getQClawUpdateStatus()
       setStatus(nextStatus)
     } catch (e: any) {
-      setError(e?.message || '读取 Qclaw 更新状态失败')
+      setError(e?.message || '读取 Mclaw 更新状态失败')
     } finally {
       setLoading(false)
     }
@@ -213,7 +213,7 @@ export default function QClawUpdateDialog({
     } catch (e: any) {
       const fallbackOpened = await tryOpenManualFallback('自动更新失败，已为你打开 dmg 安装包下载链接，请改为手动安装。')
       if (!fallbackOpened) {
-        setError(e?.message || '下载 Qclaw 更新失败')
+      setError(e?.message || '下载 Mclaw 更新失败')
       }
     } finally {
       setDownloading(false)
@@ -236,7 +236,7 @@ export default function QClawUpdateDialog({
     } catch (e: any) {
       const fallbackOpened = await tryOpenManualFallback('自动安装失败，已为你打开 dmg 安装包下载链接，请改为手动安装。')
       if (!fallbackOpened) {
-        setError(e?.message || '安装 Qclaw 更新失败')
+      setError(e?.message || '安装 Mclaw 更新失败')
       }
       setInstalling(false)
     }
@@ -251,7 +251,7 @@ export default function QClawUpdateDialog({
       setActionResult(result)
       setStatus(result.status)
     } catch (e: any) {
-      setError(e?.message || '打开 Qclaw 下载链接失败')
+      setError(e?.message || '打开 Mclaw 下载链接失败')
     } finally {
       setOpeningDownloadUrl(false)
       await refreshStatus(false)

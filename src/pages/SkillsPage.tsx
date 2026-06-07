@@ -34,6 +34,7 @@ import {
 } from '@tabler/icons-react'
 import { createPageDataCache } from '../lib/page-data-cache'
 import { toUserFacingCliFailureMessage, toUserFacingUnknownErrorMessage } from '../lib/user-facing-cli-feedback'
+import SkillsSecurityPanel from '../components/skills/SkillsSecurityPanel'
 import tooltips from '@/constants/tooltips.json'
 
 interface SkillMissing {
@@ -168,6 +169,11 @@ export default function SkillsPage() {
   const [installingBrew, setInstallingBrew] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [scanDirectoriesCollapsed, setScanDirectoriesCollapsed] = useState(true)
+  const [securitySummary, setSecuritySummary] = useState<any>(null)
+  const [runtimeRiskSummary, setRuntimeRiskSummary] = useState<any>(null)
+  const [latestAuditSnapshot, setLatestAuditSnapshot] = useState<any>(null)
+  const [auditHistory, setAuditHistory] = useState<any[]>([])
+  const [remediationState, setRemediationState] = useState<any>(null)
   const skillInstallUiLocked = Boolean(installing) || cancelingInstall
 
   // Collapsed state for each source
@@ -212,6 +218,142 @@ export default function SkillsPage() {
   useEffect(() => {
     void fetchSkills({ background: Boolean(initialSnapshot) })
   }, [fetchSkills, initialSnapshot])
+
+  const fetchSecurityState = useCallback(async () => {
+    try {
+      const [summary, runtime, latestAudit, remediation, history] = await Promise.all([
+        window.api.getSkillsSecuritySummary(),
+        window.api.getSkillsRuntimeRiskSummary(),
+        window.api.getLatestSkillsAuditSnapshot(),
+        window.api.getSkillRemediationState(),
+        window.api.listSkillsAuditSnapshots(20),
+      ])
+      setSecuritySummary(summary)
+      setRuntimeRiskSummary(runtime)
+      setLatestAuditSnapshot(latestAudit)
+      setRemediationState(remediation)
+      setAuditHistory(Array.isArray(history) ? history : [])
+    } catch {
+      setSecuritySummary(null)
+      setRuntimeRiskSummary(null)
+      setLatestAuditSnapshot(null)
+      setRemediationState(null)
+      setAuditHistory([])
+    }
+  }, [])
+
+  const handleRunSecurityAudit = useCallback(async () => {
+    try {
+      await window.api.runSkillsContinuousAudit()
+      await fetchSecurityState()
+      setNotice('安全重扫完成。')
+    } catch (e) {
+      setError(toUserFacingUnknownErrorMessage(e, '安全重扫失败，请稍后重试。'))
+    }
+  }, [fetchSecurityState])
+
+  const handleAutoRemediate = useCallback(async () => {
+    try {
+      const result = await window.api.autoApplyRemediationFromLatestAudit()
+      if (result.ok) {
+        await fetchSecurityState()
+        setNotice(`自动处置完成：隔离 ${result.summary.quarantined}，限制 ${result.summary.restricted}，豁免跳过 ${result.summary.skippedByExemption}。`)
+        return
+      }
+      setError('暂无可用巡检快照，请先执行重扫。')
+    } catch (e) {
+      setError(toUserFacingUnknownErrorMessage(e, '自动处置失败，请稍后重试。'))
+    }
+  }, [fetchSecurityState])
+
+  const handleExportSecurityAudit = useCallback(async () => {
+    try {
+      const content = await window.api.exportSkillsSecurityAuditLog()
+      await navigator.clipboard.writeText(content)
+      setNotice('审计日志已复制到剪贴板。')
+    } catch (e) {
+      setError(toUserFacingUnknownErrorMessage(e, '导出审计日志失败，请稍后重试。'))
+    }
+  }, [])
+
+  const handleRestoreAllRestricted = useCallback(async () => {
+    try {
+      const state = await window.api.getSkillRemediationState()
+      const targets = [...(state.restrictedSkills || []), ...(state.quarantinedSkills || [])]
+      for (const skillSlug of targets) {
+        await window.api.restoreSkillRemediation({ skillSlug, reason: 'bulk-restore-from-panel', operator: 'manual' })
+      }
+      await fetchSecurityState()
+      setNotice(`已恢复 ${targets.length} 个受限/隔离技能。`)
+    } catch (e) {
+      setError(toUserFacingUnknownErrorMessage(e, '批量恢复失败，请稍后重试。'))
+    }
+  }, [fetchSecurityState])
+
+  const handleRestoreOneSkill = useCallback(async (skillSlug: string) => {
+    try {
+      await window.api.restoreSkillRemediation({ skillSlug, reason: 'single-restore-from-panel', operator: 'manual' })
+      await fetchSecurityState()
+      setNotice(`已恢复技能：${skillSlug}`)
+    } catch (e) {
+      setError(toUserFacingUnknownErrorMessage(e, '恢复技能失败，请稍后重试。'))
+    }
+  }, [fetchSecurityState])
+
+  const handleAddExemption = useCallback(async (payload: {
+    skillSlug: string
+    reason: string
+    reviewer: string
+    expiresInHours: number
+  }) => {
+    try {
+      if (!payload.skillSlug.trim()) {
+        setError('请先填写 skill slug。')
+        return
+      }
+      if (!payload.reason.trim()) {
+        setError('请先填写豁免原因。')
+        return
+      }
+      if (!payload.reviewer.trim()) {
+        setError('请先填写审批人。')
+        return
+      }
+      if (!Number.isFinite(payload.expiresInHours) || payload.expiresInHours <= 0) {
+        setError('豁免时长必须大于 0 小时。')
+        return
+      }
+      const result = await window.api.upsertSkillRemediationExemption(payload)
+      if (!result.ok) {
+        const map: Record<string, string> = {
+          INVALID_SKILL_SLUG: 'skill slug 格式无效，请检查后重试。',
+          MISSING_REASON: '请填写豁免原因。',
+          MISSING_REVIEWER: '请填写审批人。',
+          INVALID_EXPIRES: '豁免时长无效，请输入大于 0 的小时数。',
+        }
+        setError(map[result.error || ''] || `新增豁免失败: ${result.error || 'unknown'}`)
+        return
+      }
+      await fetchSecurityState()
+      setNotice(`已新增豁免：${payload.skillSlug}`)
+    } catch (e) {
+      setError(toUserFacingUnknownErrorMessage(e, '新增豁免失败，请稍后重试。'))
+    }
+  }, [fetchSecurityState])
+
+  const handleRemoveExemption = useCallback(async (skillSlug: string) => {
+    try {
+      await window.api.removeSkillRemediationExemption(skillSlug)
+      await fetchSecurityState()
+      setNotice(`已移除豁免：${skillSlug}`)
+    } catch (e) {
+      setError(toUserFacingUnknownErrorMessage(e, '移除豁免失败，请稍后重试。'))
+    }
+  }, [fetchSecurityState])
+
+  useEffect(() => {
+    void fetchSecurityState()
+  }, [fetchSecurityState])
 
   const handleToggle = async (skill: SkillInfo, enabled: boolean) => {
     if (skillInstallUiLocked) return
@@ -646,6 +788,38 @@ export default function SkillsPage() {
           {notice}
         </Alert>
       )}
+
+      <SkillsSecurityPanel
+        summary={securitySummary}
+        runtime={runtimeRiskSummary}
+        auditLatest={latestAuditSnapshot}
+        auditHistory={auditHistory}
+        remediationState={remediationState}
+        onRefresh={() => {
+          void fetchSecurityState()
+        }}
+        onRunAudit={() => {
+          void handleRunSecurityAudit()
+        }}
+        onAutoRemediate={() => {
+          void handleAutoRemediate()
+        }}
+        onExportAudit={() => {
+          void handleExportSecurityAudit()
+        }}
+        onRestoreAllRestricted={() => {
+          void handleRestoreAllRestricted()
+        }}
+        onRestoreOneSkill={(skillSlug) => {
+          void handleRestoreOneSkill(skillSlug)
+        }}
+        onAddExemption={(payload) => {
+          void handleAddExemption(payload)
+        }}
+        onRemoveExemption={(skillSlug) => {
+          void handleRemoveExemption(skillSlug)
+        }}
+      />
 
       {(skillLocations.managedSkillsDir || skillLocations.workspaceSkillsDir) && (
         <Paper

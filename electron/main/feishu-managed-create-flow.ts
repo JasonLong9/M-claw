@@ -139,6 +139,25 @@ async function postRegistration<T>(params: Record<string, string>): Promise<Json
   }
 }
 
+function shouldRetryRegistration(result: JsonResponse<unknown>): boolean {
+  if (result.status === 408) return true
+  return result.status >= 500
+}
+
+async function postRegistrationWithRetry<T>(params: Record<string, string>): Promise<JsonResponse<T>> {
+  const maxAttempts = 3
+  let lastResult: JsonResponse<T> = { ok: false, status: 500, data: {} as T }
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const result = await postRegistration<T>(params)
+    lastResult = result
+    if (result.ok || !shouldRetryRegistration(result) || attempt >= maxAttempts) {
+      return result
+    }
+    await new Promise((resolve) => setTimeout(resolve, attempt * 800))
+  }
+  return lastResult
+}
+
 async function pollRegistration<T>(domain: 'feishu' | 'lark', params: Record<string, string>): Promise<JsonResponse<T>> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), MAIN_RUNTIME_POLICY.cli.feishuApiTimeoutMs)
@@ -266,10 +285,10 @@ function buildPollErrorMessage(result: JsonResponse<FeishuRegistrationPollRespon
 export async function runFeishuManagedCreateFlow(
   options: FeishuManagedCreateFlowOptions
 ): Promise<FeishuManagedCreateFlowResult> {
-  appendLine(options.onOutput, '[Qclaw] \u6b63\u5728\u8bf7\u6c42\u98de\u4e66\u5b98\u65b9\u670d\u52a1\u5e76\u751f\u6210\u672c\u6b21\u4e8c\u7ef4\u7801\u3002')
+  appendLine(options.onOutput, '[Mclaw] \u6b63\u5728\u8bf7\u6c42\u98de\u4e66\u5b98\u65b9\u670d\u52a1\u5e76\u751f\u6210\u672c\u6b21\u4e8c\u7ef4\u7801\u3002')
   throwIfCanceled(options.isCanceled)
 
-  const initResult = await postRegistration<FeishuRegistrationInitResponse>({
+  const initResult = await postRegistrationWithRetry<FeishuRegistrationInitResponse>({
     action: 'init',
   })
   throwIfCanceled(options.isCanceled)
@@ -289,7 +308,7 @@ export async function runFeishuManagedCreateFlow(
     throw new Error('\u5f53\u524d\u98de\u4e66\u5b98\u65b9\u670d\u52a1\u4e0d\u652f\u6301 client_secret \u6388\u6743\uff0c\u65e0\u6cd5\u7ee7\u7eed\u521b\u5efa\u65b0\u673a\u5668\u4eba\u3002')
   }
 
-  const beginResult = await postRegistration<FeishuRegistrationBeginResponse>({
+  const beginResult = await postRegistrationWithRetry<FeishuRegistrationBeginResponse>({
     action: 'begin',
     archetype: 'PersonalAgent',
     auth_method: 'client_secret',
@@ -315,24 +334,30 @@ export async function runFeishuManagedCreateFlow(
   let currentDomain: 'feishu' | 'lark' = 'feishu'
   let hasSwitchedToLark = false
 
-  appendLine(options.onOutput, '[Qclaw] \u672c\u6b21\u5b89\u88c5\u5668\u4e8c\u7ef4\u7801\u5df2\u751f\u6210\uff0c\u8bf7\u76f4\u63a5\u626b\u63cf\u4e0b\u9762\u7684\u4e8c\u7ef4\u7801\u3002')
+  appendLine(options.onOutput, '[Mclaw] \u672c\u6b21\u5b89\u88c5\u5668\u4e8c\u7ef4\u7801\u5df2\u751f\u6210\uff0c\u8bf7\u76f4\u63a5\u626b\u63cf\u4e0b\u9762\u7684\u4e8c\u7ef4\u7801\u3002')
   appendLine(options.onOutput, `${FEISHU_LIVE_QR_URL_MARKER} ${qrUrlText}`)
-  appendLine(options.onOutput, `[Qclaw] \u4e8c\u7ef4\u7801\u6709\u6548\u671f\u7ea6 ${Math.max(1, Math.ceil(expireInSeconds / 60))} \u5206\u949f\u3002\u626b\u7801\u540e\u8bf7\u7b49\u5f85\u7ed3\u679c\u81ea\u52a8\u56de\u4f20\u3002`)
+  appendLine(options.onOutput, `[Mclaw] \u4e8c\u7ef4\u7801\u6709\u6548\u671f\u7ea6 ${Math.max(1, Math.ceil(expireInSeconds / 60))} \u5206\u949f\u3002\u626b\u7801\u540e\u8bf7\u7b49\u5f85\u7ed3\u679c\u81ea\u52a8\u56de\u4f20\u3002`)
 
   const deadline = Date.now() + expireInSeconds * 1000
   while (Date.now() < deadline) {
     await sleepWithCancel(pollIntervalSeconds * 1000, options.isCanceled)
-    const pollResult = await pollRegistration<FeishuRegistrationPollResponse>(currentDomain, {
+    let pollResult = await pollRegistration<FeishuRegistrationPollResponse>(currentDomain, {
       action: 'poll',
       device_code: deviceCode,
     })
+    if (shouldRetryRegistration(pollResult)) {
+      pollResult = await pollRegistration<FeishuRegistrationPollResponse>(currentDomain, {
+        action: 'poll',
+        device_code: deviceCode,
+      })
+    }
     throwIfCanceled(options.isCanceled)
 
     const tenantBrand = normalizeText(pollResult.data?.user_info?.tenant_brand).toLowerCase()
     if (!hasSwitchedToLark && tenantBrand === 'lark') {
       currentDomain = 'lark'
       hasSwitchedToLark = true
-      appendLine(options.onOutput, '[Qclaw] \u5df2\u68c0\u6d4b\u5230 Lark \u79df\u6237\uff0c\u540e\u7eed\u8f6e\u8be2\u5c06\u5207\u6362\u5230 Lark \u57df\u540d\u3002')
+      appendLine(options.onOutput, '[Mclaw] \u5df2\u68c0\u6d4b\u5230 Lark \u79df\u6237\uff0c\u540e\u7eed\u8f6e\u8be2\u5c06\u5207\u6362\u5230 Lark \u57df\u540d\u3002')
       continue
     }
 
@@ -345,11 +370,11 @@ export async function runFeishuManagedCreateFlow(
         domain: currentDomain,
       })
       if (persisted.reusedExisting) {
-        appendLine(options.onOutput, `[Qclaw] \u5f53\u524d\u673a\u5668\u4eba\u5df2\u5b58\u5728\u4e8e\u672c\u5730\u914d\u7f6e\uff0c\u5df2\u76f4\u63a5\u590d\u7528\uff1a${persisted.accountName} (${persisted.accountId})\u3002`)
+        appendLine(options.onOutput, `[Mclaw] \u5f53\u524d\u673a\u5668\u4eba\u5df2\u5b58\u5728\u4e8e\u672c\u5730\u914d\u7f6e\uff0c\u5df2\u76f4\u63a5\u590d\u7528\uff1a${persisted.accountName} (${persisted.accountId})\u3002`)
       } else {
-        appendLine(options.onOutput, `[Qclaw] \u65b0\u673a\u5668\u4eba\u521b\u5efa\u6210\u529f\uff0c\u5df2\u5199\u5165\u672c\u5730\u914d\u7f6e\uff1a${persisted.accountName} (${persisted.accountId})\u3002`)
+        appendLine(options.onOutput, `[Mclaw] \u65b0\u673a\u5668\u4eba\u521b\u5efa\u6210\u529f\uff0c\u5df2\u5199\u5165\u672c\u5730\u914d\u7f6e\uff1a${persisted.accountName} (${persisted.accountId})\u3002`)
       }
-      appendLine(options.onOutput, '[Qclaw] \u73b0\u5728\u53ef\u4ee5\u56de\u5230\u9875\u9762\u7ee7\u7eed\u540e\u7eed\u7ed1\u5b9a\u914d\u7f6e\u3002')
+      appendLine(options.onOutput, '[Mclaw] 下一步：请回到页面点击“刷新状态”；确认已检测到机器人后，再点击“完成机器人配置”，继续输入飞书配对码。')
       return persisted
     }
 
@@ -360,7 +385,7 @@ export async function runFeishuManagedCreateFlow(
 
     if (pollError === 'slow_down') {
       pollIntervalSeconds = Math.min(pollIntervalSeconds + 5, 30)
-      appendLine(options.onOutput, `[Qclaw] \u98de\u4e66\u5b98\u65b9\u8981\u6c42\u964d\u4f4e\u8f6e\u8be2\u901f\u5ea6\uff0c\u65b0\u7684\u7b49\u5f85\u95f4\u9694\u4e3a ${pollIntervalSeconds} \u79d2\u3002`)
+      appendLine(options.onOutput, `[Mclaw] \u98de\u4e66\u5b98\u65b9\u8981\u6c42\u964d\u4f4e\u8f6e\u8be2\u901f\u5ea6\uff0c\u65b0\u7684\u7b49\u5f85\u95f4\u9694\u4e3a ${pollIntervalSeconds} \u79d2\u3002`)
       continue
     }
 
@@ -371,4 +396,3 @@ export async function runFeishuManagedCreateFlow(
 }
 
 export { FeishuManagedCreateCanceledError }
-

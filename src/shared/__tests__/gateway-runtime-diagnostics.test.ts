@@ -73,7 +73,7 @@ describe('classifyGatewayRuntimeState', () => {
     })
 
     expect(result.stateCode).toBe('websocket_1006')
-    expect(result.summary).toBe('控制界面与本地 Gateway 的 device token 不一致')
+    expect(result.summary).toBe('控制界面与本机服务的 device token 不一致')
     expect(result.reasonDetail).toMatchObject({
       source: 'control-ui-app',
       code: 'device_token_mismatch',
@@ -96,13 +96,13 @@ describe('classifyGatewayRuntimeState', () => {
       diagnostics: {
         lastHealth: {
           stateCode: 'websocket_1006',
-          summary: 'Gateway 与上游的握手连接被异常关闭',
+          summary: '本机服务与上游的连接被异常关闭',
         },
       },
     })
 
     expect(result.stateCode).toBe('websocket_1006')
-    expect(result.summary).toBe('Gateway 与上游的握手连接被异常关闭')
+    expect(result.summary).toBe('本机服务与上游的连接被异常关闭')
   })
 
   it('classifies foreign port owners as port_conflict_foreign_process', () => {

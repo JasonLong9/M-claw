@@ -35,6 +35,12 @@
         "directoryName": "openclaw-lark",
         "version": "2026.4.8",
         "channels": ["feishu"]
+      },
+      {
+        "id": "openclaw-weixin",
+        "directoryName": "openclaw-weixin",
+        "version": "2.4.4",
+        "channels": ["openclaw-weixin"]
       }
     ]
   },
@@ -42,6 +48,7 @@
     "Windows x64 runtime validated and active as bundled-runtime.",
     "macOS darwin-arm64 runtime validated from packaged export and declared as bundled-runtime.",
     "macOS darwin-x64 runtime validated from packaged export and declared as bundled-runtime.",
-    "Bundled managed plugin payload includes openclaw-lark for offline Feishu channel repair/install."
+    "Bundled managed plugin payload includes openclaw-lark for offline Feishu channel repair/install.",
+    "Bundled managed plugin payload includes openclaw-weixin for offline Weixin channel repair/install."
   ]
 }

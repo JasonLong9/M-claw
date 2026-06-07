@@ -105,7 +105,7 @@ export function buildOpenClawCompatibilityBlockingReasonLabel(version: string | 
   if (isFutureCandidateOpenClawVersion(displayVersion)) {
     return `${displayVersion} 已进入 ${FUTURE_CANDIDATE_OPENCLAW_RELEASE_LINE} 候选线，当前仍按保守兼容模式处理`
   }
-  return '当前 OpenClaw 版本超出已审计范围'
+  return '当前本机运行组件版本超出已审计范围'
 }
 
 export function isFutureCandidateOpenClawVersion(version: string | null | undefined): boolean {
@@ -179,7 +179,7 @@ export function buildOpenClawMigrationSmokeSummary(params: {
 
   if (touchesCandidateLine) {
     recommendedChecks.push('补做记忆目录、备份恢复与回退后的数据可读性审计。')
-    recommendedChecks.push(`补做 Agent 协同与 Claude Code / memos 的前置兼容验证。`)
+    recommendedChecks.push(`补做智能体协同、开发模式和记忆能力的前置兼容验证。`)
     recommendedChecks.push('补做回退演练，确认回退后 gateway 仍能重新启动。')
   }
 

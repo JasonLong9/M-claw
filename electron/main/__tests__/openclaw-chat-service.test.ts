@@ -134,11 +134,19 @@ async function removeWithRetry(targetPath: string): Promise<void> {
 
 describe('openclaw chat service', () => {
   let userDataDir = ''
+  const scratchDirs: string[] = []
 
   const writeLegacyChatStore = async (store: Record<string, unknown>) => {
     const chatDir = path.join(userDataDir, 'chat')
     await mkdir(chatDir, { recursive: true })
     await writeFile(path.join(chatDir, 'transcripts.json'), JSON.stringify(store, null, 2), 'utf8')
+  }
+
+  const createScratchProjectDir = async (name: string): Promise<string> => {
+    const projectDir = await mkdtemp(path.join(os.tmpdir(), `mclaw-coding-project-${name}-`))
+    scratchDirs.push(projectDir)
+    await writeFile(path.join(projectDir, 'package.json'), JSON.stringify({ name }), 'utf8')
+    return projectDir
   }
 
   const createDiscovery = (fingerprint: string) =>
@@ -339,6 +347,11 @@ describe('openclaw chat service', () => {
     })
     if (userDataDir) {
       await removeWithRetry(userDataDir)
+    }
+    while (scratchDirs.length > 0) {
+      const target = scratchDirs.pop()
+      if (!target) continue
+      await removeWithRetry(target)
     }
     userDataDir = await mkdtemp(path.join(os.tmpdir(), 'qclaw-chat-service-'))
     process.env.QCLAW_USER_DATA_DIR = userDataDir
@@ -1016,6 +1029,9 @@ describe('openclaw chat service', () => {
     )
 
     expect(result.ok).toBe(true)
+    const firstTransportCall = (transportRun.mock.calls as any[][])[0]?.[0]
+    expect(String(firstTransportCall?.extraSystemPrompt || '')).toContain('你是 Mclaw')
+    expect(String(firstTransportCall?.extraSystemPrompt || '')).toContain('内部资源')
     expect(listChatTraceEntries(4)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -1296,6 +1312,107 @@ describe('openclaw chat service', () => {
     expect(repairAgentAuthProfiles).toHaveBeenCalledWith({
       providerIds: ['minimax', 'minimax-portal'],
       agentId: 'channel-bot',
+    })
+    expect(repairMainAuthProfiles).not.toHaveBeenCalled()
+    expect(result.ok).toBe(true)
+  })
+
+  it('repairs non-main agent auth into the owning agent store before sending', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-repair-feishu-agent-auth-before-send')
+    const repairAgentAuthProfiles = vi.fn(async () => ({
+      ok: true,
+      repaired: true,
+      updatedAuthStorePaths: ['/Users/test/.openclaw/agents/feishu-default/agent/auth-profiles.json'],
+      importedProfileIds: ['deepseek:default'],
+      importedProviders: ['deepseek'],
+      sourceAuthStorePaths: ['/Users/test/.openclaw/agents/main/agent/auth-profiles.json'],
+    }))
+    const repairMainAuthProfiles = vi.fn(async () => ({
+      ok: true,
+      repaired: false,
+      importedProfileIds: [],
+      importedProviders: [],
+      sourceAuthStorePaths: [],
+    }))
+    const transportRun = vi.fn(async () => ({
+      ok: true,
+      stdout: JSON.stringify({
+        response: {
+          text: '修复后可继续发送',
+        },
+        model: 'deepseek/deepseek-chat',
+      }),
+      stderr: '',
+      code: 0,
+      streamedText: '修复后可继续发送',
+      streamedModel: 'deepseek/deepseek-chat',
+    }))
+
+    await appendLocalChatMessages({
+      scopeKey: 'fingerprint-repair-feishu-agent-auth-before-send',
+      sessionId: 'feishu-owned-session',
+      agentId: 'feishu-default',
+      model: 'deepseek/deepseek-chat',
+      transportSessionId: 'transport-feishu-owned-session',
+      messages: [
+        {
+          id: 'msg-existing',
+          role: 'user',
+          text: '旧消息',
+          createdAt: 1_000,
+          status: 'sent',
+        },
+      ],
+      updatedAt: 1_000,
+    })
+
+    const result = await sendChatMessage(
+      {
+        sessionId: 'feishu-owned-session',
+        text: '继续当前会话',
+      },
+      {
+        discoverOpenClaw,
+        readModelStatus: async () =>
+          ({
+            ok: true,
+            action: 'status',
+            command: ['models', 'status', '--json'],
+            stdout: '',
+            stderr: '',
+            code: 0,
+            data: {
+              defaultModel: 'deepseek/deepseek-chat',
+              allowed: ['deepseek/deepseek-chat'],
+              auth: {
+                missingProvidersInUse: ['deepseek'],
+              },
+            },
+          }) as any,
+        repairAgentAuthProfiles: repairAgentAuthProfiles as any,
+        repairMainAuthProfiles: repairMainAuthProfiles as any,
+        ensureGateway: async () => ({
+          ok: true,
+          stdout: '',
+          stderr: '',
+          code: 0,
+          running: true,
+        }),
+        runCommand: async () => ({
+          ok: true,
+          stdout: JSON.stringify({ sessions: [] }),
+          stderr: '',
+          code: 0,
+        }),
+        chatTransport: {
+          run: transportRun as any,
+        },
+      }
+    )
+
+    expect(repairAgentAuthProfiles).toHaveBeenCalledWith({
+      providerIds: ['deepseek'],
+      agentId: 'feishu-default',
     })
     expect(repairMainAuthProfiles).not.toHaveBeenCalled()
     expect(result.ok).toBe(true)
@@ -2065,6 +2182,20 @@ describe('openclaw chat service', () => {
     expect(parsed.text).toBeNull()
   })
 
+  it('ignores OpenClaw log-follow diagnostics when parsing assistant output', () => {
+    expect(parseAgentReplyOutput('Logs: openclaw logs --follow').text).toBeNull()
+    expect(
+      parseAgentReplyOutput(
+        JSON.stringify({
+          response: {
+            text: 'Logs: openclaw logs --follow',
+          },
+          model: 'gateway-injected',
+        })
+      ).text
+    ).toBeNull()
+  })
+
   it('does not append placeholder tool paths like dot or relative markdown files to assistant text', () => {
     const parsed = parseAgentReplyOutput(
       JSON.stringify({
@@ -2083,6 +2214,26 @@ describe('openclaw chat service', () => {
 
     expect(parsed.text).toBe('Screenshot captured.')
     expect(parsed.images).toBeUndefined()
+  })
+
+  it('resolves relative structured tool paths against their workdir before appending a saved-file summary', () => {
+    const parsed = parseAgentReplyOutput(
+      JSON.stringify({
+        response: {
+          text: '已整理完成，保存到 `python-官方资源整理.md`。',
+        },
+        messages: [
+          {
+            role: 'toolresult',
+            path: 'python-官方资源整理.md',
+            workdir: 'C:\\Users\\James\\Desktop',
+          },
+        ],
+      })
+    )
+
+    expect(parsed.text).toContain('已整理完成')
+    expect(parsed.text).toContain('C:\\Users\\James\\Desktop\\python-官方资源整理.md')
   })
 
   it('prefers explicit assistant text that remains meaningful after stripping bootstrap noise', () => {
@@ -2455,6 +2606,81 @@ describe('openclaw chat service', () => {
     expect(transportRun).toHaveBeenCalledTimes(1)
   })
 
+  it('blocks OpenClaw log-follow diagnostics from being saved as assistant replies', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-gateway-diagnostic-only')
+    const emittedEvents: Array<{ type: string; messageText?: string }> = []
+    const transportRun = vi.fn(async () => ({
+      ok: true,
+      stdout: JSON.stringify({
+        response: {
+          text: 'Logs: openclaw logs --follow',
+        },
+        model: 'gateway-injected',
+      }),
+      stderr: '',
+      code: 0,
+      streamedText: '',
+      streamedModel: 'gateway-injected',
+    }))
+
+    const result = await sendChatMessage(
+      {
+        sessionId: 'gateway-diagnostic-session',
+        text: 'hello',
+      },
+      {
+        discoverOpenClaw,
+        readModelStatus: async () => createModelStatus('custom-openai/deepseek-chat'),
+        runCommand: async () => ({
+          ok: true,
+          stdout: JSON.stringify({ sessions: [] }),
+          stderr: '',
+          code: 0,
+        }),
+        ensureGateway: async () => ({
+          ok: true,
+          stdout: '',
+          stderr: '',
+          code: 0,
+          running: true,
+        }),
+        callGatewayRpc: async (method) => {
+          expect(method).toBe('sessions.create')
+          return {
+            sessionId: 'upstream-session-gateway-diagnostic',
+            sessionKey: 'gateway-diagnostic-key',
+            agentId: 'main',
+            model: 'custom-openai/deepseek-chat',
+          }
+        },
+        chatTransport: {
+          run: transportRun,
+        },
+        emit: (event) => emittedEvents.push({
+          type: event.type,
+          messageText: 'messageText' in event ? event.messageText : undefined,
+        }),
+      }
+    )
+
+    expect(result.ok).toBe(false)
+    expect(result.messageText).toContain('诊断日志提示')
+    expect(transportRun).toHaveBeenCalledTimes(2)
+    expect(emittedEvents.map((event) => event.type)).toEqual(['assistant-start', 'assistant-error'])
+
+    const transcript = await getChatTranscript('gateway-diagnostic-session', {
+      discoverOpenClaw,
+      runCommand: async () => ({
+        ok: true,
+        stdout: JSON.stringify({ sessions: [] }),
+        stderr: '',
+        code: 0,
+      }),
+    })
+
+    expect(transcript.messages).toEqual([])
+  })
+
   it('continues direct chat send when runtime reconcile, port probe, and socket probe confirm legacy compat mode', async () => {
     const discoverOpenClaw = createDiscovery('fingerprint-gateway-runtime-compat')
     const transportRun = vi.fn(async () => ({
@@ -2708,10 +2934,10 @@ describe('openclaw chat service', () => {
     expect(capturedCommands[0][5]).toContain('以下是当前对话最近的上下文')
     expect(capturedCommands[0][5]).toContain('之前的本地消息')
     expect(capturedCommands[0][5]).toContain('继续当前会话')
-    expect(capturedCommands[0].slice(6)).toEqual([
-      '--thinking',
-      'off',
-    ])
+    expect(capturedCommands[0]).toContain('--thinking')
+    expect(capturedCommands[0]).toContain('off')
+    expect(capturedCommands[0]).toContain('--append-system-prompt')
+    expect(capturedCommands[0].join('\n')).toContain('你是 Mclaw')
   })
 
   it('does not patch the current conversation during send when a stale selected model is present', async () => {
@@ -8373,5 +8599,315 @@ Sender (untrusted metadata):
     expect(result.ok).toBe(false)
     expect(result.errorCode).toBe('canceled')
     expect(result.messageText).toBe('已停止回答')
+  })
+
+  it('routes coding-executor sends to Claude Code without requiring the gateway', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-coding-mode-success')
+    const projectDir = await createScratchProjectDir('coding-project')
+
+    const localSession = await createLocalChatSession({
+      discoverOpenClaw,
+    })
+    const ensureGateway = vi.fn(async () => ({
+      ok: true,
+      stdout: '',
+      stderr: '',
+      code: 0,
+      running: true,
+    }))
+    const runChatTask = vi.fn(async (params: any) => {
+      params.onProgress?.({
+        type: 'text-delta',
+        delta: '已完成修复并补充验证。',
+        text: '已完成修复并补充验证。',
+        model: 'claude-sonnet-4-5',
+      })
+      return {
+        ok: true,
+        result: '已完成修复并补充验证。',
+        model: 'claude-sonnet-4-5',
+        stdout: '',
+        stderr: '',
+        code: 0,
+      }
+    })
+
+    const result = await sendChatMessage(
+      {
+        sessionId: localSession.sessionId,
+        text: '请修复这个项目里的按钮点击问题，并告诉我验证方式。',
+        taskMode: 'coding-executor',
+        workspacePath: projectDir,
+        codingModelProfileId: 'claude-code-current',
+      },
+      {
+        discoverOpenClaw,
+        ensureGateway,
+        runChatTask,
+        runCommand: async (args) => {
+          if (args[0] === 'sessions') {
+            return {
+              ok: true,
+              stdout: JSON.stringify({ sessions: [] }),
+              stderr: '',
+              code: 0,
+            }
+          }
+          return {
+            ok: false,
+            stdout: '',
+            stderr: 'unexpected command',
+            code: 1,
+          }
+        },
+        readModelStatus: async () => ({
+          ok: true,
+          action: 'status',
+          command: ['models', 'status'],
+          data: {
+            defaultModel: 'anthropic/claude-sonnet-4-6',
+          },
+          stdout: '',
+          stderr: '',
+          code: 0,
+        }),
+      }
+    )
+
+    expect(result.ok).toBe(true)
+    expect(ensureGateway).not.toHaveBeenCalled()
+    expect(runChatTask).toHaveBeenCalledTimes(1)
+    const firstCodingCall = (runChatTask.mock.calls as any[][])[0]?.[0]
+    expect(firstCodingCall).toMatchObject({
+      cwd: projectDir,
+      model: 'claude-sonnet-4-6',
+    })
+    expect(firstCodingCall?.systemPrompt).toContain('Mclaw 内置的 Claude Code 开发任务执行模式')
+    expect(firstCodingCall?.systemPrompt).toContain('你是 Mclaw')
+    expect(firstCodingCall?.systemPrompt).toContain('内部资源')
+
+    const transcript = await getChatTranscript(localSession.sessionId, {
+      discoverOpenClaw,
+      runCommand: async () => ({
+        ok: true,
+        stdout: JSON.stringify({ sessions: [] }),
+        stderr: '',
+        code: 0,
+      }),
+    })
+    expect(transcript.messages).toHaveLength(2)
+    expect(transcript.messages[1]?.role).toBe('assistant')
+    expect(transcript.messages[1]?.text).toBe('已完成修复并补充验证。')
+  })
+
+  it('falls back to Claude Code current model when the current Mclaw model is not Claude-compatible', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-coding-mode-deepseek-fallback')
+    const projectDir = await createScratchProjectDir('coding-project-deepseek-fallback')
+
+    const localSession = await createLocalChatSession({
+      discoverOpenClaw,
+    })
+    const runChatTask = vi.fn(async () => ({
+      ok: true,
+      result: '已记录开发计划。',
+      model: 'claude-sonnet-4-5',
+      stdout: '',
+      stderr: '',
+      code: 0,
+    }))
+
+    const result = await sendChatMessage(
+      {
+        sessionId: localSession.sessionId,
+        text: '请先输出一个开发计划，并说明本次执行模型。',
+        taskMode: 'coding-executor',
+        workspacePath: projectDir,
+        codingModelProfileId: 'claude-code-current',
+      },
+      {
+        discoverOpenClaw,
+        runChatTask,
+        readModelStatus: async () => ({
+          ok: true,
+          action: 'status',
+          command: ['models', 'status'],
+          data: {
+            defaultModel: 'deepseek/deepseek-chat',
+          },
+          stdout: '',
+          stderr: '',
+          code: 0,
+        }),
+        runCommand: async (args) => {
+          if (args[0] === 'sessions') {
+            return {
+              ok: true,
+              stdout: JSON.stringify({ sessions: [] }),
+              stderr: '',
+              code: 0,
+            }
+          }
+          return {
+            ok: false,
+            stdout: '',
+            stderr: 'unexpected command',
+            code: 1,
+          }
+        },
+      }
+    )
+
+    expect(result.ok).toBe(true)
+    expect(runChatTask).toHaveBeenCalledTimes(1)
+    const fallbackCodingCall = (runChatTask.mock.calls as any[][])[0]?.[0]
+    expect(fallbackCodingCall?.cwd).toBe(projectDir)
+    expect(fallbackCodingCall?.model).toBeUndefined()
+    expect(String(fallbackCodingCall?.systemPrompt || '')).toContain('当前内部测试版还没有通过 Mclaw 中台把非 Claude 模型接入 Claude Code')
+  })
+
+  it('falls back to Claude Code current model when the current Mclaw model cannot be normalized into a CLI-safe override', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-coding-mode-unsafe-model-fallback')
+    const projectDir = await createScratchProjectDir('coding-project-unsafe-model-fallback')
+
+    const localSession = await createLocalChatSession({
+      discoverOpenClaw,
+    })
+    const runChatTask = vi.fn(async () => ({
+      ok: true,
+      result: '已记录开发计划。',
+      model: 'claude-sonnet-4-5',
+      stdout: '',
+      stderr: '',
+      code: 0,
+    }))
+
+    const result = await sendChatMessage(
+      {
+        sessionId: localSession.sessionId,
+        text: '请先输出一个开发计划。',
+        taskMode: 'coding-executor',
+        workspacePath: projectDir,
+        codingModelProfileId: 'claude-code-current',
+      },
+      {
+        discoverOpenClaw,
+        runChatTask,
+        readModelStatus: async () => ({
+          ok: true,
+          action: 'status',
+          command: ['models', 'status'],
+          data: {
+            defaultModel: 'ollama/deepseek-r1:8b',
+          },
+          stdout: '',
+          stderr: '',
+          code: 0,
+        }),
+        runCommand: async (args) => {
+          if (args[0] === 'sessions') {
+            return {
+              ok: true,
+              stdout: JSON.stringify({ sessions: [] }),
+              stderr: '',
+              code: 0,
+            }
+          }
+          return {
+            ok: false,
+            stdout: '',
+            stderr: 'unexpected command',
+            code: 1,
+          }
+        },
+      }
+    )
+
+    expect(result.ok).toBe(true)
+    expect(runChatTask).toHaveBeenCalledTimes(1)
+    const fallbackCodingCall = (runChatTask.mock.calls as any[][])[0]?.[0]
+    expect(fallbackCodingCall?.cwd).toBe(projectDir)
+    expect(fallbackCodingCall?.model).toBeUndefined()
+  })
+
+  it('fails closed when coding-executor mode is requested without a usable project directory', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-coding-mode-invalid-workspace')
+    const localSession = await createLocalChatSession({
+      discoverOpenClaw,
+    })
+
+    const result = await sendChatMessage(
+      {
+        sessionId: localSession.sessionId,
+        text: '请开始开发。',
+        taskMode: 'coding-executor',
+        workspacePath: '',
+        codingModelProfileId: 'claude-code-current',
+      },
+      {
+        discoverOpenClaw,
+        runCommand: async (args) => {
+          if (args[0] === 'sessions') {
+            return {
+              ok: true,
+              stdout: JSON.stringify({ sessions: [] }),
+              stderr: '',
+              code: 0,
+            }
+          }
+          return {
+            ok: false,
+            stdout: '',
+            stderr: 'unexpected command',
+            code: 1,
+          }
+        },
+      }
+    )
+
+    expect(result.ok).toBe(false)
+    expect(result.errorCode).toBe('invalid-input')
+    expect(result.messageText).toContain('项目目录')
+  })
+
+  it('fails closed when a future coding model placeholder is selected', async () => {
+    const discoverOpenClaw = createDiscovery('fingerprint-coding-mode-coming-soon-model')
+    const projectDir = await createScratchProjectDir('coding-project-coming-soon')
+
+    const localSession = await createLocalChatSession({
+      discoverOpenClaw,
+    })
+
+    const result = await sendChatMessage(
+      {
+        sessionId: localSession.sessionId,
+        text: '请开始开发。',
+        taskMode: 'coding-executor',
+        workspacePath: projectDir,
+        codingModelProfileId: 'platform-qwen',
+      },
+      {
+        discoverOpenClaw,
+        runCommand: async (args) => {
+          if (args[0] === 'sessions') {
+            return {
+              ok: true,
+              stdout: JSON.stringify({ sessions: [] }),
+              stderr: '',
+              code: 0,
+            }
+          }
+          return {
+            ok: false,
+            stdout: '',
+            stderr: 'unexpected command',
+            code: 1,
+          }
+        },
+      }
+    )
+
+    expect(result.ok).toBe(false)
+    expect(result.errorCode).toBe('invalid-input')
+    expect(result.messageText).toContain('还未接入 Mclaw 开发模式')
   })
 })

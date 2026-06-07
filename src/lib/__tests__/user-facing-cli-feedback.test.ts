@@ -67,7 +67,7 @@ describe('user-facing-cli-feedback', () => {
       fallback: 'fallback',
     })
 
-    expect(message).toBe('请求超时，请稍后重试。若持续失败，请检查 Gateway 与当前模型服务状态。')
+    expect(message).toBe('请求超时，请稍后重试。若持续失败，请检查本机服务与当前模型服务状态。')
   })
 
   it('surfaces the busy skill mutation hint emitted by the main process marker', () => {

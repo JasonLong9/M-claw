@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+﻿import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Alert, Badge, Button, Card, PasswordInput, ScrollArea, SegmentedControl, Stack, Tabs, Text, TextInput, Title, Modal, Loader, CopyButton, ActionIcon, Tooltip, Group } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { QRCodeSVG } from 'qrcode.react'
@@ -1935,13 +1935,13 @@ function hasBlockingManagedChannelReadyState(
   return getManagedPluginStageState(status, 'ready') === 'missing'
 }
 
-function canProceedWithPendingFeishuManagedReadyState(
+function canProceedWithPendingManagedReadyState(
   channelId: string,
   status: ManagedChannelPluginStatusView,
   options?: { allowPendingManagedReady?: boolean }
 ): boolean {
   if (!options?.allowPendingManagedReady) return false
-  if (channelId !== 'feishu') return false
+  if (channelId !== 'feishu' && channelId !== 'openclaw-weixin') return false
 
   return hasVerifiedManagedPluginInstallAndRegistration(status)
     && getManagedPluginStageState(status, 'loaded') !== 'missing'
@@ -1969,7 +1969,7 @@ async function confirmManagedChannelStatusAfterGatewayReady(
   }
 
   if (hasBlockingManagedChannelReadyState(status)) {
-    if (canProceedWithPendingFeishuManagedReadyState(channelId, status, options)) {
+    if (canProceedWithPendingManagedReadyState(channelId, status, options)) {
       return { ok: true }
     }
     return {
@@ -2793,7 +2793,8 @@ export async function ensureGatewayReadyForChannelConnect(
   if (managedChannelId) {
     const statusCheck = await confirmManagedChannelStatusAfterGatewayReady(
       api,
-      managedChannelId
+      managedChannelId,
+      { allowPendingManagedReady: options?.allowPendingManagedReady }
     )
     if (!statusCheck.ok) {
       return statusCheck
@@ -2807,6 +2808,41 @@ export function canFinalizeWeixinSetup(params: {
   configuredAccounts: Array<{ configured: boolean }>
 }): boolean {
   return params.configuredAccounts.some((account) => account.configured)
+}
+
+export function hasPersistedWeixinChannelAccounts(
+  config: Record<string, any> | null | undefined,
+  accounts: Array<{ accountId: string }>
+): boolean {
+  const weixin = config?.channels?.['openclaw-weixin']
+  if (!weixin || typeof weixin !== 'object' || Array.isArray(weixin)) return false
+
+  const persistedAccounts = weixin.accounts
+  if (!persistedAccounts || typeof persistedAccounts !== 'object' || Array.isArray(persistedAccounts)) {
+    return false
+  }
+
+  const expectedAccountIds = accounts
+    .map((account) => String(account.accountId || '').trim())
+    .filter(Boolean)
+
+  if (expectedAccountIds.length === 0) return true
+  return expectedAccountIds.every((accountId) => Boolean(persistedAccounts[accountId]))
+}
+
+export async function canTreatWeixinFinalizeReadyFailureAsSettled(params: {
+  api: Pick<typeof window.api, 'readConfig' | 'ensureGatewayRunning'>
+  accounts: Array<{ accountId: string }>
+}): Promise<boolean> {
+  if (params.accounts.length === 0) return false
+
+  const persistedConfig = await params.api.readConfig().catch(() => null)
+  if (!hasPersistedWeixinChannelAccounts(persistedConfig, params.accounts)) {
+    return false
+  }
+
+  const gatewayStatus = await params.api.ensureGatewayRunning({ skipRuntimePrecheck: true }).catch(() => null)
+  return Boolean(gatewayStatus?.ok && gatewayStatus.running === true)
 }
 
 export default function ChannelConnect({
@@ -4034,14 +4070,18 @@ export default function ChannelConnect({
   const finishWeixinChannelConnect = useCallback(async (newAccountIdsInput?: string[]) => {
     setFinishingWeixinSetup(true)
     setError('')
+    let finalizeStage = '清理旧配置'
+    const openClawPathsPromise = window.api.getOpenClawPaths().catch(() => null)
 
     try {
+      finalizeStage = '清理旧配置'
       const existingConfig = await window.api.readConfig()
       const sanitizedConfig = stripLegacyOpenClawRootKeys(existingConfig)
       if (JSON.stringify(existingConfig || {}) !== JSON.stringify(sanitizedConfig)) {
         await writeConfigDirect(sanitizedConfig, 'channel-connect-sanitize')
       }
 
+      finalizeStage = '读取个人微信账号'
       const config = (await window.api.readConfig()) || {}
       const enabledConfig = applyChannelConfig(config, 'openclaw-weixin', {})
       const weixinAccounts = await window.api.listWeixinAccounts()
@@ -4058,13 +4098,26 @@ export default function ChannelConnect({
           enabled: account.enabled,
         }))
       )
+      finalizeStage = '写入个人微信配置'
       await writeConfigDirect(nextConfig)
 
-      const gatewayReady = await ensureGatewayReadyForChannelConnect(window.api, () => {
+      finalizeStage = '确认 Gateway/插件 ready'
+      let gatewayReady = await ensureGatewayReadyForChannelConnect(window.api, () => {
         // Keep the wizard focused; errors are surfaced below the form.
       }, { channelId: 'openclaw-weixin' })
       if (!gatewayReady.ok) {
-        // Feishu setup should continue into the pairing step even if the reload is still settling.
+        const canBypassManagedReadyProbe = await canTreatWeixinFinalizeReadyFailureAsSettled({
+          api: window.api,
+          accounts: configuredAccounts.map((account) => ({
+            accountId: account.accountId,
+          })),
+        }).catch(() => false)
+        if (canBypassManagedReadyProbe) {
+          gatewayReady = { ok: true }
+        }
+      }
+      if (!gatewayReady.ok) {
+        throw new Error('个人微信插件尚未完成网关加载，请点击“开始连接”重试。')
       }
 
       const successAccountId =
@@ -4087,7 +4140,24 @@ export default function ChannelConnect({
         skipPairing: true,
       })
     } catch (e: any) {
-      setError(toUserFacingUnknownErrorMessage(e, '个人微信配置完成收尾失败'))
+      const fallbackMessage = toUserFacingUnknownErrorMessage(e, '个人微信配置完成收尾失败')
+      const [diag, openClawPaths] = await Promise.all([
+        window.api.getWeixinPathDiagnostic().catch(() => null),
+        openClawPathsPromise,
+      ])
+      const accountIds = [...(newAccountIdsInput || [])]
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)
+      setError([
+        fallbackMessage,
+        '收尾诊断:',
+        `- 失败步骤: ${finalizeStage}`,
+        `- 目标配置路径: ${String(openClawPaths?.configFile || '').trim() || '未知'}`,
+        `- 当前 Mclaw 状态目录: ${String(diag?.activeStateDir || '').trim() || '未知'}`,
+        `- 默认 OpenClaw 目录: ${String(diag?.defaultStateDir || '').trim() || '未知'}`,
+        `- 本次识别到的账号: ${accountIds.join(', ') || '未识别'}`,
+        `- 路径错位诊断: ${diag?.possiblePathMismatch ? '已触发' : '未触发'}`,
+      ].join('\n'))
     } finally {
       setFinishingWeixinSetup(false)
     }
@@ -6315,3 +6385,4 @@ export default function ChannelConnect({
     </div>
   )
 }
+

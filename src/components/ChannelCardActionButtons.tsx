@@ -10,8 +10,10 @@ interface ChannelCardActionButtonsProps {
     enabled: boolean
   }
   togglingAnyChannel: boolean
+  removingAnyChannel: boolean
   togglingAnotherChannel: boolean
   isToggling: boolean
+  isRemoving: boolean
   showRepairAction: boolean
   repairDisabled: boolean
   repairingRepairAction: boolean
@@ -31,8 +33,10 @@ function handleCardActionClick(event: MouseEvent<HTMLButtonElement>, action: () 
 export default function ChannelCardActionButtons({
   channel,
   togglingAnyChannel,
+  removingAnyChannel,
   togglingAnotherChannel,
   isToggling,
+  isRemoving,
   showRepairAction,
   repairDisabled,
   repairingRepairAction,
@@ -60,7 +64,7 @@ export default function ChannelCardActionButtons({
         color={channel.enabled ? 'orange' : 'teal'}
         variant="light"
         size="sm"
-        disabled={togglingAnotherChannel}
+        disabled={togglingAnotherChannel || removingAnyChannel}
         loading={isToggling}
         onClick={(event) => handleCardActionClick(event, onToggleEnabled)}
         className="cursor-pointer"
@@ -71,7 +75,7 @@ export default function ChannelCardActionButtons({
         <Button
           variant="light"
           size="sm"
-          disabled={togglingAnyChannel}
+          disabled={togglingAnyChannel || removingAnyChannel}
           onClick={(event) => handleCardActionClick(event, onOpenPairing)}
           className="cursor-pointer"
         >
@@ -82,7 +86,7 @@ export default function ChannelCardActionButtons({
         <Button
           variant="light"
           size="sm"
-          disabled={togglingAnyChannel}
+          disabled={togglingAnyChannel || removingAnyChannel}
           onClick={(event) => handleCardActionClick(event, onOpenDiagnostics)}
           className="cursor-pointer"
         >
@@ -93,7 +97,7 @@ export default function ChannelCardActionButtons({
         <Button
           variant="light"
           size="sm"
-          disabled={repairDisabled}
+          disabled={repairDisabled || removingAnyChannel}
           loading={repairingRepairAction}
           onClick={(event) => handleCardActionClick(event, onRepairPlugin)}
           className="cursor-pointer"
@@ -105,7 +109,8 @@ export default function ChannelCardActionButtons({
         color="red"
         variant="light"
         size="sm"
-        disabled={togglingAnyChannel}
+        disabled={togglingAnyChannel || removingAnyChannel}
+        loading={isRemoving}
         onClick={(event) => handleCardActionClick(event, onRemove)}
         className="cursor-pointer"
       >

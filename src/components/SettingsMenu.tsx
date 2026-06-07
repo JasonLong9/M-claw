@@ -1,8 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ActionIcon, Button } from '@mantine/core'
 import BackupCenter from './BackupCenter'
-import CleanupDialog from './CleanupDialog'
-import OpenClawDataCleanupDialog from './OpenClawDataCleanupDialog'
 import UpdateCenter from './UpdateCenter'
 
 export default function SettingsMenu({
@@ -15,8 +13,6 @@ export default function SettingsMenu({
   const [open, setOpen] = useState(false)
   const [showUpdateCenter, setShowUpdateCenter] = useState(false)
   const [showBackupCenter, setShowBackupCenter] = useState(false)
-  const [showCleanupDialog, setShowCleanupDialog] = useState(false)
-  const [showDataCleanupDialog, setShowDataCleanupDialog] = useState(false)
 
   useEffect(() => {
     if (updateCenterOpen) {
@@ -81,30 +77,24 @@ export default function SettingsMenu({
                 备份中心
               </Button>
               <Button
-                onClick={() => {
-                  setShowCleanupDialog(true)
-                  setOpen(false)
-                }}
                 variant="subtle"
                 fullWidth
                 size="sm"
                 justify="flex-start"
+                disabled
                 className="border-t app-border px-4 py-3 app-text-secondary transition hover:app-bg-tertiary"
               >
-                清理 OpenClaw
+                维护清理（内测暂不开放）
               </Button>
               <Button
-                onClick={() => {
-                  setShowDataCleanupDialog(true)
-                  setOpen(false)
-                }}
                 variant="subtle"
                 fullWidth
                 size="sm"
                 justify="flex-start"
+                disabled
                 className="border-t app-border px-4 py-3 app-text-secondary transition hover:app-bg-tertiary"
               >
-                清理 OpenClaw 数据
+                保护本机数据
               </Button>
             </div>
           </>
@@ -113,15 +103,6 @@ export default function SettingsMenu({
 
       <UpdateCenter open={showUpdateCenter} onClose={() => setUpdateCenterVisibility(false)} />
       <BackupCenter open={showBackupCenter} onClose={() => setShowBackupCenter(false)} />
-      <CleanupDialog
-        open={showCleanupDialog}
-        mode="remove-openclaw"
-        onClose={() => setShowCleanupDialog(false)}
-      />
-      <OpenClawDataCleanupDialog
-        open={showDataCleanupDialog}
-        onClose={() => setShowDataCleanupDialog(false)}
-      />
     </>
   )
 }

@@ -49,8 +49,8 @@ function shouldReplaceSendableCompatibilityMessage(message: string): boolean {
 
 function buildCompatibilityAvailabilityMessage(message: string): string {
   return message.includes('models status --json')
-    ? '网关已接通；当前 OpenClaw 版本不支持 models status --json，可直接发送消息验证运行时可用性。'
-    : '网关已接通，当前版本正按兼容模式运行；可以直接对话，无需再等待握手状态刷新。'
+    ? '本机服务已接通；当前版本可直接发送消息验证运行时可用性。'
+    : '本机服务已接通，当前版本正按兼容模式运行；可以直接对话，无需继续等待状态刷新。'
 }
 
 function normalizeModelList(input: unknown): string[] {
@@ -213,6 +213,6 @@ export function recoverChatAvailabilityAfterGatewayStart(
     gatewayRunning: true,
     availabilityMessage: modelsStatusUnsupported
       ? buildCompatibilityAvailabilityMessage(availabilityMessage)
-      : '网关启动命令已执行；当前版本的健康探针尚未完成就绪确认，已先放行直接发送消息验证实际对话链路。',
+      : '本机服务启动命令已执行；当前版本的状态确认尚未完成，已先放行直接发送消息验证实际对话链路。',
   }
 }

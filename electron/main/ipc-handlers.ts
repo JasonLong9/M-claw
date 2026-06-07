@@ -2,6 +2,7 @@
  * IPC handlers — bridge between renderer and CLI
  */
 import { app, ipcMain, shell } from 'electron'
+const path = process.getBuiltinModule('node:path') as typeof import('node:path')
 import {
   checkNode,
   checkOpenClaw,
@@ -105,6 +106,7 @@ import {
   prepareManagedConfigWrite,
 } from './openclaw-config-guard'
 import { applyConfigPatchGuarded } from './openclaw-config-coordinator'
+import { ensureFeishuManagedAgentAuthBootstrap } from './feishu-managed-auth-bootstrap'
 import { guardedWriteEnvFileWithGatewayApply } from './openclaw-env-write-service'
 import { listOpenClawBackups, resolveOpenClawBackupDirectoryToOpen } from './openclaw-backup-index'
 import { deleteAllOpenClawBackups, deleteOpenClawBackup } from './openclaw-backup-index'
@@ -118,6 +120,7 @@ import { checkOpenClawUpgrade, runOpenClawUpgrade } from './openclaw-upgrade-ser
 import { readOpenClawRuntimeReconcileStoreForUi } from './openclaw-runtime-reconcile'
 import { withManagedOperationLock } from './managed-operation-lock'
 import { buildAppleScriptDoShellScript } from './node-runtime'
+import { isLikelyMclawInternalPath } from '../../src/shared/mclaw-protected-paths'
 import type { FeishuBotDiagnosticSendRequest } from '../../src/shared/feishu-diagnostics'
 import {
   checkQClawUpdate,
@@ -157,6 +160,7 @@ import {
 } from './weixin-installer-session'
 import {
   listWeixinAccountState,
+  getWeixinStatePathDiagnostic,
   removeWeixinAccountState,
 } from './weixin-account-state'
 import {
@@ -189,6 +193,7 @@ import {
   createLocalChatSession,
   getChatCapabilitySnapshot,
   getActiveChatSendState,
+  requestPendingChatCancel,
   getChatSessionDebugSnapshot,
   getChatTranscript,
   getDashboardChatAvailability,
@@ -197,6 +202,9 @@ import {
   patchChatSessionModel,
   sendChatMessage,
 } from './openclaw-chat-service'
+import { inspectCodingWorkspacePath } from './chat-task-router'
+import { installClaudeCode } from './coding/claude-code-install'
+import { getClaudeCodeStatus } from './coding/claude-code-readiness'
 import { deleteChatMemory, listChatMemories, saveChatMemory } from './memory'
 import { parseJsonFromCommandResult, parseJsonFromOutput } from './openclaw-command-output'
 import {
@@ -226,6 +234,45 @@ import {
 } from './skills-uninstall-safety'
 import { removeManagedSkillLocally, removeSkillDirectoryLocally } from './skills-managed-uninstall'
 import { withExclusiveSkillMutation } from './skill-mutation-guard'
+import { verifySkillInstallRequest } from './security/skills-install-security'
+import {
+  exportSkillSecurityAuditLog,
+  getBlockedSkillInstalls,
+  getSkillSecurityAuditLog,
+  getSkillSecuritySummary,
+  recordSkillInstallAudit,
+} from './security/skills-security-auditor'
+import {
+  getSkillRuntimeRiskSummary,
+  isSkillRuntimeDisabled,
+  recordSkillRuntimeEvent,
+  type SkillRuntimeEventType,
+} from './security/skills-runtime-guard'
+import {
+  getStaticScanReport,
+  scanAllInstalledSkillsByPayload,
+  scanInstalledSkillBySlug,
+} from './security/skills-static-scanner'
+import { runSkillDynamicSandboxProbe } from './security/skills-dynamic-sandbox'
+import { evaluateSkillPreinstallRisk } from './security/skills-preinstall-gate'
+import {
+  getLatestSkillsAuditSnapshot,
+  getSkillsAuditSchedulerState,
+  listSkillsAuditSnapshots,
+  runSkillsContinuousAudit,
+  startSkillsAuditScheduler,
+  stopSkillsAuditScheduler,
+} from './security/skills-continuous-audit'
+import {
+  applyRemediationFromAuditSnapshot,
+  applySkillRemediation,
+  getSkillRemediationState,
+  listSkillExemptions,
+  removeSkillExemption,
+  restoreSkillFromRemediation,
+  type SkillRiskLevel,
+  upsertSkillExemption,
+} from './security/skills-remediation-orchestrator'
 
 const { randomUUID } = process.getBuiltinModule('node:crypto') as typeof import('node:crypto')
 const { appendFile, readFile, rm } = process.getBuiltinModule('node:fs/promises') as typeof import('node:fs/promises')
@@ -625,19 +672,19 @@ export function registerIpcHandlers() {
     }
   })
   ipcMain.handle('openclaw:open-workspace', async () => {
-    const path = await import('path')
-    const fs = await import('fs')
     const discovery = await discoverOpenClawInstallations().catch(() => null)
     const activeCandidate =
       discovery?.candidates.find((candidate) => candidate.candidateId === discovery.activeCandidateId) ||
       discovery?.candidates[0] ||
       null
-    const workspacePath = String(activeCandidate?.stateRoot || '').trim() || path.join(app.getPath('home'), '.openclaw')
-    if (!fs.existsSync(workspacePath)) {
-      fs.mkdirSync(workspacePath, { recursive: true })
+    const workspacePath =
+      String(activeCandidate?.stateRoot || '').trim() || path.join(app.getPath('home'), '.openclaw')
+
+    return {
+      ok: false,
+      path: workspacePath,
+      error: 'Mclaw 内部运行目录已受保护，请改用桌面、文档、下载或你的项目目录来保存和查看文件。',
     }
-    const error = await shell.openPath(workspacePath)
-    return { ok: !error, path: workspacePath, error: error || '' }
   })
   ipcMain.handle('shell:open-path', async (_e, targetPath?: string) => {
     const normalizedPath = String(targetPath || '').trim()
@@ -646,6 +693,19 @@ export function registerIpcHandlers() {
         ok: false,
         path: '',
         error: 'Target path is empty.',
+      }
+    }
+
+    const protectedRoots = [
+      String(app.getPath('userData') || '').trim(),
+      String(app.getPath('exe') || '').trim() ? String(path.dirname(app.getPath('exe')) || '').trim() : '',
+      String(process.resourcesPath || '').trim(),
+    ].filter(Boolean)
+    if (isLikelyMclawInternalPath(normalizedPath, { protectedRoots })) {
+      return {
+        ok: false,
+        path: normalizedPath,
+        error: 'Mclaw 内部运行目录已受保护，请不要直接打开这些文件。',
       }
     }
 
@@ -726,8 +786,8 @@ export function registerIpcHandlers() {
   ipcMain.handle('status:get', () => getStatus())
 
   // Config
-  ipcMain.handle('config:read', () => readConfig())
-  ipcMain.handle('config:read:redacted', async () => sanitizeRendererConfigSnapshot(await readConfig()))
+  ipcMain.handle('config:read', (_e, candidate) => readConfig(candidate))
+  ipcMain.handle('config:read:redacted', async (_e, candidate) => sanitizeRendererConfigSnapshot(await readConfig(candidate)))
 
   // Env file
   ipcMain.handle('env:read', () => readEnvFile())
@@ -806,6 +866,7 @@ export function registerIpcHandlers() {
   ipcMain.handle('weixin:installer:stop', () => stopWeixinInstallerSession())
   ipcMain.handle('weixin:accounts:list', () => listWeixinAccountState())
   ipcMain.handle('weixin:accounts:remove', (_e, accountId: string) => removeWeixinAccountState(accountId))
+  ipcMain.handle('weixin:diagnostics:path', () => getWeixinStatePathDiagnostic())
 
   // Channels
   ipcMain.handle('channels:add', (_e, channel: string, token: string) => channelsAdd(channel, token))
@@ -818,14 +879,14 @@ export function registerIpcHandlers() {
   ipcMain.handle('channels:official:repair', (_e, channelId: 'feishu' | 'dingtalk') =>
     repairOfficialChannel(channelId)
   )
-  ipcMain.handle('channels:managed:status', (_e, channelId: string) =>
-    getManagedChannelPluginStatus(channelId)
+  ipcMain.handle('channels:managed:status', (_e, channelId: string, candidate) =>
+    getManagedChannelPluginStatus(channelId, candidate ? { candidate } : undefined)
   )
   ipcMain.handle('channels:managed:prepare', (_e, channelId: string) =>
     prepareManagedChannelPluginForSetup(channelId)
   )
-  ipcMain.handle('channels:managed:repair', (_e, channelId: string) =>
-    repairManagedChannelPlugin(channelId)
+  ipcMain.handle('channels:managed:repair', (_e, channelId: string, candidate) =>
+    repairManagedChannelPlugin(channelId, candidate ? { candidate } : undefined)
   )
 
   // Dashboard
@@ -839,6 +900,11 @@ export function registerIpcHandlers() {
   ipcMain.handle('chat:trace:list', (_e, limit?: number) => listChatTraceEntries(limit))
   ipcMain.handle('chat:session:model:patch', (_e, request) => patchChatSessionModel(request))
   ipcMain.handle('chat:transcript:get', (_e, sessionId: string) => getChatTranscript(sessionId))
+  ipcMain.handle('chat:coding:claude-code:status:get', () => getClaudeCodeStatus())
+  ipcMain.handle('chat:coding:claude-code:install', () => installClaudeCode())
+  ipcMain.handle('chat:coding:workspace:inspect', (_e, workspacePath?: string) =>
+    inspectCodingWorkspacePath(workspacePath)
+  )
   ipcMain.handle('chat:send', (event, request) =>
     sendChatMessage(request, {
       emit: (payload) => {
@@ -846,7 +912,11 @@ export function registerIpcHandlers() {
       },
     })
   )
-  ipcMain.handle('chat:cancel', () => cancelActiveCommand('chat'))
+  ipcMain.handle('chat:cancel', async () => {
+    requestPendingChatCancel()
+    const canceled = await cancelActiveCommand('chat')
+    return canceled || getActiveChatSendState().status === 'sending'
+  })
   ipcMain.handle('chat:send:state', () => getActiveChatSendState())
   ipcMain.handle('chat:transcript:clear', (_e, sessionId: string) => clearChatTranscript(sessionId))
   ipcMain.handle('chat:memory:list', (_e, request) => listChatMemories(request))
@@ -926,9 +996,34 @@ export function registerIpcHandlers() {
   ipcMain.handle('local-models:write-env', (_e, updates: Record<string, string | undefined>) =>
     writeEnvFile(updates)
   )
-  ipcMain.handle('local-models:ensure-auth', (_e, input: EnsureLocalAuthProfileInput) =>
-    ensureLocalAuthProfile(input)
-  )
+  ipcMain.handle('local-models:ensure-auth', async (_e, input: EnsureLocalAuthProfileInput) => {
+    const result = await ensureLocalAuthProfile(input)
+    if (!result.ok) {
+      return result
+    }
+
+    const providerId = String(input?.provider || '').trim().toLowerCase()
+    if (!providerId) {
+      return result
+    }
+
+    const [openClawPaths, config] = await Promise.all([
+      getOpenClawPaths().catch(() => null),
+      readConfig().catch(() => null),
+    ])
+    const homeDir = String(openClawPaths?.homeDir || '').trim()
+    if (!homeDir) {
+      return result
+    }
+
+    await ensureFeishuManagedAgentAuthBootstrap({
+      homeDir,
+      config,
+      providerIds: [providerId],
+    }).catch(() => null)
+
+    return result
+  })
   ipcMain.handle('local-models:clear-auth-profiles', (_e, input: ClearModelAuthProfilesInput) =>
     clearModelAuthProfilesByProvider(input)
   )
@@ -1065,6 +1160,57 @@ export function registerIpcHandlers() {
   })
 
   ipcMain.handle('skills:install', async (_e, name: string) => {
+    const source = 'openclaw-bundled' as const
+    if (isSkillRuntimeDisabled(name)) {
+      const nextSteps = [
+        '请在“技能安全状态”中查看最近风险事件和累计风险分。',
+        '若确认是误报，请先降低风险事件来源，再重新尝试安装。',
+      ].join(' ')
+      const blockedResult = {
+        allowed: false,
+        reason: `该 Skill 已因运行时风险过高被自动禁用。${nextSteps}`,
+        errorCode: 'SKILL_RUNTIME_DISABLED' as const,
+      }
+      recordSkillInstallAudit({ action: 'install_blocked', slug: name, source, result: blockedResult })
+      return {
+        ok: false,
+        stdout: '',
+        stderr: blockedResult.reason,
+        code: 1,
+        securityErrorCode: blockedResult.errorCode,
+      }
+    }
+    const check = await evaluateSkillPreinstallRisk({
+      slug: name,
+      source,
+      installPath: 'skills',
+    })
+    if (check.verdict === 'block') {
+      const messageByCode: Record<string, string> = {
+        WHITELIST_INTEGRITY_INVALID:
+          '技能白名单完整性校验失败，请刷新或恢复安全策略文件后重试。',
+        SKILL_NOT_WHITELISTED:
+          '该 Skill 不在官方白名单中，已被安全策略拦截。',
+        SOURCE_NOT_ALLOWED:
+          '该 Skill 来源不在允许列表中，已被安全策略拦截。',
+        SKILL_SLUG_INVALID:
+          'Skill 标识格式无效，请检查后重试。',
+        SKILL_STATIC_SCAN_BLOCKED:
+          '静态扫描发现高危行为，已阻止安装。',
+        SKILL_DYNAMIC_PROBE_BLOCKED:
+          '动态探测风险过高，已阻止安装。',
+      }
+      const userMessage = messageByCode[String(check.errorCode || '')] || check.reason || '安全校验未通过，安装已被阻止。'
+      recordSkillInstallAudit({ action: 'install_blocked', slug: name, source, result: check })
+      return {
+        ok: false,
+        stdout: '',
+        stderr: userMessage,
+        code: 1,
+        securityErrorCode: check.errorCode || 'SKILL_INSTALL_BLOCKED',
+      }
+    }
+    recordSkillInstallAudit({ action: 'install_allowed', slug: name, source, result: check })
     return withExclusiveSkillMutation('install', name, async () => installSkillWithOfficialFallback(name))
   })
 
@@ -1088,7 +1234,140 @@ export function registerIpcHandlers() {
   })
 
   ipcMain.handle('clawhub:install', async (_e, slug: string) => {
+    const source = 'clawhub' as const
+    if (isSkillRuntimeDisabled(slug)) {
+      const nextSteps = [
+        '请先在“技能安全状态”中查看风险摘要。',
+        '建议先处理高风险行为事件后，再重新安装。',
+      ].join(' ')
+      const blockedResult = {
+        allowed: false,
+        reason: `该 Skill 已因运行时风险过高被自动禁用。${nextSteps}`,
+        errorCode: 'SKILL_RUNTIME_DISABLED' as const,
+      }
+      recordSkillInstallAudit({ action: 'install_blocked', slug, source, result: blockedResult })
+      return {
+        ok: false,
+        stdout: '',
+        stderr: blockedResult.reason,
+        code: 1,
+        securityErrorCode: blockedResult.errorCode,
+      }
+    }
+    const check = await evaluateSkillPreinstallRisk({
+      slug,
+      source,
+      installPath: 'skills',
+    })
+    if (check.verdict === 'block') {
+      const messageByCode: Record<string, string> = {
+        WHITELIST_INTEGRITY_INVALID:
+          '技能白名单完整性校验失败，请刷新或恢复安全策略文件后重试。',
+        SKILL_NOT_WHITELISTED:
+          '该 Skill 不在官方白名单中，已被安全策略拦截。',
+        SOURCE_NOT_ALLOWED:
+          '该 Skill 来源不在允许列表中，已被安全策略拦截。',
+        SKILL_SLUG_INVALID:
+          'Skill 标识格式无效，请检查后重试。',
+      }
+      const userMessage = messageByCode[String(check.errorCode || '')] || check.reason || '安全校验未通过，安装已被阻止。'
+      recordSkillInstallAudit({ action: 'install_blocked', slug, source, result: check })
+      return {
+        ok: false,
+        stdout: '',
+        stderr: userMessage,
+        code: 1,
+        securityErrorCode: check.errorCode || 'SKILL_INSTALL_BLOCKED',
+      }
+    }
+    recordSkillInstallAudit({ action: 'install_allowed', slug, source, result: check })
     return withExclusiveSkillMutation('install', slug, async () => installSkillWithOfficialFallback(slug))
+  })
+
+  ipcMain.handle('skills:security-summary', async () => getSkillSecuritySummary())
+  ipcMain.handle('skills:audit-log', async (_e, limit?: number) => getSkillSecurityAuditLog(limit))
+  ipcMain.handle('skills:blocked-installs', async (_e, limit?: number) => getBlockedSkillInstalls(limit))
+  ipcMain.handle('skills:export-audit-log', async () => exportSkillSecurityAuditLog())
+  ipcMain.handle(
+    'skills:runtime:event',
+    async (
+      _e,
+      payload: {
+        skillSlug: string
+        type: SkillRuntimeEventType
+        detail?: string
+      }
+    ) => recordSkillRuntimeEvent(payload)
+  )
+  ipcMain.handle('skills:runtime:risk-summary', async () => getSkillRuntimeRiskSummary())
+  ipcMain.handle('skills:scan-one', async (_e, slug: string) => scanInstalledSkillBySlug(slug))
+  ipcMain.handle('skills:scan-all', async () => {
+    const payload = await getOpenClawSkillsListPayload({ attempts: 2, retryDelayMs: 250 })
+    return scanAllInstalledSkillsByPayload(payload)
+  })
+  ipcMain.handle('skills:scan-report', async () => getStaticScanReport())
+  ipcMain.handle('skills:dynamic-probe', async (_e, slug: string, options?: { timeoutMs?: number; maxFiles?: number }) =>
+    runSkillDynamicSandboxProbe(slug, options)
+  )
+  ipcMain.handle('skills:audit:run', async () => {
+    const payload = await getOpenClawSkillsListPayload({ attempts: 2, retryDelayMs: 250 })
+    return runSkillsContinuousAudit(payload)
+  })
+  ipcMain.handle('skills:audit:latest', async () => getLatestSkillsAuditSnapshot())
+  ipcMain.handle('skills:audit:list', async (_e, limit?: number) => listSkillsAuditSnapshots(limit))
+  ipcMain.handle('skills:audit:scheduler:start', async (_e, options?: { intervalMs?: number }) =>
+    startSkillsAuditScheduler(async () => {
+      const payload = await getOpenClawSkillsListPayload({ attempts: 2, retryDelayMs: 250 })
+      await runSkillsContinuousAudit(payload)
+    }, options)
+  )
+  ipcMain.handle('skills:audit:scheduler:stop', async () => stopSkillsAuditScheduler())
+  ipcMain.handle('skills:audit:scheduler:state', async () => getSkillsAuditSchedulerState())
+  ipcMain.handle(
+    'skills:remediation:apply',
+    async (
+      _e,
+      payload: {
+        skillSlug: string
+        level: SkillRiskLevel
+        reason?: string
+        operator?: 'system' | 'manual'
+      }
+    ) => applySkillRemediation(payload)
+  )
+  ipcMain.handle(
+    'skills:remediation:restore',
+    async (
+      _e,
+      payload: {
+        skillSlug: string
+        reason?: string
+        operator?: 'system' | 'manual'
+      }
+    ) => restoreSkillFromRemediation(payload)
+  )
+  ipcMain.handle('skills:remediation:state', async () => getSkillRemediationState())
+  ipcMain.handle(
+    'skills:remediation:exemption:upsert',
+    async (
+      _e,
+      payload: {
+        skillSlug: string
+        reason: string
+        reviewer: string
+        expiresInHours: number
+      }
+    ) => upsertSkillExemption(payload)
+  )
+  ipcMain.handle('skills:remediation:exemption:remove', async (_e, skillSlug: string) => removeSkillExemption(skillSlug))
+  ipcMain.handle('skills:remediation:exemption:list', async () => listSkillExemptions())
+  ipcMain.handle('skills:remediation:auto-apply-latest-audit', async () => {
+    const latest = getLatestSkillsAuditSnapshot()
+    if (!latest) {
+      return { ok: false, error: 'NO_AUDIT_SNAPSHOT' }
+    }
+    const summary = applyRemediationFromAuditSnapshot(latest)
+    return { ok: true, summary }
   })
 
   // 检查 brew 是否可用

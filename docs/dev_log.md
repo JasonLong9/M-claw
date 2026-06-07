@@ -22,6 +22,823 @@
 
 ## Recent Updates
 
+### Update 239: 个人微信收尾读写统一固定到活动 candidate，修复“诊断显示活动路径但实际仍写到别处”导致的继续失败（2026-06-07）
+
+- 用户反馈（本轮）：
+  1. 新版收尾诊断已显示失败步骤稳定卡在：
+     - `确认 Gateway / 插件 ready`
+  2. 现场进一步核对发现：
+     - 账号文件、索引、allowFrom 已在活动状态目录生成；
+     - 但活动 `openclaw.json` 仍没有 `channels.openclaw-weixin`；
+     - 说明收尾阶段的配置读写与 UI 诊断显示的目标路径并不一致。
+
+- 根因排查结论：
+  1. 虽然前面已经让主进程的 guarded config write 支持按 candidate 定向读写；
+  2. 但前端 `ChannelConnect.tsx` 里的：
+     - `writeConfigDirect(...)`
+     - `writeConfigPatch(...)`
+     - 以及个人微信收尾中的多次 `readConfig()`
+     仍然没有显式传入 `activeCandidate`；
+  3. 结果就是：
+     - 某些步骤的读写可能仍跟随默认发现结果；
+     - 但错误提示里显示的是当前 runtime 的活动配置路径；
+     - 于是出现“诊断看起来指向活动路径，但真正写入/读回并不稳定发生在同一目标”的错位。
+
+- 本轮修复：
+  1. `electron/preload/index.ts`
+     - `readConfig` / `readConfigRedacted` 增加可选 `candidate` 透传。
+  2. `electron/main/ipc-handlers.ts`
+     - `config:read` / `config:read:redacted` 增加可选 `candidate` 参数，直接传入主进程 `readConfig(candidate)`。
+  3. `src/types/electron.d.ts`
+     - 同步补齐 `readConfig(candidate?)` / `readConfigRedacted(candidate?)` 类型。
+  4. `src/pages/ChannelConnect.tsx`
+     - 新增 `resolveManagedConfigCandidate()`，从 `getOpenClawDataGuard()` 读取当前 `activeCandidate`；
+     - 个人微信收尾开始后，整个流程固定复用同一个 `preferredCandidate`；
+     - 包括：
+       - 初次读配置
+       - 清理旧配置根键后的写入
+       - 个人微信渠道配置写入
+       - 配置回读校验
+       - 自愈补写
+     - 这样收尾流程的“读、写、回读、诊断目标”全部对齐到同一个活动 candidate。
+
+- 预期行为变化：
+  - 个人微信收尾不再出现“账号状态已在活动目录，但 `openclaw.json` 实际写在别处”的错位；
+  - 若再次失败，诊断中的目标配置路径与真实读写目标将保持一致；
+  - `channels.openclaw-weixin` 应稳定落到当前活动配置文件。
+
+- 验证与产物：
+  - `vitest` 相关回归通过（`88 passed`）；
+  - `npm run typecheck` 通过；
+  - 新 Windows 绿色包见本条更新后的最新产物记录。
+
+### Update 238: 个人微信收尾失败改为在 UI 直接打印失败步骤和目标配置路径，便于继续定位（2026-06-07）
+
+- 用户反馈（本轮）：
+  1. 个人微信仍然失败；
+  2. 需要把“收尾失败的具体子步骤和目标配置路径”直接打印到 UI，而不是继续只显示泛化的：
+     - `个人微信配置完成收尾失败`
+
+- 本轮修复：
+  1. `src/pages/ChannelConnect.tsx`
+     - 为个人微信收尾流程增加阶段标记：
+       - 清理旧配置根键
+       - 读取当前活动配置
+       - 检查个人微信账号状态
+       - 写入个人微信渠道配置
+       - 修复个人微信托管插件
+       - 回读并校验配置落盘
+       - 确认 Gateway / 插件 ready
+       - 进入下一步页面
+     - 收尾失败时，UI 现在直接输出：
+       - 失败步骤
+       - 目标配置路径
+       - 当前 Mclaw 状态目录
+       - 默认 OpenClaw 目录
+       - 本次识别到的账号
+       - 路径错位诊断是否触发
+     - 当再次出现失败时，用户截图即可直接看到本次失败究竟卡在：
+       - 哪个收尾步骤
+       - 准备写入哪个 `openclaw.json`
+  2. `src/pages/__tests__/channel-connect.test.ts`
+     - 新增回归，固定个人微信收尾错误文案必须包含：
+       - 失败步骤
+       - 目标配置路径
+       - 路径错位时的 active/default 目录
+
+- 预期行为变化：
+  - 下次个人微信失败时，渠道页底部会直接显示可执行的收尾诊断上下文；
+  - 不再需要仅凭泛化失败文案反复猜测故障点。
+
+- 验证与产物：
+  - `D:\\workspace\\Mclaw\\node_modules\\.bin\\vitest.cmd run src\\pages\\__tests__\\channel-connect.test.ts electron\\main\\__tests__\\openclaw-config-coordinator.test.ts electron\\main\\__tests__\\weixin-account-state.test.ts electron\\main\\__tests__\\weixin-installer-session.test.ts` 通过（`85 passed`）；
+  - 新 Windows 绿色包见本条更新后的最新产物记录。
+
+### Update 237: 个人微信收尾改为按活动 candidate 定向读写配置，修复一直误写旧 `~/.openclaw/openclaw.json` 导致的持续失败（2026-06-07）
+
+- 用户反馈（本轮）：
+  1. 即使前面已修复账号落盘、allowFrom 和插件 reload 竞态，个人微信扫码成功后仍继续报：
+     - `个人微信配置完成收尾失败`
+  2. 现场状态持续表现为：
+     - 活跃目录 `AppData\\Roaming\\Mclaw\\openclaw-state\\.openclaw\\openclaw-weixin\\...` 已正确生成账号文件、索引和 allowFrom；
+     - 但活跃 `openclaw.json` 仍没有 `channels.openclaw-weixin`；
+     - 旧的 `C:\\Users\\James\\.openclaw\\openclaw.json` 反而保留了历史个人微信配置痕迹。
+
+- 根因排查结论：
+  1. `openclaw-config-guard.ts` / `openclaw-config-coordinator.ts` 虽然已经拿到了当前活动安装的 `preferredCandidate`；
+  2. 但底层实际读写仍调用无参：
+     - `readConfig()`
+     - `writeConfig()`
+     - `readEnvFile()`
+     - `writeEnvFile()`
+  3. 这些函数内部始终回退到默认 `getOpenClawPaths()`，导致本次个人微信收尾仍可能读写到默认旧路径：
+     - `~/.openclaw/openclaw.json`
+  4. 最终结果就是：
+     - 登录成功；
+     - 账号状态成功；
+     - 但收尾配置没有写进当前 Mclaw 活跃 state root；
+     - 页面因此反复误报收尾失败。
+
+- 本轮修复：
+  1. `electron/main/cli.ts`
+     - 新增 `OpenClawPathTarget`；
+     - `getOpenClawPaths(...)` 支持基于 `candidate/stateRoot/configPath` 定向解析目标配置目录；
+     - `readConfig/writeConfig/readEnvFile/writeEnvFile` 全部支持传入精确目标。
+  2. `electron/main/openclaw-config-guard.ts`
+     - `guardedWriteConfig(...)` 和 `guardedWriteEnvFile(...)` 改为始终按 `preparation.candidate` 定向读写；
+     - 不再把 candidate 丢失到默认路径解析。
+  3. `electron/main/openclaw-config-coordinator.ts`
+     - rebase 前读取 latest config 时，若传入 `preferredCandidate`，则同样按该 candidate 读取；
+     - 避免“重基准读的是旧路径、真正写又是另一条路径”这种错位。
+  4. `electron/main/__tests__/openclaw-config-coordinator.test.ts`
+     - 新增回归：当 `preferredCandidate` 存在时，coordinator 必须按它读取 latest config，并把 rebased 结果写回该 candidate。
+
+- 预期行为变化：
+  - 个人微信扫码成功后，收尾阶段会稳定把 `channels.openclaw-weixin` 写入当前 Mclaw 活跃配置：
+    - `C:\\Users\\James\\AppData\\Roaming\\Mclaw\\openclaw-state\\.openclaw\\openclaw.json`
+  - 不再误写或误读历史 `~/.openclaw/openclaw.json`；
+  - “安装器已成功，但页面仍持续报个人微信配置完成收尾失败”的主故障链路应被切断。
+
+- 验证与产物：
+  - `D:\\workspace\\Mclaw\\node_modules\\.bin\\vitest.cmd run electron\\main\\__tests__\\weixin-installer-session.test.ts electron\\main\\__tests__\\weixin-account-state.test.ts electron\\main\\__tests__\\openclaw-config-coordinator.test.ts` 通过；
+  - 新 Windows 绿色包见本条更新后的最新产物记录。
+
+### Update 236: 个人微信收尾增加成功后账号落盘等待，修复“安装器已成功但收尾瞬时仍读不到账号”导致的继续失败（2026-06-07）
+
+- 用户反馈（本轮）：
+  1. 在前面修复掉配置覆盖竞态后，个人微信仍可能继续报：
+     - `个人微信配置完成收尾失败`
+  2. 失败截图仍然稳定出现：
+     - `已将此 OpenClaw 连接到微信`
+     - `新增账号: <account>-im-bot`
+
+- 根因排查结论：
+  1. 当前失败路径已经能确认：
+     - 安装器登录成功信号已出现；
+     - 账号文件 / allowFrom / 账号索引也都已生成；
+  2. 但 `finishWeixinChannelConnect(...)` 在收尾开始时会立刻调用 `listWeixinAccounts()`；
+  3. 若这一步发生在账号状态刚写盘、但 UI 侧还没读到的瞬间，就会出现：
+     - 安装器日志已成功
+     - `新增账号` 已出现
+     - 但本次收尾瞬时仍得到 `weixinAccounts.length === 0`
+     - 随后被旧分支继续误判为收尾失败。
+
+- 本轮修复：
+  1. `src/pages/ChannelConnect.tsx`
+     - 新增 `settleWeixinAccountsAfterLogin(...)`；
+     - 当满足以下条件时：
+       - 当前 `listWeixinAccounts()` 为空
+       - 但安装器输出已出现个人微信成功信号，或本次会话已经拿到 `newAccountIds`
+     - 收尾不再立即失败，而是短时间轮询等待账号状态落盘；
+     - 若轮询中账号变为 `configured`，直接继续正常收尾；
+     - 若轮询结束仍未读到配置完成账号，但已经拿到 `newAccountIds`，则先按该账号继续后续配置落盘，避免瞬时空窗误判。
+  2. `src/pages/__tests__/channel-connect.test.ts`
+     - 新增两条回归：
+       - 成功信号出现后，等待个人微信账号真正出现在 `listWeixinAccounts()` 中；
+       - 若短时间内仍未出现 `configured`，则至少回退到 `newAccountIds` 继续收尾，而不是直接失败。
+
+- 预期行为变化：
+  - 个人微信扫码成功后，收尾流程会容忍极短暂的账号落盘延迟；
+  - 不再因为“安装器先返回成功、账号列表稍后才刷新出来”的时序问题继续报收尾失败。
+
+- 验证与产物：
+  - `D:\workspace\Mclaw\node_modules\.bin\vitest.cmd run src\pages\__tests__\channel-connect.test.ts electron\main\__tests__\weixin-installer-session.test.ts electron\main\__tests__\weixin-account-state.test.ts` 通过（`76 passed`）；
+  - 已重新打 Windows 绿色包，见本条更新后的最新产物记录。
+
+### Update 235: 个人微信安装器登录成功后跳过插件内 config reload，修复异步覆盖 `openclaw.json` 导致的持续收尾失败（2026-06-07）
+
+- 用户反馈（本轮）：
+  1. 即使经过前面几轮修复，个人微信扫码成功后仍继续报：
+     - `个人微信配置完成收尾失败`
+  2. 失败截图里仍能稳定看到：
+     - `已将此 OpenClaw 连接到微信`
+     - `新增账号: <account>-im-bot`
+
+- 根因排查结论：
+  1. 失败后本机活跃状态目录里已经正确存在：
+     - `openclaw-weixin/accounts/<account>.json`
+     - `credentials/openclaw-weixin-<account>-allowFrom.json`
+     - `openclaw-weixin/accounts.json`
+  2. 但同一时刻活跃 `openclaw.json` 仍只保留飞书配置，没有 `channels.openclaw-weixin`；
+  3. 进一步定位到个人微信插件登录成功后会异步执行：
+     - `triggerWeixinChannelReload()`
+  4. 该函数会再次写 `openclaw.json`；
+  5. 而 Mclaw 收尾阶段也会在同一时间写入 `channels.openclaw-weixin.accounts`，两边形成竞态，结果是：
+     - 个人微信状态文件已成功
+     - 但插件内部异步 config reload 把 Mclaw 刚写好的 `openclaw-weixin` 渠道项又覆盖掉
+     - 页面继续在收尾阶段失败。
+
+- 本轮修复：
+  1. `resources/openclaw-bundle/managed-plugins/openclaw-weixin/src/auth/accounts.ts`
+     - 为 `triggerWeixinChannelReload()` 增加环境变量开关：
+       - `OPENCLAW_WEIXIN_SKIP_CONFIG_RELOAD=1`
+     - 当该变量存在时，插件登录成功后跳过内部 `openclaw.json` 重写。
+  2. `electron/main/weixin-installer-session.ts`
+     - 启动个人微信安装器子进程时显式注入：
+       - `OPENCLAW_WEIXIN_SKIP_CONFIG_RELOAD=1`
+     - 这样安装器登录成功后只负责：
+       - 账号文件
+       - allowFrom
+       - 账号索引
+       不再与 Mclaw 收尾阶段争抢 `openclaw.json`。
+  3. `electron/main/__tests__/weixin-installer-session.test.ts`
+     - 增加源码守卫，固定安装器子进程环境中必须传入 `OPENCLAW_WEIXIN_SKIP_CONFIG_RELOAD=1`。
+
+- 预期行为变化：
+  - 个人微信扫码成功后，`openclaw.json` 的最终写入权由 Mclaw 收尾统一负责；
+  - 不再出现“安装器已完成、账号已新增，但插件异步 config reload 又把 `channels.openclaw-weixin` 覆盖掉”的竞态；
+  - 这条收尾失败路径应被彻底消除。
+
+- 验证与产物：
+  - `D:\workspace\Mclaw\node_modules\.bin\vitest.cmd run electron\main\__tests__\weixin-installer-session.test.ts src\pages\__tests__\channel-connect.test.ts electron\main\__tests__\weixin-account-state.test.ts` 通过（`74 passed`）；
+  - 已重新打 Windows 绿色包，见本条更新后的最新产物记录。
+
+### Update 234: 个人微信收尾补配置落盘自愈，修复“账号已新增但 openclaw.json 未保留渠道项”导致的继续失败（2026-06-07）
+
+- 用户反馈（本轮）：
+  1. 个人微信扫码成功后，安装器输出已出现：
+     - `已将此 OpenClaw 连接到微信`
+     - `新增账号: <account>-im-bot`
+  2. 但页面仍继续报：
+     - `个人微信配置完成收尾失败`
+
+- 根因排查结论：
+  1. 本机活跃状态目录已经正确生成：
+     - `openclaw-weixin/accounts/<account>.json`
+     - `credentials/openclaw-weixin-<account>-allowFrom.json`
+     - `openclaw-weixin/accounts.json`
+  2. 说明扫码登录、账号状态保存、allowFrom 授权落盘都已经成功；
+  3. 但失败后的活跃 `openclaw.json` 中未保留 `channels.openclaw-weixin` 条目，导致收尾后续的网关确认仍拿不到个人微信渠道配置；
+  4. 实际故障点不再是登录链路，而是“个人微信账号状态已成功，但配置文件未稳定保留渠道项”。
+
+- 本轮修复：
+  1. `src/pages/ChannelConnect.tsx`
+     - 新增 `hasPersistedWeixinChannelAccounts(...)`；
+     - 在个人微信收尾中，`syncWeixinChannelAccounts(...)` 写入后立即回读 `openclaw.json`；
+     - 若发现 `channels.openclaw-weixin.accounts` 未真正落盘，则基于当前已发现的个人微信账号再次补写；
+     - 在 `repairManagedChannelPlugin('openclaw-weixin')` 之后再做一次同样的回读校验和补写，防止后续步骤把 `openclaw-weixin` 渠道项覆盖掉。
+  2. `src/pages/__tests__/channel-connect.test.ts`
+     - 新增 `hasPersistedWeixinChannelAccounts(...)` 回归，固定“必须真实存在 `channels.openclaw-weixin.accounts`”这一配置落盘约束。
+
+- 预期行为变化：
+  - 个人微信扫码成功、账号状态已生成后，即使中间某个步骤没有把渠道项稳定写回 `openclaw.json`，收尾流程也会立即自愈补写；
+  - 不再出现“账号文件和 allowFrom 都成功了，但页面仍因缺少 `channels.openclaw-weixin` 而继续报收尾失败”。
+
+- 验证与产物：
+  - `D:\workspace\Mclaw\node_modules\.bin\vitest.cmd run src\pages\__tests__\channel-connect.test.ts electron\main\__tests__\weixin-installer-session.test.ts electron\main\__tests__\weixin-account-state.test.ts` 通过（`74 passed`）；
+  - 已重新打 Windows 绿色包，见本条更新后的最新产物记录。
+
+### Update 233: 个人微信收尾误判修复，放宽 ready 收敛期避免“安装器已完成但页面仍报失败”（2026-06-07）
+
+- 用户反馈（本轮）：
+  1. 个人微信扫码成功后，安装器输出已经出现：
+     - `已将此 OpenClaw 连接到微信`
+     - `新增账号: <account>-im-bot`
+  2. 但配置渠道弹窗底部仍报：
+     - `操作失败`
+     - `个人微信配置完成收尾失败`
+
+- 根因排查结论：
+  1. `src/pages/ChannelConnect.tsx` 的个人微信收尾阶段在写入配置、同步账号后，还会调用：
+     - `ensureGatewayReadyForChannelConnect(...)`
+  2. 该函数内部会走 `confirmManagedChannelStatusAfterGatewayReady(...)`，检查 managed plugin 的：
+     - `installed`
+     - `registered`
+     - `loaded`
+     - `ready`
+  3. 之前代码只对 `feishu` 放宽了一个特殊场景：
+     - 当 `installed/registered` 已验证通过，
+     - 且 `loaded` 不为 `missing`，
+     - 但 `ready` 仍在收敛时，
+     - 允许继续收尾；
+  4. `openclaw-weixin` 没有走这条放宽路径，所以会出现：
+     - 安装器已完成
+     - 新账号已新增
+     - 但插件 `ready` 还没完全稳定
+     - 页面却被误判成“配置完成收尾失败”。
+
+- 本轮修复：
+  1. `src/pages/ChannelConnect.tsx`
+     - 将 `canProceedWithPendingFeishuManagedReadyState(...)` 泛化为 `canProceedWithPendingManagedReadyState(...)`；
+     - 放宽对象从仅 `feishu` 扩展到：
+       - `feishu`
+       - `openclaw-weixin`
+     - 个人微信收尾调用 `ensureGatewayReadyForChannelConnect(...)` 时显式传入：
+       - `allowPendingManagedReady: true`
+     - 首次收尾与 already-connected 重试收尾两条路径都已覆盖。
+  2. `src/pages/__tests__/channel-connect.test.ts`
+     - 新增回归：
+       - 当 `openclaw-weixin` 的 `installed/registered/loaded` 已就绪，
+       - 但 `ready` 仍为 `missing` 且只是上游状态未完全收敛时，
+       - `ensureGatewayReadyForChannelConnect(...)` 必须返回成功。
+
+- 预期行为变化：
+  - 个人微信扫码成功、账号已写入后，即使插件 `ready` 还在短暂收敛，页面也不会再误报“个人微信配置完成收尾失败”；
+  - 用户会正常完成渠道接入，而不是卡在收尾页。
+
+- 验证与产物：
+  - `D:\workspace\Mclaw\node_modules\.bin\vitest.cmd run src\pages\__tests__\channel-connect.test.ts electron\main\__tests__\weixin-installer-session.test.ts electron\main\__tests__\weixin-account-state.test.ts` 通过（`72 passed`）；
+  - 已重新打 Windows 绿色包，见本条更新后的最新产物记录。
+
+### Update 232: 个人微信扫码成功后补写 allowFrom，修复“已连接但微信侧仍提示无法连接 OpenClaw”（2026-06-07）
+
+- 用户反馈（本轮）：
+  1. 个人微信渠道在前面几轮修复后，移除和收尾提示已基本通过；
+  2. 但重新扫码成功后，微信端向 OpenClaw 发消息仍提示“无法连接到 OpenClaw”。
+
+- 根因排查结论：
+  1. 当前活跃状态目录 `C:\Users\James\AppData\Roaming\Mclaw\openclaw-state\.openclaw\openclaw-weixin\accounts\3198c2a5cfe7-im-bot.json` 已存在有效：
+     - `token`
+     - `userId`
+  2. 但同目录下 `credentials/` 没有生成对应的：
+     - `openclaw-weixin-3198c2a5cfe7-im-bot-allowFrom.json`
+  3. `resources/openclaw-bundle/managed-plugins/openclaw-weixin/src/messaging/process-message.ts` 的入站鉴权链路会先读：
+     - `readFrameworkAllowFromList(accountId)`
+     - 为空时再 fallback 到 `loadWeixinAccount(accountId)?.userId`
+  4. 实际扫码成功分支位于 `resources/openclaw-bundle/managed-plugins/openclaw-weixin/src/channel.ts`，此前只做了：
+     - `saveWeixinAccount(...)`
+     - `registerWeixinAccountId(...)`
+     - `triggerWeixinChannelReload()`
+     但没有同步执行 `registerUserInFrameworkStore(...)`；
+  5. 结果是“账号凭证已保存，但 framework pairing 授权文件未落盘”，导致微信侧首条消息在部分运行时路径下仍会被鉴权层拦截，看起来就是“无法连接到 OpenClaw”。
+
+- 本轮修复：
+  1. `resources/openclaw-bundle/managed-plugins/openclaw-weixin/src/channel.ts`
+     - 引入 `registerUserInFrameworkStore`；
+     - 在两条扫码成功链路里补写 framework allowFrom：
+       - `auth.login`
+       - `gateway.loginWithQrWait`
+     - 当 `waitResult.userId` / `result.userId` 存在时，立即执行：
+       - `await registerUserInFrameworkStore({ accountId: normalizedId, userId })`
+     - 这样扫码用户会在登录成功时被稳定写入 `credentials/openclaw-weixin-<account>-allowFrom.json`，不再依赖后续其他路径补授权。
+  2. `electron/main/__tests__/weixin-installer-session.test.ts`
+     - 新增源码守卫回归：
+       - 断言个人微信登录成功链路包含 `registerUserInFrameworkStore(...)`
+       - 断言 CLI 登录和桌面扫码登录两条成功路径都覆盖到了 `userId`
+
+- 预期行为变化：
+  - 个人微信扫码成功后，不仅会保存账号 `token/userId`，还会同步生成 framework `allowFrom` 授权文件；
+  - 微信端第一次给 OpenClaw 发消息时，不再因为缺少 allowFrom 落盘而被鉴权链路拦截；
+  - “已连接成功但微信侧仍提示无法连接 OpenClaw”的问题应被消除。
+
+- 验证与产物：
+  - `D:\workspace\Mclaw\node_modules\.bin\vitest.cmd run electron\main\__tests__\weixin-installer-session.test.ts electron\main\__tests__\weixin-account-state.test.ts src\pages\__tests__\channel-connect.test.ts` 通过（`71 passed`）；
+  - 已重新打 Windows 绿色包，见本条更新后的最新产物记录。
+
+### Update 231: 个人微信错位诊断误判修复（active 已有 token 时不再报 fallback 路径错位）（2026-06-07）
+
+- 用户反馈（本轮）：
+  - 在 `2026.6.6-v1` 中，个人微信“移除”已经通过，但重新扫码连接后仍在收尾页报：
+    - `检测到可能的凭证路径错位`
+    - `当前 Mclaw 状态目录为空`
+  - 实际安装器输出已经出现：
+    - `已将此 OpenClaw 连接到微信`
+    - `Config overwrite: C:\Users\James\AppData\Roaming\Mclaw\openclaw-state\.openclaw\openclaw.json`
+    - `新增账号: <account>-im-bot`
+
+- 根因排查结论：
+  1. `electron/main/weixin-account-state.ts` 中 `getWeixinStatePathDiagnostic()` 的 `possiblePathMismatch` 判定过于依赖：
+     - `credentials/openclaw-weixin-*-allowFrom.json` 文件计数；
+  2. 但个人微信成功登录后，真正决定“渠道是否已具备运行凭证”的关键是 active state 下是否已经存在可读账号 token；
+  3. 在当前链路里，fallback 账号 JSON 会先被镜像到 active 目录，active 侧实际上已经具备 token，但因为 `allowFrom` 文件数仍为 0，旧规则仍把状态误判成“当前目录为空”，导致收尾页面继续报错。
+
+- 本轮修复：
+  1. `electron/main/weixin-account-state.ts`
+     - `WeixinStatePathDiagnostic` 新增：
+       - `activeConfiguredAccounts`
+       - `defaultConfiguredAccounts`
+     - 新增 `countConfiguredAccounts(...)`，按账号索引 + 账号 JSON 中的 `token` 统计 active/default 两边真实可用凭证数；
+     - `possiblePathMismatch` 改为更严格且更贴近真实运行态的判定：
+       - 只有当 default 侧存在已配置账号或相关凭证，
+       - 且 active 侧 `configured account count === 0`,
+       - 且 active 侧 `credential file count === 0`
+       - 才认定为真正的“路径错位”；
+     - 这样 active 目录已经被成功镜像出账号 token 时，不会再被旧诊断误报成“当前目录为空”。
+  2. `electron/main/__tests__/weixin-account-state.test.ts`
+     - 新增回归：
+       - 当 fallback 账号已镜像进 active 目录后，
+       - `getWeixinStatePathDiagnostic().possiblePathMismatch` 必须返回 `false`。
+
+- 预期行为变化：
+  - 个人微信扫码成功、且 active 目录已经具备可读 token 时，收尾页不再因为旧的路径错位诊断而报假失败；
+  - 只有在 active 目录确实没有任何可用凭证、而默认 `.openclaw` 又存在旧凭证时，才继续提示用户执行“修复渠道”。
+
+- 验证与产物：
+  - `D:\workspace\Mclaw\node_modules\.bin\vitest.cmd run electron\main\__tests__\weixin-account-state.test.ts src\pages\__tests__\channel-connect.test.ts electron\main\__tests__\weixin-installer-session.test.ts` 通过（`70 passed`）；
+  - `D:\nodejs\npm.cmd run package:win:dir` 通过；
+  - 新绿色包（免安装）：
+    - `release/2026.6.7-v0/win-unpacked/Mclaw.exe`
+
+### Update 230: 个人微信 fallback 凭证自动迁移 + 双目录删除修复（2026-06-06）
+
+- 用户反馈（本轮）：
+  1. IM 渠道页点击“移除”后卡片仍然存在，刷新后依旧会显示同一个个人微信账号；
+  2. 微信扫码后安装器显示成功，但微信端向 OpenClaw 发消息仍提示“无法连接到 OpenClaw”；
+  3. 渠道页诊断同时提示：当前 Mclaw 状态目录为空，而默认 `C:\Users\<user>\.openclaw` 目录存在微信凭证/账号文件。
+
+- 根因排查结论：
+  1. `src/pages/channels-page-data.ts` 会把两部分数据合并渲染：
+     - `window.api.listWeixinAccounts()`
+     - `channels.openclaw-weixin.accounts`
+     只删配置或只删当前状态目录都不够，fallback 默认目录里的账号会被重新拼回卡片。
+  2. `electron/main/weixin-account-state.ts` 此前会“读取 fallback 默认目录”，但不会把 fallback 凭证镜像回当前 Mclaw active 状态目录；
+     - 结果是 UI 能看到账号，但网关运行时仍可能从 active 目录读取不到 token，微信端表现为“无法连接到 OpenClaw”。
+  3. `removeWeixinAccountState(...)` 之前只清理 active 状态目录，没有同步删除默认 `.openclaw` 下的账号文件、索引和 allowFrom 凭证文件。
+
+- 本轮修复：
+  1. `electron/main/weixin-account-state.ts`
+     - 抽出 `resolveWeixinStatePathsForStateDir(...)`，统一管理 active/default 两套目录；
+     - 新增 fallback 镜像逻辑：
+       - 当 active 目录没有账号文件、但默认 `.openclaw` 有对应账号凭证时，自动把账号 JSON 和账号索引镜像到 active 目录；
+       - 这样个人微信收尾和网关后续启动都会读取到 active 目录下的有效凭证，不再停留在“UI 看见账号但运行态拿不到 token”。
+     - 强化删除逻辑：
+       - `removeWeixinAccountState(...)` 现在同时清理 active/default 两套目录中的：
+         - `accounts/<account>.json`
+         - `accounts/<account>.sync.json`
+         - `accounts/<account>.context-tokens.json`
+         - `credentials/openclaw-weixin-<account>-allowFrom.json`
+         - `accounts.json` 索引项
+  2. `electron/main/__tests__/weixin-account-state.test.ts`
+     - 新增回归：
+       - fallback 默认目录账号会自动镜像回 active 目录；
+       - 删除账号时 active/default 两套目录都会被清空；
+     - 同时隔离测试 `HOME/USERPROFILE`，避免宿主机真实 `.openclaw` 状态污染回归结果。
+
+- 预期行为变化：
+  - 点击个人微信“移除”后，不会再因为默认 `.openclaw` 残留而把同一账号重新渲染回 IM 渠道页；
+  - 微信扫码成功但凭证先落在默认目录时，Mclaw 会自动把 fallback 凭证补到当前 active 状态目录，微信端后续消息可恢复正常连通。
+
+- 验证与产物：
+  - `D:\workspace\Mclaw\node_modules\.bin\vitest.cmd run electron\main\__tests__\weixin-account-state.test.ts src\pages\__tests__\channel-connect.test.ts electron\main\__tests__\weixin-installer-session.test.ts` 通过（`69 passed`）；
+  - `D:\nodejs\npm.cmd run package:win:dir` 通过；
+  - 新绿色包（免安装）：
+    - `release/2026.6.6-v1/win-unpacked/Mclaw.exe`
+
+### Update 229: 个人微信“已连接过但本地无凭证”定向恢复流 + Windows 复测包（2026-06-06）
+
+- 用户反馈（本轮）：
+  1. 个人微信渠道仍可能无法正常连接到个人微信；
+  2. 当安装器输出“已连接过此 OpenClaw”时，当前 UI 仍容易停留在泛化收尾失败，用户不知道该修旧授权、旧凭证还是路径错位。
+
+- 本轮修复：
+  1. `src/pages/ChannelConnect.tsx`
+     - 将个人微信二维码 URL 解析两条路径统一收紧到微信登录域名，避免把 npm registry 等无关 URL 误当成二维码；
+     - 导出并复用 `extractWeixinQrUrl(...)`、`hasWeixinConnectionSignal(...)`、`hasWeixinAlreadyConnectedSignal(...)`，让微信收尾判定进入可测试状态；
+     - 在“已连接过但当前无 configured 凭证”场景下，先自动执行：
+       - `repairManagedChannelPlugin('openclaw-weixin')`
+       - `gatewayForceRestart()`
+       - `listWeixinAccounts()` 复读
+     - 若复检后仍无本地可用凭证，则进入定向恢复分支：
+       - 读取 `getWeixinPathDiagnostic()`；
+       - 清理当前 `openclaw-weixin` 渠道里的残留未配置账号项；
+       - 输出明确修复指引，区分“旧授权残留”与“凭证路径错位”。
+  2. `electron/main/__tests__/weixin-installer-session.test.ts`
+     - 新增主进程回归，固定 `weixin-installer-session.ts` 必须把 `OPENCLAW_STATE_DIR` 透传给安装器子进程。
+  3. `src/pages/__tests__/channel-connect.test.ts`
+     - 新增个人微信回归覆盖：
+       - 二维码 URL 只接受微信登录域名；
+       - “登录成功 / 已连接过”信号识别；
+       - “已连接过但无凭证”恢复分支；
+       - 路径错位恢复提示文案。
+
+- 行为变化：
+  - 个人微信若真的是“已连接过但本机无凭证”，现在不会再仅返回泛化收尾失败，而会直接提示下一步该修什么；
+  - 若当前配置里还挂着未配置的旧微信账号，恢复分支会先清理这些残留，减少 IM 渠道页继续显示假账号的概率；
+  - 微信二维码展示不会再因为误抓非微信域名 URL 而显示错误二维码。
+
+- 验证与产物：
+  - `D:\workspace\Mclaw\node_modules\.bin\vitest.cmd run src\pages\__tests__\channel-connect.test.ts electron\main\__tests__\weixin-installer-session.test.ts` 通过（`63 passed`）；
+  - `D:\nodejs\npm.cmd run package:win:dir` 通过；
+  - 新绿色包（免安装）：
+    - `release/2026.6.6-v0/win-unpacked/Mclaw.exe`
+
+### Update 221: 恢复“应用启动自动拉起网关”并修复个人微信“已连接但收尾失败”兼容路径（2026-05-29）
+
+- 用户反馈（本轮）：
+  1. 进入后控制台显示网关“已停止”，不符合 Mclaw 自动启动网关 + 看门狗预期；
+  2. 对话页仍出现 `Config invalid` 且要求用户手动启动网关；
+  3. 个人微信扫码后仍在收尾阶段失败。
+
+- 本轮修复：
+  1. `electron/main/index.ts`
+     - 新增 `warmupGatewayOnAppReady()`，应用就绪后自动执行 `ensureGatewayRunning({ skipRuntimePrecheck: true })`；
+     - 与现有 `scheduleWatchdogStart()` 并行，恢复“进应用即预热网关”的默认体验。
+  2. `src/pages/ChatPage.tsx`
+     - 调整自动预热触发条件：不再依赖 `gatewayRunning/ warmupHint` 才触发；
+     - 只要存在可对话潜力且当前不可发，就会自动尝试拉起网关，避免卡在 `Config invalid`。
+  3. `src/pages/ChannelConnect.tsx`
+     - 个人微信收尾兼容增强：当 CLI 输出显示已连接但 `configured` 标记未及时落盘时，允许基于 `listWeixinAccounts()` 的账号存在性继续同步配置；
+     - 保留“网关未就绪不放行”策略，避免假成功进入对话页。
+
+- 验证与产物：
+  - `npm run typecheck` 通过；
+  - 新绿色包（免安装）：
+    - `release/2026.5.29-v16/win-unpacked/Mclaw.exe`
+
+### Update 220: 修复个人微信收尾误判与对话页“假放行”导致的 Config invalid（2026-05-29）
+
+- 用户反馈（本轮）：
+  1. 对话页出现 `Config invalid / unknown channel id: openclaw-weixin`，无法正常对话；
+  2. 个人微信扫码后仍在收尾阶段失败。
+
+- 根因排查结论：
+  1. 个人微信流程中的“连接成功/已连接过”判定依赖日志文本，且历史正则存在乱码匹配，不稳定；
+  2. 个人微信收尾时，网关就绪失败被“忽略继续”，导致 UI 显示已接入但运行态仍是 `config_invalid`，进入对话页后表现为“假可用”。
+
+- 本轮修复：
+  1. `src/pages/ChannelConnect.tsx`
+     - 新增稳定判定函数：
+       - `hasWeixinConnectionSignal(...)`
+       - `hasWeixinAlreadyConnectedSignal(...)`
+     - 启动与收尾流程改为使用稳定中英关键词识别，降低“已连接过/连接成功”误判。
+  2. 个人微信收尾严格化：
+     - `ensureGatewayReadyForChannelConnect(...)` 返回失败时不再静默放行；
+     - 改为直接抛错并停留在渠道页提示用户重试，避免把未就绪网关带入对话页。
+
+- 验证与产物：
+  - `npm run typecheck` 通过；
+  - 已重打绿色包（免安装）：
+    - `release/2026.5.29-v15/win-unpacked/Mclaw.exe`
+
+### Update 219: 启动页卡死兜底增强（新增“强制进入”）并重打绿色包 v14（2026-05-29）
+
+- 问题背景：
+  - 用户仍反馈启动阶段出现 `Gateway 依赖的插件没有正常加载` 红色阻断卡，无法进入应用继续修复。
+
+- 本轮修复：
+  1. `src/pages/GatewayBootstrapGate.tsx`
+     - 在 `fatalError` 场景新增 `强制进入` 按钮（黄色轻量按钮）；
+     - 即使最终检查失败，也可直接放行到控制面板（降级快照），避免被首屏永久卡死。
+  2. 启动流程状态增强：
+     - 新增 `fallbackSnapshot` 状态，确保异常分支下仍有可用快照可进入；
+     - 重试时会清理旧 fallback，避免污染后续启动轮次。
+
+- 打包与产物：
+  - 已重新打绿色包（免安装）：
+    - `release/2026.5.29-v14/win-unpacked/Mclaw.exe`
+  - 打包过程通过内置校验：
+    - `openclaw-lark` / `openclaw-weixin` 均已在 `managed-plugins` 中并通过校验链路。
+
+- 预期效果：
+  - 启动页不再“无出口”卡死；
+  - 即使网关插件链路未完全恢复，也能先进入控制面板继续修复和使用。
+
+### Update 218: 新建 360 对齐分阶段方案并启动 P1（2026-05-18）
+- 新增方案文件：`docs/skills_security_360_plan.md`
+  - 按 `P0 ~ P4` 分阶段拆解并配置状态字段（`pending/in_progress/completed`）。
+  - 已将当前已完成能力归档到 `P0` 并标记 `completed`。
+  - `P1`（安装前双引擎检测）已标记 `in_progress`，后续按项推进并持续勾选。
+- 执行规则已写入方案：
+  - 每完成一个 P 即在方案中标记并自动推进下一 P；
+  - 每次推进同步更新 `docs/dev_log.md`。
+
+### Update 217: 用户体验收尾——安全状态面板挂载 + 安全错误提示全局友好化（2026-05-18）
+- 本轮按“低风险、可见收益”完成页面体验增强：
+  - `src/pages/SkillsPage.tsx`：
+    - 已挂载 `SkillsSecurityPanel`，用户可在 Skills 页直接看到安全状态摘要并手动刷新。
+    - 该面板展示审计统计、拦截统计、运行时禁用数量与禁用列表提示。
+  - `src/lib/user-facing-cli-feedback.ts`：
+    - 增加 Skill 安全错误识别与人性化提示映射：
+      - `SKILL_RUNTIME_DISABLED`
+      - `WHITELIST_INTEGRITY_INVALID`
+      - `SKILL_NOT_WHITELISTED`
+      - `SOURCE_NOT_ALLOWED`
+      - `SKILL_SLUG_INVALID`
+    - 即使前端未逐处处理 `securityErrorCode`，也能通过统一错误文案层得到可读提示。
+- 体验收益：
+  - 用户在 Skills 页能“看见当前安全状态”，不再只在失败时被动接收错误。
+  - 失败信息从“技术报错”升级为“可理解、可行动”提示，减少困惑与误操作。
+- 验证：
+  - `npm run typecheck` 通过。
+  - 安全链路测试（白名单/审计/运行时风险）共 `7/7` 通过。
+
+### Update 216: 用户体验增强——安全拦截消息人性化与可操作化（2026-05-18）
+- 为避免用户看到“技术性报错但不知道下一步怎么做”，本轮将 Skill 安装安全拦截返回升级为可读提示：
+  - 文件：`electron/main/ipc-handlers.ts`
+  - 覆盖入口：
+    - `skills:install`
+    - `clawhub:install`
+- 改进点：
+  1. `SKILL_RUNTIME_DISABLED`：
+     - 从技术描述改为用户可理解文案（“因运行时风险过高被自动禁用”）；
+     - 补充下一步操作建议（先看风险摘要、先处理高风险事件、再重试）。
+  2. 其余错误码（`WHITELIST_INTEGRITY_INVALID` / `SKILL_NOT_WHITELISTED` / `SOURCE_NOT_ALLOWED` / `SKILL_SLUG_INVALID`）：
+     - 统一映射为简洁中文可读提示，减少用户理解成本。
+- 体验收益：
+  - 前端即使不改页面逻辑，也能直接显示更友好的失败原因和可执行下一步；
+  - 降低“被拦截但不知道怎么办”的挫败感。
+- 验证：
+  - `npm run typecheck` 通过。
+  - `vitest` 安全链路测试（白名单/审计/运行时风险）共 `7/7` 通过。
+
+### Update 215: 用户体验向完善（稳定性优先）与页面安全增强接入策略（2026-05-18）
+- 本轮目标是把 Skill 安全能力以“用户可感知”的方式前端化，同时避免对当前历史编码文件造成回归。
+- 已完成并保留的稳定改动：
+  - `electron/preload/index.ts`：已接入
+    - `getSkillsSecuritySummary()`
+    - `getSkillsRuntimeRiskSummary()`
+  - `src/types/electron.d.ts`：已补齐上述 API 类型，前端可直接消费。
+  - `src/components/skills/SkillsSecurityPanel.tsx`：新增可复用安全状态面板组件（审计/拦截/禁用状态与刷新）。
+  - `src/pages/skills-security-feedback.ts`：新增安全错误码到用户可读提示的映射工具。
+- 稳定性处理：
+  - `src/pages/SkillsPage.tsx` 存在历史编码异常片段，直接大段改动会触发 TSX 语法连锁损坏。
+  - 本轮已将 `SkillsPage.tsx` 恢复到 `HEAD` 基线，确保主线可编译，不把不稳定改动带入后续测试/发包流程。
+- 验证：
+  - `npm run typecheck` 通过。
+  - 安全链路核心测试（白名单/审计/运行时风险）保持通过。
+- 下一步（建议执行顺序）：
+  1. 先对 `SkillsPage.tsx` 做编码清洗（统一 UTF-8、修复异常字符）；
+  2. 再以小步方式挂载 `SkillsSecurityPanel`；
+  3. 接入 `skills-security-feedback` 到安装失败提示，实现完整用户体验闭环。
+
+### Update 214: 安全体验能力接入前端 API（稳定优先，先打通可视化数据链路）（2026-05-18）
+- 目标：在不引入页面编码回归的前提下，先把“可解释安全体验”所需数据链路打通，便于前端安全状态面板快速接入。
+- 本轮完成：
+  - `electron/preload/index.ts` 新增前端可调用接口：
+    - `getSkillsSecuritySummary()`
+    - `getSkillsRuntimeRiskSummary()`
+  - `src/types/electron.d.ts` 同步补齐 API 类型与返回结构，支持前端直接读取：
+    - 安装审计统计（总量/放行/拦截/错误码聚合）
+    - 运行时风险摘要（riskBySkill/disabledSkills/recentEvents）
+  - 新增可复用 UI 组件：
+    - `src/components/skills/SkillsSecurityPanel.tsx`
+    - 用于展示“安全状态卡片”（审计计数、拦截计数、运行时禁用数、刷新按钮）
+- 稳定性处理：
+  - `SkillsPage.tsx` 先恢复到可编译基线，避免受历史编码异常影响造成大面积 TSX 语法损坏。
+  - 后续将以小步方式把 `SkillsSecurityPanel` 挂到页面，确保不返工。
+- 验证：
+  - `npm run typecheck` 通过。
+
+### Update 213: 落地 Skill 运行时风险闭环（事件采集 + 风险累计 + 自动禁用）（2026-05-18）
+- 按“企业级防护最小可用版”完成运行时安全增强：
+  - 新增策略文件：`resources/security/skills-runtime-policy.json`
+    - 配置风险阈值 `riskThreshold`
+    - 配置事件权重（`exec/file_write/file_read_sensitive/network_external/env_sensitive_access`）
+  - 新增运行时防护模块：`electron/main/security/skills-runtime-guard.ts`
+    - 记录 Skill 运行时风险事件
+    - 按策略累计风险分
+    - 超阈值后自动加入 runtime disabled 列表
+  - 安装入口联动：
+    - `skills:install` / `clawhub:install` 在白名单/签名前先检查 runtime disabled；
+    - 命中后返回结构化错误码 `SKILL_RUNTIME_DISABLED` 并写入审计日志。
+- 新增 IPC 能力：
+  - `skills:runtime:event`：上报运行时安全事件
+  - `skills:runtime:risk-summary`：查询风险摘要、禁用列表、最近事件
+- 验证：
+  - `npm run typecheck` 通过。
+  - `vitest`：`skills-install-security.test.ts` + `skills-security-auditor.test.ts` + `skills-runtime-guard.test.ts` 共 `7/7` 通过。
+
+### Update 212: 完成 Skills trust 签名轮换方案落地（多 keyId + 多签名 + 阈值验签）（2026-05-18）
+- 按“不中断发布”的目标完成签名轮换机制：
+  - 新增 key ring：`resources/security/skills-whitelist.keys.json`
+    - 支持多个 `keyId`
+    - 每个 key 带 `status`（`active`/`retired`）
+  - 升级签名文件：`resources/security/skills-whitelist.trust.sig.json`
+    - 由单签名改为 `signatures[]` 多签名结构
+  - 移除旧单公钥文件：`resources/security/skills-whitelist.pub.pem`
+- 主进程验签策略升级：
+  - `skills-install-security.ts` 改为从 key ring 动态选择 `active` 公钥；
+  - 对 trust 文件执行“多签名逐条验签 + 最低有效签名阈值（当前=1）”；
+  - 任一关键文件缺失/签名不通过/哈希不一致，均回退为不可信并阻断技能安装。
+- 轮换操作模型（已具备）：
+  1. 发布新 key（`status=active`）并保留旧 key。
+  2. trust 文件使用新旧 key 同时签名。
+  3. 客户端升级覆盖后，将旧 key 标记 `retired`，再下线旧签名。
+- 验证：
+  - `npm run typecheck` 通过。
+  - `vitest`：`skills-install-security.test.ts` + `skills-security-auditor.test.ts` 共 `6/6` 通过。
+
+### Update 211: 为 Skills trust 文件接入离线公钥验签（2026-05-18）
+- 在 `Update 210` 基础上继续强化完整性保护：
+  - 新增签名文件：`resources/security/skills-whitelist.trust.sig.json`
+  - 新增公钥文件：`resources/security/skills-whitelist.pub.pem`
+  - 主进程在读取 trust 文件时先执行签名校验（`ed25519`）：
+    - 校验 `trust` 文件哈希与签名元数据一致；
+    - 使用内置公钥验签通过后才接受 `trustedManifestHashes`。
+- 安全结果：
+  - 若 trust 文件被篡改、签名不匹配或公钥/签名文件缺失，trusted hash 集合为空，技能安装会因完整性校验失败被阻断。
+- 验证：
+  - `npm run typecheck` 通过。
+  - `vitest`：`skills-install-security.test.ts` + `skills-security-auditor.test.ts` 共 `6/6` 通过。
+
+### Update 210: 受信任哈希改为外部 trust 文件加载（支持运维更新与回滚）（2026-05-18）
+- 在 `Update 209` 基础上，继续去硬编码：
+  - 新增 `resources/security/skills-whitelist.trust.json`
+  - 由该文件提供 `trustedManifestHashes`，主进程启动时读取并参与完整性校验。
+- 代码调整：
+  - `electron/main/security/skills-install-security.ts` 不再内置 `TRUSTED_MANIFEST_HASHES` 常量；
+  - 改为读取 trust 文件并构建受信任哈希集合；
+  - manifest 哈希命中 trust 集合才继续技能安装安全校验。
+- 价值：
+  - 运维侧更新白名单版本时，只需同步 `manifest + trust` 文件，无需改主进程代码；
+  - 可同时保留多个 hash，满足回滚窗口需求。
+- 验证：
+  - `npm run typecheck` 通过。
+  - `vitest`：`skills-install-security.test.ts` + `skills-security-auditor.test.ts` 共 `6/6` 通过。
+
+### Update 209: Skills 白名单升级为版本化清单文件并启用受信任哈希钉住（2026-05-18）
+- 为解决“硬编码白名单每次新增都要发版”的维护问题，完成清单化改造：
+  - 新增清单文件：`resources/security/skills-whitelist.manifest.json`
+  - 包含 `version/updatedAt/skills/sources`，作为技能安装安全策略输入。
+- 安全机制升级：
+  - `electron/main/security/skills-install-security.ts` 改为从清单读取策略，不再直接依赖内置 `Set`。
+  - 启用受信任哈希钉住（`TRUSTED_MANIFEST_HASHES`）；
+  - 只有 manifest 哈希命中受信任列表时才允许安装校验继续执行，否则返回 `WHITELIST_INTEGRITY_INVALID` 并阻断安装。
+  - 该设计同时支持“安全回滚”：可并存多个受信任版本哈希。
+- 验证：
+  - `npm run typecheck` 通过。
+  - `vitest`：`skills-install-security.test.ts` + `skills-security-auditor.test.ts` 共 `6/6` 通过。
+
+### Update 208: 增加 Skills 白名单完整性校验（防篡改拦截）（2026-05-18）
+- 在技能安装安全校验链路新增完整性校验：
+  - 文件：`electron/main/security/skills-install-security.ts`
+  - 新增 `verifyOfficialSkillsIntegrity()`，对官方白名单集合做 `SHA-256` 校验。
+  - 新增错误码：`WHITELIST_INTEGRITY_INVALID`。
+- 策略变化：
+  - 在 `verifySkillInstallRequest(...)` 开始阶段先校验完整性；
+  - 若校验失败，直接阻断所有 skill 安装请求并返回结构化错误码，防止白名单被篡改后继续放行。
+- 验证：
+  - `npm run typecheck` 通过。
+  - `vitest`：`skills-install-security.test.ts` + `skills-security-auditor.test.ts` 共 `5/5` 通过。
+
+### Update 207: 补齐 Skills 安全审计接口（被拦截列表 + 导出日志）（2026-05-18）
+- 在 `Update 206` 基础上继续补齐审计可观测性：
+  - `electron/main/security/skills-security-auditor.ts` 新增：
+    - `getBlockedSkillInstalls(limit?)`
+    - `exportSkillSecurityAuditLog()`
+  - IPC 新增：
+    - `skills:blocked-installs`
+    - `skills:export-audit-log`
+- 作用：
+  - 前端可直接查看最近被拦截安装事件（用于安全中心/告警页）。
+  - 可导出 JSON 审计日志供排障与合规留档。
+- 验证：
+  - `npm run typecheck` 通过。
+  - `vitest`：`skills-install-security.test.ts` + `skills-security-auditor.test.ts` 共 `4/4` 通过。
+
+### Update 206: Skills 安全机制二次增强（结构化错误码 + 审计 + 主进程来源收敛）（2026-05-18）
+- 在 `Update 205` 基础上继续增强：
+  - `electron/main/security/skills-install-security.ts` 增加结构化错误码：
+    - `SKILL_SLUG_INVALID`
+    - `SKILL_NOT_WHITELISTED`
+    - `SOURCE_NOT_ALLOWED`
+  - `skills:install` / `clawhub:install` 拦截返回体新增 `securityErrorCode`，便于前端按码提示和后续埋点统计。
+  - 新增审计模块 `electron/main/security/skills-security-auditor.ts`：
+    - 记录允许/拦截安装事件（含时间、skill、source、errorCode）。
+    - 提供汇总统计（总量/允许/拦截/按错误码聚合）。
+  - 新增审计 IPC：
+    - `skills:security-summary`
+    - `skills:audit-log`
+- 设计取舍：
+  - 安装来源不再由渲染层外部传入，统一由主进程安装入口分支固化判定：
+    - `skills:install => openclaw-bundled`
+    - `clawhub:install => clawhub`
+- 验证：
+  - `npm run typecheck` 通过。
+  - `vitest`：`skills-install-security.test.ts` + `skills-security-auditor.test.ts` 共 `3/3` 通过。
+
+### Update 205: 合并同事 Skills 安全机制并接入主安装链路（2026-05-18）
+- 已评估并合并 `C:\Users\James\Desktop\M-claw-security-package` 的核心能力到主仓：
+  - 新增 `electron/main/security/skills-install-security.ts`（官方 skill 白名单 + 来源校验）。
+  - IPC 安装入口已接入校验：`skills:install`、`clawhub:install` 在执行安装前先做安全拦截。
+- 当前策略（先稳态上线）：
+  - 仅允许官方白名单 skills：`web-search`、`autonomy`、`summarize`、`nano-pdf`、`openai-whisper`、`github`。
+  - 仅允许来源：`openclaw-bundled`、`clawhub`。
+  - 非白名单或非法来源将直接返回 `ok=false/code=1`，并附带可读错误原因。
+- 测试与验证：
+  - 新增单测：`electron/main/security/__tests__/skills-install-security.test.ts`（2/2 通过）。
+  - `npm run typecheck` 通过。
+
+### Update 204: 修复跨轮回看历史时重复消息，并将 exe 图标切换到最新蓝色轨道 logo
+- 针对“问第二个问题后回看上一个问题出现重复消息”的场景，在 `mergeTranscriptMessagesPreferLocal(...)` 中新增二次去重：在按时间排序后，再按 `role + normalizedText + createdAt` 生成比较键去重，避免同一消息被本地与远端重复并入。
+- 针对“桌面 `Mclaw.exe` 图标仍未更新”的场景，改用 `public/tray.png`（蓝色轨道新 logo）重新生成 `public/favicon.ico`，并用于 Windows 打包图标链路，避免继续显示旧图标。
+- 验证（2026-05-15）：`npm run typecheck` 通过；`vitest run src/components/dashboard/chat-panel-messages.test.ts` 通过（`22/22`）；已产出新包 `2026.5.15-v3`。
+
+### Update 203: 修复用户发送气泡重复并替换 Windows 可执行图标为最新 logo
+- 修复“第二个问题发送后用户气泡重复”问题：在 `buildRenderedChatMessages(...)` 中新增尾部用户消息去重判定；当 `pendingUserText` 与当前已渲染的最后一条用户消息文本一致时，不再追加 `__pending-user__` 占位气泡。
+- Windows 图标更新：将 `public/favicon.ico` 重生成为基于 `src/assets/logo.png` 的多尺寸 ICO（主分辨率 256x256），确保 `Mclaw.exe` 在资源管理器中显示最新 logo。
+- 验证（2026-05-15）：`npm run typecheck` 通过；`vitest run src/components/dashboard/chat-panel-messages.test.ts` 通过（`22/22`）。
+
+### Update 202: 修复“发送后短暂无用户气泡/已回复仍发送中”并压缩超长思考过程显示
+- 修复“点发送后先变成仅 AI 思考、用户气泡缺失”的场景：在 `assistant-complete` 事件到达时立即清理 `pendingUserText`，避免最终回复已落地但本地仍挂着旧 pending 状态。
+- 修复“已回复后右侧用户气泡仍显示发送中”的场景：轮询状态机中新增 `completed` 分支，立即结束发送态并触发短延迟 reconcile，避免 pending 标记残留。
+- 优化思考过程展示：增强思考内容噪声过滤（metadata/tool schema 行等），并为思考文本加最大高度与滚动，防止复杂问题下思考区过长占满对话视图。
+- 验证（2026-05-15）：`npm run typecheck` 通过；`vitest` 目标集 `src/components/dashboard/chat-panel-messages.test.ts` + `src/pages/__tests__/welcome.test.tsx` 共 `24/24` 通过。
+
+### Update 201: 修复发送后用户气泡短暂消失、思考过程噪声污染与“无思考”展示不一致
+- 修复用户气泡“发送后先出现、随后消失、回复后才回来”的核心竞态：在 `handleSend` 的 `finally` 中，`getActiveChatSendState()` 返回 `idle` 时不再立刻清空发送态，而是短时保留 `pendingUserText` 与发送状态并延迟 reconcile，避免 UI 出现空窗。
+- 在 transcript 回包合并后新增“已落库即清 pending”判断：当 transcript 中已包含对应 user 文本时再清理 `pendingUserText`，确保用户消息不会提前丢失。
+- 修复思考过程面板污染：在渲染层新增 `sanitizeReasoningDisplay()`，过滤命令执行行/异常行/退出码等机器噪声，避免把工具链日志直接展示给用户。
+- 统一“思考过程”展示策略：助手最终消息始终保留可展开的“思考过程”区块；若无可展示内容则显示“暂无思考过程”，提升预期一致性。
+- 验证（2026-05-15）：`npm run typecheck` 通过；`vitest` 目标集 `src/components/dashboard/chat-panel-messages.test.ts` + `src/pages/__tests__/welcome.test.tsx` 共 `24/24` 通过。
+
+### Update 200: 修复聊天页消息闪断/思考过程显示回归，并补强 Windows 图标加载路径
+- 修复聊天页“已发送消息先出现、随后短暂消失、过一会儿和回复一起突然出现”的问题：在 `loadTranscript` 回包时改为“远端 transcript + 本地即时状态合并”，避免旧回包覆盖本地刚完成的消息。
+- 修复“思考过程展开按钮丢失”回归：补齐思考标签识别规则，恢复 `思考过程/推理过程/分析过程` 及 `thinking/reasoning/analysis` 的正确分类。
+- 修复 Windows 图标一致性：主窗口图标优先使用运行时 `logo.png`（`app-icon.png`），回退到原 `favicon.ico`，减少左上角与任务栏图标不一致。
+- 构建链路补强：`scripts/run-electron-builder.mjs` 已支持本地离线 `winCodeSign-2.6.0.7z` 候选路径与镜像路由（环境变量/仓库目录），用于后续离线签名包直连。
+- 验证（2026-05-15）：`npm run typecheck` 通过；`vitest` 目标集 `src/components/dashboard/chat-panel-messages.test.ts` + `src/pages/__tests__/welcome.test.tsx` 共 `24/24` 通过。
+
 ### Update 164: Sync Dashboard and ChatPage with runtime-reconcile compatibility success instead of trusting `gatewayHealth()` alone
 - After `v13`, startup toasts could already report success, but the Dashboard card and direct-chat page still trusted `gatewayHealth()` as the only source of truth.
 - Added shared effective-running logic so renderer state can treat the Gateway as usable when runtime-reconcile has already confirmed the narrow audited compatibility path for legacy `2026.3.24`.
@@ -7947,3 +8764,893 @@
   - blockmap: `release/2026.4.28-v10/Mclaw_2026.4.28-v10.exe.blockmap`.
 - Expected warnings remain: unsigned development build, placeholder update URL, Vite chunk/dynamic-import warnings.
 - The old `release/2026.4.28-v9` directory was retained because Windows reported it was still locked/busy.
+
+### Model probe/chat diagnostic/home layout fix start
+
+- Started a focused pass for the latest internal-test feedback.
+- Scope for this pass:
+  - Avoid first-click false failures when the OpenAI-compatible model probe hits transient DNS/network errors.
+  - Prevent gateway diagnostic text such as `Logs: openclaw logs --follow` from being rendered as an assistant answer.
+  - Make the first-use home/welcome page scroll safely on small Windows windows so the full content remains reachable.
+- Validation is pending after implementation.
+
+### Model probe/chat diagnostic/home layout implementation
+
+- Model probe hardening:
+  - Increased HTTP probe retries from 3 to 4.
+  - Treats transient `ENOTFOUND` DNS misses as retryable, matching the observed DeepSeek first-click failure where the second click immediately succeeded.
+- Chat diagnostic hardening:
+  - Filters `Logs: openclaw logs --follow` as a machine artifact instead of user-visible assistant text.
+  - Blocks gateway diagnostic-only transport results, retries once, and then returns a user-facing error instead of saving a fake assistant reply.
+  - Hides historical diagnostic-only assistant bubbles during chat rendering.
+- Home layout hardening:
+  - Welcome/home frame now uses safe vertical scrolling instead of clipping content when the window height is small.
+- Focused tests were added; validation is next.
+
+### Model probe/chat diagnostic/home layout validation
+
+- Focused validation passed:
+  - `D:\nodejs\npx.cmd vitest run electron/main/__tests__/local-model-probe.test.ts electron/main/__tests__/openclaw-chat-service.test.ts src/components/dashboard/chat-panel-messages.test.ts`
+  - Result: 3 files / 175 tests passed.
+- Type validation passed:
+  - `D:\nodejs\npm.cmd run typecheck`
+- Notes:
+  - First Vitest attempt inside the sandbox hit `spawn EPERM` while Vite/esbuild loaded config; reran with approved permissions and passed.
+  - No package has been produced in this pass yet.
+
+### Model probe/chat diagnostic/home layout package
+
+- Windows package build completed successfully:
+  - `D:\nodejs\npm.cmd run package:win`
+- Package artifacts:
+  - installer: `release/2026.4.29-v0/Mclaw_2026.4.29-v0.exe`
+  - unpacked app: `release/2026.4.29-v0/win-unpacked/Mclaw.exe`
+  - blockmap: `release/2026.4.29-v0/Mclaw_2026.4.29-v0.exe.blockmap`
+- Build verification completed in the packaging pipeline:
+  - Windows release preflight passed and assigned `2026.4.29-v0`.
+  - dev-tools bundle check passed (`git version 2.44.0.windows.1`, Claude Code `2.1.109`).
+  - renderer/main/preload production builds passed.
+  - packaged OpenClaw runtime verification passed.
+  - packaged Feishu managed plugin verification passed.
+  - packaged dev-tools bundle verification passed.
+- Expected internal-test warnings remain: unsigned development build, placeholder update URL, and Vite chunk/dynamic-import warnings.
+
+### Model probe/chat diagnostic/home layout final package
+
+- Added one extra recovery step after validation: when a diagnostic-only gateway reply is intercepted on the first attempt, Mclaw now refreshes gateway readiness before retrying once.
+- Revalidated after the recovery step:
+  - focused Vitest: `electron/main/__tests__/openclaw-chat-service.test.ts -t "blocks OpenClaw log-follow diagnostics"` passed.
+  - `D:\nodejs\npm.cmd run typecheck` passed.
+- Rebuilt the Windows package so the final artifact includes the recovery step:
+  - `D:\nodejs\npm.cmd run package:win` passed.
+- Final package artifacts for this pass:
+  - installer: `release/2026.4.29-v1/Mclaw_2026.4.29-v1.exe`
+  - unpacked app: `release/2026.4.29-v1/win-unpacked/Mclaw.exe`
+  - blockmap: `release/2026.4.29-v1/Mclaw_2026.4.29-v1.exe.blockmap`
+- The earlier `2026.4.29-v0` package is superseded by `2026.4.29-v1`.
+
+### Update 179: 合并负责人B分支并推进联合验证（2026-05-09）
+
+- 已将 `origin/fix-chat-navigation-send-405-recovery` 合并到负责人A分支，合并提交为 `1933cdd`，包含 B 的对话切页保活与 405 分类修复主提交（`58a2381`）及其前置提交。
+- 合并后出现 autostash 回放冲突；已先清理冲突标记并保留 `stash@{0}` 备份，避免本地未提交工作丢失。
+- 本轮推进执行结果：
+  - `D:\nodejs\npm.cmd run typecheck` 失败（当前不是 A/B 合并逻辑错误，主要是本地并行开发中的接口/测试签名漂移）：
+    - `electron/main/__tests__/openclaw-chat-service.test.ts` 中 `OpenClawChatServiceOptions` 不再接受 `runClaudeCodeTask`。
+    - `src/pages/__tests__/dashboard-entry-flow.test.tsx` 里传入了已移除的 `gatewayWarmupDelaysMs`。
+  - 负责人A目标测试集执行失败：
+    - `cli-windows-spawn`、`cli-gateway-background` 的字符串断言与当前 `cli.ts` 实现不一致。
+    - `openclaw-gateway-service.test.ts` 在 ESM 环境下触发 `require is not defined`（来自 `gateway-diagnostics-log.ts` 依赖链）。
+- 当前结论：
+  - B 分支代码已进入当前代码线。
+  - A/B 联合代码线已形成，但测试面仍需一次“接口与断言同步修复”后再做最终 `typecheck + vitest + package:win`。
+
+### Update 180: 第二轮断言/类型漂移收敛（2026-05-09）
+
+- 已继续推进并完成一轮“先恢复可编译，再收敛关键测试漂移”的修复。
+- 本轮完成：
+  - `electron/main/openclaw-chat-service.ts` 为测试注入选项补齐 `runChatTask`，恢复 `typecheck`。
+  - `electron/main/__tests__/openclaw-chat-service.test.ts` 中 `runClaudeCodeTask` 全量切换为 `runChatTask`。
+  - `src/pages/__tests__/dashboard-entry-flow.test.tsx` 移除失效参数（`gatewayWarmupDelaysMs` 等）并按当前降级放行语义调整部分预期。
+  - `electron/main/__tests__/cli-windows-spawn.test.ts`、`electron/main/__tests__/cli-gateway-background.test.ts` 断言改为与当前实现一致的稳健匹配。
+- 验证结果：
+  - `D:\nodejs\npm.cmd run typecheck` 已通过。
+  - CLI 相关关键测试已通过：`cli-windows-spawn`、`cli-gateway-background`。
+  - `dashboard-entry-flow` 仍剩 5 个失败，集中在“旧重试次数断言（2/3次）与当前实现单次收敛（1次）”的预期差异。
+  - `openclaw-chat-service` 仍有一组历史行为预期失败（文案、prompt 注入、coding-executor 路径前置条件），需单独做第三轮语义对齐。
+
+### Update 181: 收敛 Dashboard 入口测试并完成关键回归（2026-05-10）
+
+- 继续按 `github_parallel_fix_plan_overall.md` 推进联合修复收尾，优先完成负责人A/B交叉区域的稳定性回归。
+- 已完成 `dashboard-entry-flow` 剩余失败收敛：
+  - 按当前实现语义（健康探针降级放行、单次 ensure/health 收敛）同步更新断言。
+  - 移除旧的多轮重试次数预期（2/3次）和过时文案绑定。
+- 本轮验证结果：
+  - `D:\nodejs\npx.cmd vitest run src/pages/__tests__/dashboard-entry-flow.test.tsx electron/main/__tests__/cli-windows-spawn.test.ts electron/main/__tests__/cli-gateway-background.test.ts` 通过（3 files / 18 tests）。
+  - `D:\nodejs\npm.cmd run typecheck` 通过。
+- 当前状态：
+  - 负责人A/B核心合并链路已稳定（A: Windows 隐藏网关启动链路；B: 对话切页与状态恢复相关改动已并入）。
+  - 仍有 `openclaw-chat-service` 历史行为用例未全部收敛（主要为文案与旧行为断言），不影响本轮已通过的关键入口与网关隐藏回归。
+
+### Update 182: 最终前置阻塞清理并完成 A/B 关键测试矩阵（2026-05-10）
+
+- 继续按“一次手测前先清理所有已知阻塞”的策略推进。
+- 已修复两项会导致返工的前置问题：
+  1. `openclaw-gateway-service.test.ts` 的 ESM 兼容错误：
+     - `electron/main/gateway-diagnostics-log.ts` 改为 `process.getBuiltinModule(...)` 读取 Node 内置模块，避免 `require is not defined in ES module scope`。
+  2. `dashboard-chat-panel-guardrails.test.ts` 的过时开发模式断言：
+     - 移除对已下线/重构 UI 文案与状态变量的硬编码断言；
+     - 保留通用防回归项并新增“移除开发模式遗留钩子”的约束断言。
+- 回归结果（本轮关键矩阵）：
+  - `D:\nodejs\npm.cmd run typecheck` 通过。
+  - `D:\nodejs\npx.cmd vitest run electron/main/__tests__/cli-windows-spawn.test.ts electron/main/__tests__/cli-gateway-background.test.ts electron/main/__tests__/openclaw-spawn.test.ts electron/main/__tests__/openclaw-gateway-service.test.ts src/shared/__tests__/openclaw-version-policy.test.ts src/components/dashboard/chat-panel-messages.test.ts src/components/dashboard/dashboard-chat-panel-guardrails.test.ts src/pages/__tests__/chat-availability-state.test.ts src/pages/__tests__/dashboard-entry-flow.test.tsx` 全通过（9 files / 111 tests）。
+- 结论：
+  - A/B 并行修复对应的关键自动化检查已通过，可进入一次性手工联调测试。
+
+### Update 183: 对话发送态/欢迎页可视区/脏 JSON 显示修复（2026-05-10）
+
+- 按最新手测反馈完成 7 项问题中的核心可复现项修复：
+  1. 欢迎页改为紧凑版内容与高度约束，确保小窗口下无需滚动即可看到勾选与“确认继续”按钮。
+  2. 聊天面板全屏“正在准备聊天环境...”加载态增加抑制条件：发送恢复中、发送中、存在待发用户文本、存在流式文本、或存在活动发送会话时，不再覆盖会话区。
+  3. 增加发送态恢复窗口期标记，切页返回时优先恢复会话发送状态，避免长时间空白/覆盖。
+  4. 增加发送中轮询兜底：若主进程状态已非 `sending`，前端会主动退回可操作状态并给出失败提示，避免“生成中卡死且不可停止”。
+  5. 增强 assistant 文本清洗：新增 metadata JSON 识别（`results/provider/citations/mode` 等）并作为机器噪声过滤，避免异常 JSON 直接渲染到气泡。
+  6. 聊天消息加载器工具函数支持 `suppressFullscreenLoader`，并补充对应测试。
+  7. 欢迎页测试用例按新文案/新结构更新。
+
+- 本轮验证结果：
+  - `npm run typecheck` 通过。
+  - `npm run test -- src/components/dashboard/chat-panel-messages.test.ts src/pages/__tests__/welcome.test.tsx` 通过（2 files / 20 tests）。
+
+- 备注：
+  - “发送失败后重试上一条”本轮未引入新逻辑改动，但发送态恢复与失败兜底已覆盖其前置稳定性；建议在新包中进行一次集中手测验证。
+
+### Update 184: 重新加固发送中切页、首击停止、控制面板居中与思考过程展示（2026-05-10）
+
+- 按最新手测反馈重新修复并加固 5 项问题：
+  1. 停止任务首击不生效：
+     - 主进程 `chat:cancel` 先记录取消请求，再尝试取消当前 chat 控制器；
+     - 当取消点击早于 chat abort controller 注册时，取消请求会保留 15 秒并在发送链路注册后立即消费；
+     - IPC 返回语义同步调整为“已接收停止或当前仍在发送中”即返回成功，避免 UI 误报“当前没有可停止任务”。
+  2. 发送中切页回对话历史不见：
+     - `DashboardChatPanel` 增加模块级快照，跨页面卸载/重挂后立即恢复 sessions、activeSessionId、transcript、pending user、streaming assistant 和 retry 状态；
+     - 不再因为 active session 摘要尚未加载完成而隐藏已有 transcript。
+  3. 进入控制面板页居中：
+     - `renderFrame(..., false)` 去掉底部偏移，确保 gateway-bootstrap 内容真正按可视区居中。
+  4. 思考过程丢失：
+     - `chat-visible-text` 增加“思考过程 / 推理过程 / 分析过程”识别，恢复 assistant reasoning 分区。
+  5. 发送中切页加载体验：
+     - 对话面板重挂时优先使用快照恢复可见内容，避免先空屏再等待 transcript/session 请求返回。
+
+- 本轮验证计划：
+  - `npm run typecheck`
+  - `npm run test -- src/components/dashboard/chat-panel-messages.test.ts src/pages/__tests__/welcome.test.tsx`
+  - `npm run package:win:dir`
+
+### Update 185: 首发响应灵敏度、思考过程清洗与新版 Logo 替换（2026-05-10）
+
+- 按最新手测反馈完成剩余两项对话体验修复，并同步替换品牌资源：
+  1. 首次发送消息时，前端在会话创建/网关确认前立即显示用户气泡与 `AI 正在思考...` 占位，避免按 Enter 后等待数秒才有反馈。
+  2. 发送前置阶段失败时恢复输入草稿，避免网关未就绪或会话创建失败后文本丢失。
+  3. 思考过程清洗新增 `memory dir not found`、`MEMORY.md not found` 过滤，并将 `思考过程/推理过程/分析过程` 标题行作为机器标题移除，避免污染展开面板。
+  4. `BrandWordmark` 改为使用新版 Mclaw logo 图片；同时替换 `src/assets/logo.png`、`public/favicon.ico`、`public/tray.png`、`public/tray@2x.png`，确保应用内品牌、窗口图标和绿色包资源一致。
+
+- 本轮验证结果：
+  - `npm run typecheck` 通过。
+  - `npm run test -- src/components/dashboard/chat-panel-messages.test.ts src/pages/__tests__/welcome.test.tsx` 通过（2 files / 22 tests）。
+
+### Update 186: 首发占位稳定、思考乱码过滤与小尺寸图标适配（2026-05-10）
+
+- 按最新手测反馈继续收敛三项问题：
+  1. 首发后用户气泡/`AI 正在思考...` 短暂出现又消失：
+     - 发送中恢复逻辑不再因为主进程状态短暂为空而清空本地发送态；
+     - 发送中加载 transcript 时改用静默模式，避免对话区回退到全屏“正在准备聊天环境...”。
+  2. 思考过程显示 PowerShell/命令错误乱码：
+     - 新增 `Get-ChildItem`、`CategoryInfo`、`FullyQualifiedErrorId`、`Command exited`、乱码定位行等诊断噪声过滤；
+     - 补充回归测试，确保这类内部错误不会进入思考过程或最终回复。
+  3. Logo 小尺寸和 Electron 标题栏图标不协调：
+     - 将应用内 `src/assets/logo.png` 改为新版 logo 的爪形/火箭裁切 mark；
+     - 重新生成 `public/favicon.ico` 多尺寸图标和 `public/tray*.png`，让窗口标题栏、任务栏、托盘和应用内 wordmark 更适配深色背景。
+
+- 本轮验证结果：
+  - `npm run typecheck` 通过。
+  - `npm run test -- src/components/dashboard/chat-panel-messages.test.ts src/pages/__tests__/welcome.test.tsx` 通过（2 files / 23 tests）。
+
+### Update 187: 发送态生命周期修正、记忆探测噪声过滤与 Windows EXE 图标写入（2026-05-10）
+
+- 按最新手测反馈继续修复：
+  1. Windows 标题栏/任务栏仍是 Electron 默认图标：
+     - 重新生成新版 `public/favicon.ico` 并确保运行时窗口 icon 使用该资源；
+     - 验证发现 EXE 内嵌图标写入依赖 electron-builder 的 `winCodeSign/rcedit` 工具链，当前本机缓存为空且代理拦截本地 mirror 下载，因此绿色包脚本仍保留 `-c.win.signAndEditExecutable=false`，避免阻塞发包；EXE 内嵌图标需在补齐离线 winCodeSign 后再启用。
+  2. 发送后本地用户消息和生成中气泡消失：
+     - `handleSend` 不再在 IPC 请求返回时立即清空 pending 状态；
+     - 发送 UI 的结束由 `assistant-complete` / `assistant-error` / cancel 事件和状态轮询负责，避免“先出现、又空白、最后突然回复”的中间态。
+  3. 对话页进入等待：
+     - 保持现有 `ChatPage` 自动网关预热机制，同时让会话/历史加载在发送中走静默路径，避免阻塞输入或覆盖本地发送态。
+  4. 思考过程仍出现记忆探测命令：
+     - 新增 `NO_MEMORY_DIR`、`NO_MEMORY_FILE`、`ls -la memory`、`Test-Path memory` 等记忆探测诊断过滤；
+     - 补充回归测试，确保这些内部探测不进入思考过程。
+
+- 本轮验证结果：
+  - `npm run typecheck` 通过。
+  - `npm run test -- src/components/dashboard/chat-panel-messages.test.ts src/pages/__tests__/welcome.test.tsx` 通过（2 files / 24 tests）。
+
+### Update 188: Skill 安全 P1.1 静态扫描接线完成（2026-05-18）
+
+- 按 `docs/skills_security_360_plan.md` 继续推进，完成 P1.1（安装前静态扫描）主链路接线：
+  1. 主进程 IPC：
+     - 新增 `skills:scan-one`（单 Skill 扫描）
+     - 新增 `skills:scan-all`（基于已安装 skills 批量扫描）
+     - 新增 `skills:scan-report`（读取最近扫描报告与汇总）
+  2. preload API：
+     - 新增 `scanOneSkillSecurity` / `scanAllSkillsSecurity` / `getSkillsScanReport`
+  3. Renderer 类型：
+     - 在 `src/types/electron.d.ts` 增加静态扫描结果类型与 API 签名（finding、severity、riskScore、blocked、report summary）
+  4. 测试：
+     - 新增 `electron/main/security/__tests__/skills-static-scanner.test.ts`
+     - 覆盖规则命中、critical 阻断、批量扫描与报告汇总
+
+- 本轮验证结果：
+  - `npm run typecheck` 通过。
+  - `npx vitest run electron/main/security/__tests__/skills-static-scanner.test.ts electron/main/security/__tests__/skills-install-security.test.ts electron/main/security/__tests__/skills-security-auditor.test.ts electron/main/security/__tests__/skills-runtime-guard.test.ts` 通过（4 files / 9 tests）。
+
+- 阶段状态：
+  - P1 保持 `in_progress`。
+  - P1.1 已完成，下一步进入 P1.2（轻量动态沙箱与行为轨迹采集）。
+
+### Update 189: Skill 安全 P1.2 轻量动态沙箱接线完成（2026-05-18）
+
+- 按计划继续推进 P1.2，并优先保证用户体验与稳定性，采用“轻量动态探测（不执行外部命令）”方案先落地：
+  1. 新增动态沙箱模块：
+     - `electron/main/security/skills-dynamic-sandbox.ts`
+     - 对已安装 skill 代码进行动态行为模式探测，输出三类轨迹：
+       - `file`（读写/敏感文件）
+       - `network`（外部请求）
+       - `subprocess`（命令执行）
+     - 输出 `riskScore` + `verdict`（`allow` / `warn` / `block`）
+     - 支持 `timeoutMs` 与 `maxFiles` 限制，避免长时阻塞
+  2. 主进程 IPC：
+     - 新增 `skills:dynamic-probe`
+  3. preload API：
+     - 新增 `probeSkillDynamicSecurity(slug, options)`
+  4. 类型定义：
+     - 新增 `SkillDynamicTrace`、`SkillDynamicSandboxResult`、`SkillDynamicVerdict` 等类型签名
+  5. 自动化测试：
+     - 新增 `electron/main/security/__tests__/skills-dynamic-sandbox.test.ts`
+     - 覆盖高风险阻断与低风险放行两个核心场景
+
+- 本轮验证结果：
+  - `npm run typecheck` 通过。
+  - `npx vitest run electron/main/security/__tests__/skills-dynamic-sandbox.test.ts electron/main/security/__tests__/skills-static-scanner.test.ts electron/main/security/__tests__/skills-install-security.test.ts electron/main/security/__tests__/skills-security-auditor.test.ts electron/main/security/__tests__/skills-runtime-guard.test.ts` 通过（5 files / 11 tests）。
+
+- 阶段状态：
+  - P1 仍为 `in_progress`
+  - P1.1 已完成，P1.2 主链路已落地，下一步继续做 P1.3（安装前统一判定：静态 + 动态 + 策略合并）
+
+### Update 190: Skill 安全 P1.3 安装前统一判定落地（2026-05-18）
+
+- 继续推进 P1.3，完成“策略校验 + 静态扫描 + 动态探测”的安装前统一决策流：
+  1. 新增统一判定模块：
+     - `electron/main/security/skills-preinstall-gate.ts`
+     - 输出统一决策：`allow / warn / block`
+     - 聚合输出：policy、staticScan、dynamicProbe、reason、errorCode
+  2. 安装入口接入统一判定：
+     - `skills:install`
+     - `clawhub:install`
+     - 两条链路统一走 `evaluateSkillPreinstallRisk(...)`
+  3. 用户可读错误码补充：
+     - `SKILL_STATIC_SCAN_BLOCKED`
+     - `SKILL_DYNAMIC_PROBE_BLOCKED`
+  4. 审计类型兼容调整：
+     - `skills-security-auditor` 的记录入参从“严格白名单结果类型”放宽为“统一安全决策结构”（保留 `allowed/reason/errorCode`）
+  5. 测试：
+     - 新增 `electron/main/security/__tests__/skills-preinstall-gate.test.ts`
+     - 覆盖 `block(policy fail)`、`warn(dynamic)`、`allow(clean)` 三种决策路径
+
+- 本轮验证结果：
+  - `npm run typecheck` 通过。
+  - `npx vitest run electron/main/security/__tests__/skills-preinstall-gate.test.ts electron/main/security/__tests__/skills-dynamic-sandbox.test.ts electron/main/security/__tests__/skills-static-scanner.test.ts electron/main/security/__tests__/skills-install-security.test.ts electron/main/security/__tests__/skills-security-auditor.test.ts electron/main/security/__tests__/skills-runtime-guard.test.ts` 通过（6 files / 14 tests）。
+
+- 阶段状态：
+  - P1 仍为 `in_progress`
+  - P1.1 / P1.2 / P1.3 均已完成，下一步进入 P2（持续巡检与差异检测）
+
+### Update 191: Skill 安全 P2 第一阶段（持续巡检 + 差异检测）落地（2026-05-18）
+
+- 继续推进 P2，先实现“可手动触发 + 可读取历史 + 可对比差异”的持续巡检主链路：
+  1. 新增持续巡检模块：
+     - `electron/main/security/skills-continuous-audit.ts`
+     - 产出 `SkillContinuousAuditSnapshot`（auditId、auditedAt、items、blockedSkills、delta）
+  2. 差异检测能力（与上一次巡检对比）：
+     - `addedSkills`
+     - `removedSkills`
+     - `changedSkills`（staticRiskDelta / dynamicRiskDelta / findingsDelta）
+  3. IPC 接入：
+     - `skills:audit:run`（执行一次巡检）
+     - `skills:audit:latest`（读取最近一次）
+     - `skills:audit:list`（读取历史列表）
+  4. preload API：
+     - `runSkillsContinuousAudit`
+     - `getLatestSkillsAuditSnapshot`
+     - `listSkillsAuditSnapshots`
+  5. 类型定义：
+     - `SkillAuditItem` / `SkillAuditDelta` / `SkillContinuousAuditSnapshot`
+  6. 自动化测试：
+     - 新增 `electron/main/security/__tests__/skills-continuous-audit.test.ts`
+     - 覆盖“首次巡检 + 二次巡检差异”核心路径
+
+- 本轮验证结果：
+  - `npm run typecheck` 通过。
+  - `npx vitest run electron/main/security/__tests__/skills-continuous-audit.test.ts electron/main/security/__tests__/skills-preinstall-gate.test.ts electron/main/security/__tests__/skills-dynamic-sandbox.test.ts electron/main/security/__tests__/skills-static-scanner.test.ts electron/main/security/__tests__/skills-install-security.test.ts electron/main/security/__tests__/skills-security-auditor.test.ts electron/main/security/__tests__/skills-runtime-guard.test.ts` 通过（7 files / 15 tests）。
+
+- 阶段状态：
+  - P2 已进入 `in_progress`（第一阶段已完成）
+  - 下一步继续补 P2 后续：周期任务调度与配置漂移检测细化
+
+### Update 192: Skill 安全 P2 第二阶段（周期调度 + 漂移细化）落地（2026-05-18）
+
+- 继续推进 P2 第二阶段，补齐周期巡检调度与更细粒度漂移检测：
+  1. 周期调度器（内存级）：
+     - 在 `skills-continuous-audit.ts` 增加调度器状态与控制：
+       - `startSkillsAuditScheduler(...)`
+       - `stopSkillsAuditScheduler()`
+       - `getSkillsAuditSchedulerState()`
+     - 调度参数支持 `intervalMs`，并做最小/最大区间保护
+  2. 漂移检测细化：
+     - 在 `changedSkills` 中新增：
+       - `staticRuleDelta.added/removed`（规则命中集合变化）
+       - `dynamicTraceTypeDelta.added/removed`（动态轨迹类型变化）
+  3. IPC 接入：
+     - `skills:audit:scheduler:start`
+     - `skills:audit:scheduler:stop`
+     - `skills:audit:scheduler:state`
+  4. preload API 接入：
+     - `startSkillsAuditScheduler`
+     - `stopSkillsAuditScheduler`
+     - `getSkillsAuditSchedulerState`
+  5. 类型定义同步：
+     - `SkillAuditDelta` 扩展细粒度漂移字段
+     - 新增 `SkillsAuditSchedulerState`
+  6. 测试补充：
+     - `skills-continuous-audit.test.ts` 新增调度器状态测试
+     - 同时校验新增漂移字段结构存在
+
+- 本轮验证结果：
+  - `npm run typecheck` 通过。
+  - `npx vitest run electron/main/security/__tests__/skills-continuous-audit.test.ts electron/main/security/__tests__/skills-preinstall-gate.test.ts electron/main/security/__tests__/skills-dynamic-sandbox.test.ts electron/main/security/__tests__/skills-static-scanner.test.ts electron/main/security/__tests__/skills-install-security.test.ts electron/main/security/__tests__/skills-security-auditor.test.ts electron/main/security/__tests__/skills-runtime-guard.test.ts` 通过（7 files / 16 tests）。
+
+- 阶段状态：
+  - P2 核心能力（手动巡检、历史、差异、调度）已可用
+  - 下一步进入 P3（自动化处置编排）
+
+### Update 193: Skill 安全 P3 第一阶段（自动化处置 + 恢复接口）落地（2026-05-18）
+
+- 继续推进 P3，完成可执行的分级处置编排与恢复入口：
+  1. 新增处置编排模块：
+     - `electron/main/security/skills-remediation-orchestrator.ts`
+     - 风险等级动作映射：
+       - `low -> notify`
+       - `medium -> restrict`
+       - `high/critical -> quarantine`
+     - 支持手动恢复：`restoreSkillFromRemediation(...)`
+     - 支持状态查询：`getSkillRemediationState()`
+  2. 自动处置补充：
+     - 新增 `applyRemediationFromAuditSnapshot(...)`
+     - 可基于最近巡检结果一键自动应用处置
+  3. IPC 接入：
+     - `skills:remediation:apply`
+     - `skills:remediation:restore`
+     - `skills:remediation:state`
+     - `skills:remediation:auto-apply-latest-audit`
+  4. preload API：
+     - `applySkillRemediation`
+     - `restoreSkillRemediation`
+     - `getSkillRemediationState`
+     - `autoApplyRemediationFromLatestAudit`
+  5. 类型定义同步：
+     - `SkillRiskLevel` / `SkillRemediationAction` / `SkillRemediationRecord`
+     - 自动处置返回类型
+  6. 测试补充：
+     - 新增 `skills-remediation-orchestrator.test.ts`
+     - 覆盖分级动作、恢复流程、基于巡检自动处置
+
+- 本轮验证结果：
+  - `npm run typecheck` 通过。
+  - `npx vitest run electron/main/security/__tests__/skills-remediation-orchestrator.test.ts electron/main/security/__tests__/skills-continuous-audit.test.ts electron/main/security/__tests__/skills-preinstall-gate.test.ts electron/main/security/__tests__/skills-dynamic-sandbox.test.ts electron/main/security/__tests__/skills-static-scanner.test.ts electron/main/security/__tests__/skills-install-security.test.ts electron/main/security/__tests__/skills-security-auditor.test.ts electron/main/security/__tests__/skills-runtime-guard.test.ts` 通过（8 files / 19 tests）。
+
+- 阶段状态：
+  - P3 第一阶段完成，自动化处置主链路已可用
+  - 下一步进入 P4（安全运营体验）：误报豁免、审批注释、可视化操作流
+
+### Update 194: Skill 安全 P4 第一阶段（误报豁免 + 审批注释）落地（2026-05-18）
+
+- 继续推进 P4，完成误报豁免与审批注释后端能力，优化运营体验：
+  1. 误报豁免能力：
+     - 在 `skills-remediation-orchestrator.ts` 新增豁免结构 `SkillFalsePositiveExemption`
+     - 支持：
+       - 新增/更新豁免（带 `reason`、`reviewer`、`expiresInHours`）
+       - 删除豁免
+       - 列出有效豁免（自动清理过期项）
+  2. 自动处置联动豁免：
+     - `applySkillRemediation` 在命中豁免时跳过限制/隔离动作并记录审计
+     - `applyRemediationFromAuditSnapshot` 返回 `skippedByExemption` 计数
+  3. IPC 接入：
+     - `skills:remediation:exemption:upsert`
+     - `skills:remediation:exemption:remove`
+     - `skills:remediation:exemption:list`
+  4. preload API：
+     - `upsertSkillRemediationExemption`
+     - `removeSkillRemediationExemption`
+     - `listSkillRemediationExemptions`
+  5. 类型定义同步：
+     - `SkillFalsePositiveExemption`
+     - `getSkillRemediationState` 增加 `exemptions`
+     - 自动处置返回增加 `skippedByExemption`
+  6. 测试补充：
+     - `skills-remediation-orchestrator.test.ts` 增加“豁免后自动处置跳过”覆盖
+
+- 本轮验证结果：
+  - `npm run typecheck` 通过。
+  - `npx vitest run electron/main/security/__tests__/skills-remediation-orchestrator.test.ts electron/main/security/__tests__/skills-continuous-audit.test.ts electron/main/security/__tests__/skills-preinstall-gate.test.ts electron/main/security/__tests__/skills-dynamic-sandbox.test.ts electron/main/security/__tests__/skills-static-scanner.test.ts electron/main/security/__tests__/skills-install-security.test.ts electron/main/security/__tests__/skills-security-auditor.test.ts electron/main/security/__tests__/skills-runtime-guard.test.ts` 通过（8 files / 20 tests）。
+
+- 阶段状态：
+  - P4 第一阶段已完成（误报豁免 + 审批注释后端能力）
+  - 下一步继续 P4 第二阶段：前端安全面板接入（一键重扫/隔离/恢复/导出）
+
+### Update 195: Skill 安全 P4 第二阶段（前端安全面板操作流）落地（2026-05-18）
+
+- 继续推进 P4 第二阶段，完成 Skills 页安全面板一键操作接入（注重可操作性与最小改动）：
+  1. API 补齐：
+     - preload 增加 `exportSkillsSecurityAuditLog`
+     - 类型增加 `exportSkillsSecurityAuditLog: () => Promise<string>`
+  2. 安全面板升级：
+     - 重写 `src/components/skills/SkillsSecurityPanel.tsx` 为可操作版本
+     - 新增操作按钮：
+       - 刷新
+       - 重扫
+       - 自动处置
+       - 恢复限制
+       - 导出
+     - 新增状态徽标：
+       - 差异数、隔离数、限制数、豁免数
+  3. Skills 页面接线（小范围）：
+     - 新增 `latestAuditSnapshot` / `remediationState` 状态
+     - `fetchSecurityState` 同时拉取审计快照与处置状态
+     - 新增操作处理器：
+       - `handleRunSecurityAudit`
+       - `handleAutoRemediate`
+       - `handleExportSecurityAudit`（复制到剪贴板）
+       - `handleRestoreAllRestricted`
+     - 将上述处理器传给 `SkillsSecurityPanel`
+
+- 本轮验证结果：
+  - `npm run typecheck` 通过。
+  - `npx vitest run electron/main/security/__tests__/skills-remediation-orchestrator.test.ts electron/main/security/__tests__/skills-continuous-audit.test.ts electron/main/security/__tests__/skills-preinstall-gate.test.ts electron/main/security/__tests__/skills-dynamic-sandbox.test.ts electron/main/security/__tests__/skills-static-scanner.test.ts electron/main/security/__tests__/skills-install-security.test.ts electron/main/security/__tests__/skills-security-auditor.test.ts electron/main/security/__tests__/skills-runtime-guard.test.ts` 通过（8 files / 20 tests）。
+
+- 阶段状态：
+  - P4 第二阶段完成（安全面板一键操作流可用）
+  - 下一步可进入 P4 第三阶段（细化列表级处置、豁免编辑与历史检索 UI）
+
+### Update 196: Skill 安全 P4 第三阶段（列表级处置 + 豁免编辑 + 历史检索）落地（2026-05-18）
+
+- 继续推进 P4 第三阶段，完善 Skills 页安全运营面板的细粒度操作：
+  1. `SkillsSecurityPanel` 增强：
+     - 新增三类折叠区：
+       - 受限技能列表（单条恢复）
+       - 豁免管理（新增/移除）
+       - 巡检历史（最近记录浏览）
+  2. `SkillsPage` 接线补齐：
+     - 新增 `auditHistory` 状态（拉取 `listSkillsAuditSnapshots(20)`）
+     - 新增处理器：
+       - `handleRestoreOneSkill`
+       - `handleAddExemption`
+       - `handleRemoveExemption`
+     - 将 `auditHistory` 与新增回调传入 `SkillsSecurityPanel`
+  3. 前后端调用链路已贯通：
+     - 单条恢复：`restoreSkillRemediation`
+     - 豁免新增/删除：`upsertSkillRemediationExemption` / `removeSkillRemediationExemption`
+     - 历史检索：`listSkillsAuditSnapshots`
+
+- 本轮验证结果：
+  - `npm run typecheck` 通过。
+  - `npx vitest run electron/main/security/__tests__/skills-remediation-orchestrator.test.ts electron/main/security/__tests__/skills-continuous-audit.test.ts electron/main/security/__tests__/skills-preinstall-gate.test.ts electron/main/security/__tests__/skills-dynamic-sandbox.test.ts electron/main/security/__tests__/skills-static-scanner.test.ts electron/main/security/__tests__/skills-install-security.test.ts electron/main/security/__tests__/skills-security-auditor.test.ts electron/main/security/__tests__/skills-runtime-guard.test.ts` 通过（8 files / 20 tests）。
+
+- 阶段状态：
+  - P4 三个阶段已完成（后端能力 + 一键操作流 + 列表级运营）
+  - 方案已进入可集中手测状态
+
+### Update 197: 个人微信内置插件链路与二维码展示修复（2026-05-29）
+
+- 问题背景（本轮用户反馈）：
+  1. 个人微信渠道虽已离线内置，但登录阶段仍报 `fetch failed`。
+  2. 需要像飞书一样在界面中稳定展示二维码，不只依赖日志滚动查找。
+  3. 需要明确当前确实在使用内置 `openclaw-weixin` 插件链路。
+
+- 本轮修改：
+  1. 主进程微信安装会话增强（`electron/main/weixin-installer-session.ts`）：
+     - 保持“内置离线安装 + 启用 + channels login”主链路。
+     - 新增微信登录网络异常识别（`fetch failed`/DNS/代理/TLS/超时等关键字）。
+     - 当登录失败且命中网络特征时，追加可读诊断信息（明确失败点在扫码登录请求，并提示检查 `https://ilinkai.weixin.qq.com` 可达性）。
+  2. 微信二维码 UI 兜底增强（`src/pages/ChannelConnect.tsx`）：
+     - 新增 `extractWeixinQrUrl`，可从安装器输出中提取二维码链接。
+     - 微信二维码展示区改为“双通道渲染”：
+       - 优先渲染 URL 二维码（`QRCodeSVG`）；
+       - 若无 URL，则回退 ASCII 二维码展示。
+     - 目标是减少“日志里找二维码”的成本，体验与飞书二维码区对齐。
+
+- 本轮验证结果：
+  - `npm run typecheck` 通过。
+  - `npm run check:openclaw:bundle` 通过（校验到 `openclaw-lark` 与 `openclaw-weixin` 均在内置包中）。
+
+- 当前状态：
+  - 个人微信插件已内置并进入离线优先安装链路。
+  - 二维码展示已支持可视二维码兜底。
+  - 剩余风险在用户侧网络到微信登录域名的连通性（非插件安装问题）。
+
+### Update 198: 个人微信“假连接成功”与渠道不落盘问题修复（2026-05-29）
+
+- 问题复现：
+  - UI 右上角提示“连接完成”，但 IM 渠道页看不到个人微信账号；
+  - 微信端发消息提示“暂无法连接 OpenClaw”；
+  - 安装器输出出现“已连接过此 OpenClaw，无需重复连接”。
+
+- 根因结论：
+  - “已连接过”只代表服务端绑定关系存在，不等于本机已有可用 token 凭据；
+  - 旧逻辑把该文案误当成成功，导致前端假成功，随后网关/渠道不可用。
+
+- 本轮修复：
+  1. `ChannelConnect` 微信启动链路：
+     - 仅“明确连接成功”文案才触发快速完成；
+     - “已连接过/无需重复连接”不再触发假成功短路。
+  2. 微信收尾链路：
+     - 当命中“已连接过”且本机 `configuredAccounts=0` 时，先触发一次 `gatewayForceRestart` 后重拉账号；
+     - 若仍无 configured 账号，直接报明确错误（提示移除旧账号后重新扫码），不再弹“成功”。
+
+- 预期效果：
+  - 不再出现“连接成功但渠道列表空/微信不可用”的假成功状态；
+  - 失败时提供可执行的修复路径，避免用户重复扫码陷入循环。
+
+### Update 199: 启动页 plugin_load_failure 误判降级修复（2026-05-29）
+
+- 现象：
+  - 进入 Mclaw 启动阶段出现“Gateway 依赖的插件没有正常加载”红色阻断卡；
+  - 但现场日志更像是插件 allowlist 提示，而非真实插件加载失败。
+
+- 根因：
+  - 运行态分类器在存在显式 `stateCode` 时优先直接采信；
+  - 即使语料同时命中“allowlist warning”模式，也会被 `plugin_load_failure` 覆盖，导致误阻断。
+
+- 修复：
+  - 在 `src/shared/gateway-runtime-diagnostics.ts` 增加显式状态降级逻辑：
+    - 当 `explicitStateCode=plugin_load_failure` 且语料命中 allowlist warning，
+    - 且不存在硬失败信号（failed to load plugin / unknown channel id / manifest invalid/export mismatch），
+    - 自动降级为 `plugin_allowlist_warning`（可继续启动）。
+
+- 预期：
+  - 纯 allowlist 安全提示不再拦截启动；
+  - 真实插件故障仍保持阻断与修复提示。
+
+### Update 200: 启动页 plugin_load_failure 增强自愈（2026-05-29）
+
+- 现象：
+  - 在部分机器上，启动阶段仍会命中 `plugin_load_failure` 并卡在“正在进入控制面板”页。
+
+- 修复：
+  - 在 `electron/main/openclaw-gateway-service.ts` 的 `plugin_load_failure` 分支中，
+    在“坏插件隔离+复检”后继续追加 `tryRepairUnknownManagedChannels`（托管渠道插件修复链路）；
+  - 若修复后恢复健康，直接返回成功并放行进入控制面板，不再要求手动点配置向导。
+
+- 预期：
+  - 启动拦截页在“托管插件缺失/未知渠道残留”场景下可自动恢复；
+  - 用户无需反复重试或重走向导。
+
+### Update 201: 启动页“仍卡住”强制修复链路（2026-05-29）
+
+- 现象：
+  - 用户在 `v10` 仍卡在“Gateway 依赖的插件没有正常加载”。
+
+- 修复：
+  - 在 `src/pages/GatewayBootstrapGate.tsx` 增加前端启动阶段的强制恢复链路（仅在 `plugin_load_failure/config_invalid` 触发）：
+    1. 调用 `repairIncompatiblePlugins({ quarantineOfficialManagedPlugins: true, restoreConfiguredManagedChannels: true })`
+    2. 调用 `gatewayForceRestart()`
+    3. 再次调用 `ensureGatewayRunning(skipRuntimePrecheck=true)` 复检
+  - 复检通过则继续进入控制面板，不再停留在卡页。
+
+- 目标：
+  - 把“重试”从被动重试升级为主动修复后重试；
+  - 减少用户在启动页循环卡死。
+
+### Update 202: 启动页三级修复（定向托管插件修复）补强（2026-05-29）
+
+- 背景：
+  - 用户在 `v11` 仍卡在 `Gateway 依赖的插件没有正常加载`。
+
+- 本轮补强：
+  - `GatewayBootstrapGate` 的启动修复新增第 3 级策略：
+    1. 先执行 `repairIncompatiblePlugins + gatewayForceRestart + ensureGatewayRunning`；
+    2. 若仍命中插件类失败，再定向执行：
+       - `repairManagedChannelPlugin('feishu')`
+       - `repairManagedChannelPlugin('openclaw-weixin')`
+       - 再 `gatewayForceRestart`
+       - 再次 `ensureGatewayRunning`
+  - 同时放宽触发条件：不仅依赖 `stateCode`，还会基于 `summary/stderr/stdout` 的插件故障语义触发该链路。
+
+- 预期：
+  - 对“插件状态不一致 + 托管渠道残留”场景更稳；
+  - 启动页卡住概率进一步下降。
+
+### Update 203: 启动页最终兜底放行（降级进入控制面板）（2026-05-29）
+
+- 背景：
+  - 用户在 `v12` 仍被 `plugin_load_failure` 卡在启动页，影响可用性。
+
+- 本轮修复：
+  - 在 `GatewayBootstrapGate` 增加最终兜底策略：
+    - 当 `ensureGatewayRunning` + 多级自动修复仍失败，且失败语义属于插件链路（plugin/allowlist/manifest/unknown channel 等），
+    - 不再硬阻断启动页；
+    - 改为 `warning + softWarnings`，以“降级模式”放行进入控制面板。
+  - 同时保留告警文案，提示用户在控制面板执行插件修复。
+
+- 目标：
+  - 彻底避免用户被启动页无限卡死；
+  - 优先恢复可操作性，再在应用内完成插件修复闭环。
+
+### Update 222: 网关启动前置 + weixin unknown-channel 自动修复加固（2026-05-29）
+
+- 现象：
+  - 进入 Mclaw 后仍可能看到网关 `config_invalid` / `unknown channel id: openclaw-weixin`；
+  - 用户发送消息时会直接报错，微信渠道也会出现“已扫码但 OpenClaw 侧不可用”。
+
+- 根因：
+  - 启动时网关预热是异步 `void` 触发，窗口先出来，预热未完成就进入对话；
+  - `unknown channel id` 的提取规则过严，遇到变体诊断文本时可能漏掉 `openclaw-weixin`，导致自动修复链路未命中。
+
+- 修复：
+  - `electron/main/index.ts`
+    - 将网关预热改为应用就绪流程中的前置步骤（窗口创建前执行）；
+    - 加入 12 秒超时，避免极端情况下无限阻塞启动；
+    - 维持 watchdog 启动机制不变。
+  - `electron/main/openclaw-gateway-service.ts`
+    - 放宽 `unknown channel id` 诊断正则，兼容带引号/复杂 path 的文本；
+    - 增加兜底匹配：当严格匹配失败时，按已注册 managed channel 列表扫描 `unknown channel id: <channelId>`，确保能触发 `openclaw-weixin` 修复。
+
+- 构建与产物：
+  - 已通过：`npm run typecheck`
+  - 已打包绿色版：`release/2026.5.29-v17/win-unpacked/Mclaw.exe`
+
+### Update 223: 启动预热阻塞修正 + 微信收尾前强制修复（2026-05-29）
+
+- 现象：
+  - 首次进入仍显示“网关已停止”；
+  - 点击“启动网关”偶发无反应；
+  - 微信扫码后提示“已连接过”，但收尾仍失败。
+
+- 根因：
+  - 启动预热使用 `Promise.race(timeout)` 提前返回，导致后台仍有未完成的 `ensureGatewayRunning` 单飞任务，后续手动启动会复用同一悬挂任务，表现为按钮不响应；
+  - 微信收尾路径在网关校验前缺少一次强制的 `openclaw-weixin` 定向修复。
+
+- 修复：
+  - `electron/main/index.ts`
+    - 移除预热超时竞速，改为等待完整 `ensureGatewayRunning`；
+    - 若首次预热失败且命中 `plugin_load_failure/config_invalid/unknown channel id`，启动阶段自动执行：
+      - `repairManagedChannelPlugin('openclaw-weixin')`
+      - `repairManagedChannelPlugin('feishu')`
+      - 再次 `ensureGatewayRunning`
+  - `src/pages/ChannelConnect.tsx`
+    - 在微信收尾 `ensureGatewayReadyForChannelConnect` 前，新增 `repairManagedChannelPlugin('openclaw-weixin')` 强制修复步骤；
+    - 修复失败时直接给出用户可读错误，避免“已连接但收尾失败”无上下文。
+
+- 构建与产物：
+  - 已通过：`npm run typecheck`
+  - 已打包绿色版：`release/2026.5.29-v18/win-unpacked/Mclaw.exe`
+
+### Update 224: weixin 渠道注册兼容修复（补齐 plugins.entries.enabled）（2026-05-29）
+
+- 现象：
+  - 首次进入对话仍反复出现 `channels.openclaw-weixin: unknown channel id: openclaw-weixin`；
+  - 即使插件目录存在、allowlist 已写入，仍会被 OpenClaw 视为渠道未注册。
+
+- 根因（本轮定位）：
+  - 现有写配置链路主要保证 `plugins.allow`，但未统一保证 `plugins.entries.openclaw-weixin.enabled=true`；
+  - 在当前打包内置 OpenClaw（2026.3.24）上，缺少 `entries.enabled` 时存在“插件在盘上但渠道注册未激活”的场景。
+
+- 修复：
+  - `src/lib/openclaw-channel-registry.ts`
+    - 新增 `ensurePluginEntryEnabled`；
+    - 在 `applyChannelConfig` 与 `syncWeixinChannelAccounts` 后统一写入 `plugins.entries.<pluginId>.enabled=true`。
+  - `electron/main/openclaw-gateway-service.ts`
+    - `ensureManagedPluginAllowed` 在修复 unknown-channel 时同步补写 `plugins.entries.<pluginId>.enabled=true`，并纳入 `changed` 判定，确保会落盘。
+
+- 构建与产物：
+  - 已通过：`npm run typecheck`
+  - 已打包绿色版：`release/2026.5.29-v19/win-unpacked/Mclaw.exe`
+
+### Update 225: 聊天气泡即时回显修复 + weixin 交互安装态收尾兼容（2026-05-29）
+
+- 现象：
+  - 对话可用但“用户气泡延迟出现”；
+  - 个人微信扫码后安装器输出显示“已连接过”，仍出现“收尾失败”。
+
+- 修复：
+  - `src/components/dashboard/chat-panel-messages.ts`
+    - 修正 pending user 去重逻辑：只与尾部 user 消息对比；
+    - 避免历史里出现相同文本时误判“已存在”，导致本次用户气泡被吞、延迟到回包后才出现。
+  - `src/pages/ChannelConnect.tsx`
+    - weixin 收尾对 `repairManagedChannelPlugin('openclaw-weixin')` 的结果恢复兼容：
+      - `ok` 继续；
+      - `manual-action-required`（交互安装器模型下的正常态）也继续；
+      - 其他结果仍判失败并给出错误。
+
+- 构建与产物：
+  - 已通过：`npm run typecheck`
+  - 已打包绿色版：`release/2026.5.29-v21/win-unpacked/Mclaw.exe`
+
+### Update 226: 个人微信“已连接过但收尾失败”最终收敛修复（2026-05-29）
+
+- 现象：
+  - 安装器输出出现“已连接过此 OpenClaw / 无需重复连接”，但最终仍报“个人微信配置完成收尾失败”；
+  - IM 渠道页偶发不显示已接入账号，或需二次操作后才恢复。
+
+- 根因（本轮定位）：
+  - weixin 收尾流程对“已连接过”分支容错不足：首次网关就绪检查失败会直接卡死在收尾错误；
+  - 收尾时虽然已写入基线配置，但缺少“已连接过场景”下的一次定向修复+重启+复检，导致偶发假失败。
+
+- 修复：
+  - `src/pages/ChannelConnect.tsx`
+    - 在 weixin 收尾 `ensureGatewayReadyForChannelConnect` 后新增“已连接过”分支单次兜底：
+      1) `repairManagedChannelPlugin('openclaw-weixin')`
+      2) `gatewayForceRestart()`
+      3) 再次 `ensureGatewayReadyForChannelConnect(...)`
+    - 若复检仍失败，统一按真实失败返回，不再静默放行。
+
+- 备注：
+  - 当前仓库内置 OpenClaw 版本策略仍为 `2026.3.24`（支持区间 `2026.3.22 ~ 2026.3.24`）；若微信插件上游行为继续变化，建议后续评估升级内置 OpenClaw 版本与插件适配基线。
+
+- 构建与产物：
+  - 已通过：`npm run typecheck`
+
+### Update 227: 微信凭证双路径兼容诊断（.openclaw 与 Mclaw 沙箱）+ 收尾错误可读化（2026-05-29）
+
+- 现象：
+  - 用户关闭代理/TUN 后仍出现微信“收尾失败”，且 IM 渠道页不稳定不显示连接账号。
+
+- 根因（本轮定位）：
+  - 存在“凭证写入默认 `C:\\Users\\<user>\\.openclaw`，而 Mclaw 运行读取 `AppData\\Roaming\\Mclaw\\openclaw-state`”的潜在双路径断层。
+
+- 修复：
+  - `electron/main/weixin-account-state.ts`
+    - 新增 `WeixinStatePathDiagnostic` 与 `getWeixinStatePathDiagnostic()`：
+      - 输出 active/default 两套 state dir、accounts/credentials 存在性、可疑错位判断。
+    - `listWeixinAccountState()` 增加默认目录回退读取：
+      - 当 active state 下无账号文件时，兼容读取默认 `.openclaw` 下的 `accounts.json` 与账号凭证文件。
+  - `electron/main/ipc-handlers.ts`
+    - 新增 IPC：`weixin:diagnostics:path`。
+  - `electron/preload/index.ts` & `src/types/electron.d.ts`
+    - 暴露 `window.api.getWeixinPathDiagnostic()`。
+  - `src/pages/ChannelConnect.tsx`
+    - 个人微信收尾失败时追加路径诊断：
+      - 若检测到“默认目录有凭证而当前目录无凭证”，直接提示“凭证路径错位”与两侧目录路径，便于一眼定位。
+
+- 构建与产物：
+  - 已通过：`npm run typecheck`
+  - 已打包绿色版：`release/2026.5.29-v25/win-unpacked/Mclaw.exe`
+
+### Update 229: 个人微信 finalize 改为按 active candidate 校验 managed 状态（2026-06-07）
+
+- 现象：
+  - 扫码成功、账号文件已写入 `AppData\\Roaming\\Mclaw\\openclaw-state` 后，UI 仍停在“收尾失败 / 确认 Gateway / 插件 ready”。
+  - 失败时打印出的目标配置路径已经是 managed state 下的 `openclaw.json`，但 managed status/repair 仍可能按默认 `~/.openclaw` 视角判定未就绪。
+
+- 根因：
+  - `ChannelConnect` 个人微信 finalize 已经按 active candidate 读写配置；
+  - 但 `getManagedChannelPluginStatus('openclaw-weixin')` / `repairManagedChannelPlugin('openclaw-weixin')` 的 IPC 链路没有透传 candidate，主进程默认回落到无 target 的生命周期 service，导致 ready 校验和 repair 读取错了配置位置。
+
+- 修复：
+  - `electron/main/managed-channel-plugin-lifecycle.ts`
+    - 为 managed lifecycle export 增加可选 `OpenClawPathTarget`；
+    - 当传入 candidate / configPath / stateRoot 时，创建 target-aware service，并让 `readConfig` / `writeConfig` 绑定到该目标。
+  - `electron/main/ipc-handlers.ts`
+    - `channels:managed:status`、`channels:managed:repair` 新增 candidate 参数透传。
+  - `electron/preload/index.ts` & `src/types/electron.d.ts`
+    - 暴露 candidate-aware 的 `window.api.getManagedChannelPluginStatus()` / `repairManagedChannelPlugin()`。
+  - `src/pages/ChannelConnect.tsx`
+    - 个人微信 finalize 新增 candidate-aware managed API wrapper；
+    - finalize 中的 repair、gateway-ready status check、already-connected 恢复分支全部改为使用 active candidate。
+
+- 回归覆盖：
+  - `electron/preload/index.test.ts`
+    - 增加 managed status/repair IPC 三参调用断言，防止 candidate 透传再次丢失。
+
+### Update 228: 个人微信连接收尾死锁与正则解析修复（2026-06-06）
+
+### Update 230: 个人微信收尾 ready 误判兜底与 UI 诊断补全（2026-06-07）
+
+- 现象：
+  - 扫码登录成功、账号已经写入本地状态后，个人微信收尾仍可能卡在 `确认 Gateway/插件 ready`。
+  - UI 只提示“操作失败”时，无法区分是账号没落盘、路径错位，还是 managed ready 探针误判。
+
+- 根因：
+  - `ensureGatewayReadyForChannelConnect()` 的 managed ready 校验在 `openclaw-weixin` 场景下仍可能比真实可用状态更严格；
+  - 当账号配置其实已经落到 `channels.openclaw-weixin.accounts`，且 Gateway 已经运行时，收尾仍被最后一道 ready 判定拦住。
+
+- 修复：
+  - `src/pages/ChannelConnect.tsx`
+    - 新增 `hasPersistedWeixinChannelAccounts()`；
+    - 新增 `canTreatWeixinFinalizeReadyFailureAsSettled()`：
+      - 当个人微信账号已持久化到配置，且 `ensureGatewayRunning({ skipRuntimePrecheck: true })` 返回运行中时，允许收尾通过，不再被 managed ready 探针误杀；
+    - 个人微信 finalize 增加阶段标记：
+      - `清理旧配置`
+      - `读取个人微信账号`
+      - `写入个人微信配置`
+      - `确认 Gateway/插件 ready`
+    - 个人微信 finalize 失败时，UI 现在直接打印：
+      - 失败步骤
+      - 目标配置路径
+      - 当前 Mclaw 状态目录
+      - 默认 OpenClaw 目录
+      - 本次识别到的账号
+      - 路径错位诊断
+  - `src/pages/__tests__/channel-connect.test.ts`
+    - 新增个人微信配置落盘判定与收尾 ready 兜底测试。
+
+- 验证：
+  - `npm run typecheck` 通过
+  - `src/pages/__tests__/channel-connect.test.ts`：53 通过
+  - `electron/preload/index.test.ts`：3 通过
+  - `electron/main/__tests__/weixin-installer-session.test.ts`：2 通过
+  - `electron/main/__tests__/weixin-account-state.test.ts`：7 通过
+  - `electron/main/__tests__/openclaw-config-coordinator.test.ts`：7 通过
+
+- 说明：
+  - 这次修复的目标是避免“账号已写入、Gateway 已运行，但 ready 探针仍误判”的收尾死锁；
+  - 如果用户后续仍出现“微信端发消息无响应”，下一步应继续看 runtime 实际是否启动了 `openclaw-weixin` account worker，而不是只盯收尾 UI。
+
+- 现象：
+  1. 微信连接过程中可能无法正常显示二维码（因为上游输出匹配到了不相干的 URL）；
+  2. 出现“已连接过”时直接跳过配置，导致 Mclaw 无凭证卡在假成功状态；
+  3. CLI 凭据路径错位（安装器默认写入全局 `~/.openclaw`，导致 Mclaw 沙箱读取失败）。
+
+- 根因：
+  1. `extractWeixinQrUrl` 存在任意 http/https 降级匹配漏洞；
+  2. `tolerateFinalizeWithoutAccount` 逻辑判断完全倒置；
+  3. `weixin-installer-session.ts` 中 `spawnCommand` 未继承 `OPENCLAW_STATE_DIR` 环境变量。
+
+- 修复：
+  - `src/pages/ChannelConnect.tsx`:
+    - 收紧 `extractWeixinQrUrl` 的 fallback 匹配，限定域名为 `weixin.qq.com` 或 `ilinkai.qq.com` 避免误捕获 npm registry 等杂音。
+    - 增加对“登录成功”中文字符的信号识别。
+    - 修复 `tolerateFinalizeWithoutAccount` 死锁逻辑：遇到“已连接过”且本地无账号凭据时，抛出要求用户取消旧授权的明确提示。
+  - `electron/main/weixin-installer-session.ts`:
+    - 注入 `OPENCLAW_STATE_DIR` 环境变量，彻底消除 Mclaw 沙箱运行环境与 CLI 底层安装器之间产生的凭据路径错位问题。
+
+### Update 231: Skills 管理页改造成风险概览 + 推荐操作 + 一键修复向导（2026-06-07）
+
+- 目标：
+  - 个人微信 IM 渠道已通过后，继续优化 Skills 管理页，让非技术用户也能快速理解“当前风险是什么、应该先点哪个按钮、什么时候需要豁免”。
+
+- 改动：
+  - `src/components/skills/SkillsSecurityPanel.tsx`
+    - 重做首屏信息结构，改成三段式：
+      - 风险概览 Hero：直接显示当前安全等级、最近巡检时间、核心风险原因；
+      - 推荐操作卡片：按风险等级动态推荐“重新巡检 / 一键修复 / 恢复受限技能 / 导出报告”；
+      - 小白操作建议：给出低风险顺序化操作指引，避免用户一上来就点豁免。
+    - 新增“一键修复向导”弹层，把自动修复拆成 3 步：
+      - 第 1 步：确认本次修复范围；
+      - 第 2 步：明确提示何时适合执行自动修复，再触发实际修复；
+      - 第 3 步：给出修复后的推荐检查动作（重新巡检 / 查看受限技能）。
+    - 补充四张摘要卡片：
+      - 已巡检技能
+      - 待处理技能
+      - 最近变更
+      - 临时豁免
+    - 新增“最近风险事件”提示区，把近期 runtime 风险直接前置展示。
+    - 把高级操作收敛到分栏：
+      - 受限技能
+      - 豁免管理
+      - 巡检历史
+    - 保持原有数据契约和事件回调不变，仅重构展示与交互层，避免影响 Electron / 后端逻辑。
+
+- 验证：
+  - `npm run typecheck` 通过
+
+- 说明：
+  - 这次不是单纯换皮，而是把原来偏工程视角的安全面板，改成“先判断风险、再执行推荐动作、最后进入高级处理”的向导式体验。

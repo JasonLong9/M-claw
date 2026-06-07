@@ -333,13 +333,13 @@ function finalizeActiveSession(
 function buildFeishuInstallerStartupBanner(commandResolution: FeishuInstallerCommandResolution): string {
   return [
     commandResolution.npxSource === 'bundled-runtime' && commandResolution.npxBinDir
-      ? `[Qclaw] 使用内置 Node/npm 工具链：${commandResolution.npxBinDir}\n`
+      ? `[Mclaw] 使用内置 Node/npm 工具链：${commandResolution.npxBinDir}\n`
       : '',
     commandResolution.npxSource === 'dev-node24' && commandResolution.npxBinDir
-      ? `[Qclaw] 使用本地 Node 24 工具链：${commandResolution.npxBinDir}\n`
+      ? `[Mclaw] 使用本地 Node 24 工具链：${commandResolution.npxBinDir}\n`
       : '',
     commandResolution.bundledPackagePath
-      ? `[Qclaw] 使用内置飞书安装器包：${commandResolution.bundledPackagePath}\n`
+      ? `[Mclaw] 使用内置飞书安装器包：${commandResolution.bundledPackagePath}\n`
       : '',
   ].join('')
 }
@@ -349,7 +349,7 @@ function buildFeishuManagedCreateCommand(): string[] {
 }
 
 function buildFeishuManagedCreateBanner(): string {
-  return '[Qclaw] 新建机器人现在走 Mclaw 内置二维码创建链路，不再依赖上游 npm install/update。\n'
+  return '[Mclaw] 新建机器人现在走 Mclaw 内置二维码创建链路，不再依赖上游 npm install/update。\n'
 }
 
 function buildFeishuOfficialPluginEnsureBanner(params: {
@@ -361,13 +361,13 @@ function buildFeishuOfficialPluginEnsureBanner(params: {
 }): string {
   const lines: string[] = []
   if (params.installedThisRun) {
-    lines.push('[Qclaw] 已将内置飞书运行时插件写入当前 OpenClaw 目录。')
+    lines.push('[Mclaw] 已将内置飞书运行时插件写入当前 OpenClaw 目录。')
   } else if (params.stateInstalledOnDisk) {
-    lines.push('[Qclaw] 当前 OpenClaw 目录中已存在飞书运行时插件。')
+    lines.push('[Mclaw] 当前 OpenClaw 目录中已存在飞书运行时插件。')
   }
 
   const message = String(params.message || '').trim()
-  if (message) lines.push(`[Qclaw] ${message}`)
+  if (message) lines.push(`[Mclaw] ${message}`)
 
   const stdout = String(params.stdout || '').trim()
   if (stdout) lines.push(stdout)

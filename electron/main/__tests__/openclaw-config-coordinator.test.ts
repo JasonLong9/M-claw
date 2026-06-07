@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
+  ensureFeishuManagedAgentAuthBootstrapMock,
   ensureFeishuManagedWorkspaceBootstrapMock,
   getOpenClawPathsMock,
   readConfigMock,
@@ -8,6 +9,7 @@ const {
   restartGatewayLifecycleMock,
   guardedWriteConfigMock,
 } = vi.hoisted(() => ({
+  ensureFeishuManagedAgentAuthBootstrapMock: vi.fn(),
   ensureFeishuManagedWorkspaceBootstrapMock: vi.fn(),
   getOpenClawPathsMock: vi.fn(),
   readConfigMock: vi.fn(),
@@ -34,6 +36,10 @@ vi.mock('../feishu-managed-workspace-bootstrap', () => ({
   ensureFeishuManagedWorkspaceBootstrap: ensureFeishuManagedWorkspaceBootstrapMock,
 }))
 
+vi.mock('../feishu-managed-auth-bootstrap', () => ({
+  ensureFeishuManagedAgentAuthBootstrap: ensureFeishuManagedAgentAuthBootstrapMock,
+}))
+
 import { applyConfigPatchGuarded } from '../openclaw-config-coordinator'
 
 function createDeferred<T>() {
@@ -57,6 +63,7 @@ async function waitForGuardedWriteCalls(expectedCalls: number, timeoutMs = 200):
 
 describe('openclaw config coordinator', () => {
   beforeEach(() => {
+    ensureFeishuManagedAgentAuthBootstrapMock.mockReset()
     ensureFeishuManagedWorkspaceBootstrapMock.mockReset()
     getOpenClawPathsMock.mockReset()
     readConfigMock.mockReset()
@@ -64,6 +71,16 @@ describe('openclaw config coordinator', () => {
     restartGatewayLifecycleMock.mockReset()
     guardedWriteConfigMock.mockReset()
 
+    ensureFeishuManagedAgentAuthBootstrapMock.mockResolvedValue({
+      ok: true,
+      changed: false,
+      providerIds: [],
+      targetAgentIds: [],
+      updatedAgentIds: [],
+      importedProfileIds: [],
+      importedProviders: [],
+      sourceAuthStorePaths: [],
+    })
     ensureFeishuManagedWorkspaceBootstrapMock.mockResolvedValue({
       changed: false,
       changedWorkspaces: [],
@@ -211,6 +228,10 @@ describe('openclaw config coordinator', () => {
       homeDir: '/Users/alice/.openclaw',
       config: afterConfig,
     })
+    expect(ensureFeishuManagedAgentAuthBootstrapMock).toHaveBeenCalledWith({
+      homeDir: '/Users/alice/.openclaw',
+      config: afterConfig,
+    })
   })
 
   it('serializes concurrent config patch requests through one write queue', async () => {
@@ -259,6 +280,80 @@ describe('openclaw config coordinator', () => {
     expect(guardedWriteConfigMock).toHaveBeenCalledTimes(2)
     expect(runCliMock).not.toHaveBeenCalled()
     expect(restartGatewayLifecycleMock).not.toHaveBeenCalled()
+  })
+
+  it('reads latest config from preferred candidate when rebasing a guarded patch', async () => {
+    const preferredCandidate = {
+      candidateId: 'candidate-1',
+      binaryPath: 'C:/openclaw/openclaw.cmd',
+      resolvedBinaryPath: 'C:/openclaw/openclaw.cmd',
+      packageRoot: 'C:/openclaw',
+      version: '2026.3.24',
+      installSource: 'custom' as const,
+      isPathActive: true,
+      stateRoot: 'C:/Users/James/AppData/Roaming/Mclaw/openclaw-state/.openclaw',
+      configPath: 'C:/Users/James/AppData/Roaming/Mclaw/openclaw-state/.openclaw/openclaw.json',
+      displayConfigPath: 'C:/Users/James/AppData/Roaming/Mclaw/openclaw-state/.openclaw/openclaw.json',
+      displayStateRoot: 'C:/Users/James/AppData/Roaming/Mclaw/openclaw-state/.openclaw',
+      ownershipState: 'qclaw-installed' as const,
+      installFingerprint: 'fingerprint-1',
+      baselineBackup: null,
+      baselineBackupBypass: null,
+    }
+
+    readConfigMock.mockResolvedValue({
+      channels: {
+        feishu: {
+          enabled: true,
+        },
+      },
+    })
+    guardedWriteConfigMock.mockResolvedValue({
+      ok: true,
+      blocked: false,
+      wrote: true,
+      target: 'config',
+      snapshotCreated: false,
+      snapshot: null,
+      changedJsonPaths: ['$.channels.openclaw-weixin'],
+      ownershipSummary: null,
+      message: 'ok',
+    })
+
+    await applyConfigPatchGuarded(
+      {
+        beforeConfig: {},
+        afterConfig: {
+          channels: {
+            'openclaw-weixin': {
+              enabled: true,
+            },
+          },
+        },
+        reason: 'channel-connect-configure',
+      },
+      preferredCandidate,
+      {
+        applyGatewayPolicy: false,
+      }
+    )
+
+    expect(readConfigMock).toHaveBeenCalledWith({
+      candidate: preferredCandidate,
+    })
+    expect(guardedWriteConfigMock).toHaveBeenCalledWith(
+      {
+        config: {
+          channels: {
+            'openclaw-weixin': {
+              enabled: true,
+            },
+          },
+        },
+        reason: 'channel-connect-configure',
+      },
+      preferredCandidate
+    )
   })
 
   it('skips gateway apply actions when applyGatewayPolicy is disabled', async () => {

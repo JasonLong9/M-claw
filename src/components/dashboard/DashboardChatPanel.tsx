@@ -219,6 +219,81 @@ function buildEmptyTranscript(sessionId: string): ChatTranscript {
   }
 }
 
+function appendMessageIfMissing(
+  transcript: ChatTranscript,
+  message: ChatMessage
+): ChatTranscript {
+  const messageId = String(message.id || '').trim()
+  if (!messageId) return transcript
+  const existing = Array.isArray(transcript.messages) ? transcript.messages : []
+  if (existing.some((item) => String(item?.id || '').trim() === messageId)) {
+    return transcript
+  }
+
+  return {
+    ...transcript,
+    updatedAt: Math.max(Number(transcript.updatedAt) || 0, Date.now()),
+    messages: [...existing, message],
+  }
+}
+
+function mergeTranscriptMessagesPreferLocal(
+  localMessages: ChatMessage[],
+  remoteMessages: ChatMessage[]
+): ChatMessage[] {
+  const normalizedLocal = Array.isArray(localMessages) ? localMessages : []
+  const normalizedRemote = Array.isArray(remoteMessages) ? remoteMessages : []
+  if (normalizedLocal.length === 0) return normalizedRemote
+  if (normalizedRemote.length === 0) return normalizedLocal
+
+  const merged = [...normalizedRemote]
+  const existingIds = new Set(
+    merged
+      .map((message) => String(message?.id || '').trim())
+      .filter(Boolean)
+  )
+  for (const message of normalizedLocal) {
+    const messageId = String(message?.id || '').trim()
+    if (!messageId || existingIds.has(messageId)) continue
+    existingIds.add(messageId)
+    merged.push(message)
+  }
+
+  const sorted = merged.sort((left, right) => {
+    const leftTime = Number(left?.createdAt) || 0
+    const rightTime = Number(right?.createdAt) || 0
+    if (leftTime !== rightTime) return leftTime - rightTime
+    return String(left?.id || '').localeCompare(String(right?.id || ''))
+  })
+
+  const deduped: ChatMessage[] = []
+  const seenComparableKeys = new Set<string>()
+  for (const message of sorted) {
+    const role = String(message?.role || '').trim()
+    const normalizedText = String(message?.text || '').trim().replace(/\s+/g, ' ')
+    const createdAt = Number(message?.createdAt) || 0
+    const comparableKey = `${role}::${normalizedText}::${createdAt}`
+    if (seenComparableKeys.has(comparableKey)) continue
+    seenComparableKeys.add(comparableKey)
+    deduped.push(message)
+  }
+
+  return deduped
+}
+
+function transcriptContainsUserText(transcript: ChatTranscript | null, text: string): boolean {
+  const expected = String(text || '').trim()
+  if (!expected || !transcript || !Array.isArray(transcript.messages)) return false
+  const normalizedExpected = expected.replace(/\s+/g, ' ').trim()
+  for (let index = transcript.messages.length - 1; index >= 0; index -= 1) {
+    const message = transcript.messages[index]
+    if (!message || message.role !== 'user') continue
+    const normalizedActual = String(message.text || '').trim().replace(/\s+/g, ' ').trim()
+    return normalizedActual === normalizedExpected
+  }
+  return false
+}
+
 function mergeSessionSummary(
   sessions: ChatSessionSummary[],
   nextSession: ChatSessionSummary
@@ -327,6 +402,56 @@ function LightSwitch() {
 }
 
 let dashboardChatPanelNextMountKey = 0
+let dashboardChatPanelSnapshot: {
+  sessions: ChatSessionSummary[]
+  activeSessionId: string
+  transcript: ChatTranscript | null
+  sending: boolean
+  pendingUserText: string
+  streamingAssistantText: string
+  visibleStreamingAssistantText: string
+  streamingAssistantModel: string
+  streamingAssistantUsage?: ChatUsage
+  assistantStreamStarted: boolean
+  activeSendSessionId: string
+  lastRetryText: string
+} = {
+  sessions: [],
+  activeSessionId: '',
+  transcript: null,
+  sending: false,
+  pendingUserText: '',
+  streamingAssistantText: '',
+  visibleStreamingAssistantText: '',
+  streamingAssistantModel: '',
+  streamingAssistantUsage: undefined,
+  assistantStreamStarted: false,
+  activeSendSessionId: '',
+  lastRetryText: '',
+}
+
+function sanitizeReasoningDisplay(text: string): string {
+  const lines = String(text || '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (lines.length === 0) return ''
+
+  const machineLinePatterns = [
+    /^\+\s*(?:ls|dir|cat|type|rg|grep|find|get-childitem|select-object|where|git|npm|node|python|pwsh|powershell|cmd(?:\.exe)?)(?:\s|$)/i,
+    /^if\s*\(\s*\$LASTEXITCODE\b/i,
+    /^Exception\s*$/i,
+    /^\(Command exited with code \d+\)\s*$/i,
+    /^At line:\d+\s+char:\d+\s*$/i,
+    /^(?:stdout|stderr)(?:\(\d+chars\))?\s*[:=]/i,
+    /^(?:name|description|homepage|metadata|install|requires|bins|formula|label|kind|id)\s*:/i,
+    /^["[{]/,
+  ]
+
+  const filtered = lines.filter((line) => !machineLinePatterns.some((pattern) => pattern.test(line)))
+  return filtered.join('\n').trim()
+}
 
 export default function DashboardChatPanel({
   availabilityState,
@@ -352,24 +477,24 @@ export default function DashboardChatPanel({
   onEnsureGatewayRunning: () => Promise<boolean>
 }) {
   const [loadingSessions, setLoadingSessions] = useState(false)
-  const [sessions, setSessions] = useState<ChatSessionSummary[]>([])
-  const [activeSessionId, setActiveSessionId] = useState('')
-  const [transcript, setTranscript] = useState<ChatTranscript | null>(null)
+  const [sessions, setSessions] = useState<ChatSessionSummary[]>(() => dashboardChatPanelSnapshot.sessions)
+  const [activeSessionId, setActiveSessionId] = useState(() => dashboardChatPanelSnapshot.activeSessionId)
+  const [transcript, setTranscript] = useState<ChatTranscript | null>(() => dashboardChatPanelSnapshot.transcript)
   const [draft, setDraft] = useState('')
   const [loadingTranscript, setLoadingTranscript] = useState(false)
   const [panelError, setPanelError] = useState('')
-  const [sending, setSending] = useState(false)
-  const [pendingUserText, setPendingUserText] = useState('')
-  const [streamingAssistantText, setStreamingAssistantText] = useState('')
-  const [visibleStreamingAssistantText, setVisibleStreamingAssistantText] = useState('')
-  const [streamingAssistantModel, setStreamingAssistantModel] = useState('')
-  const [streamingAssistantUsage, setStreamingAssistantUsage] = useState<ChatUsage | undefined>(undefined)
-  const [assistantStreamStarted, setAssistantStreamStarted] = useState(false)
+  const [sending, setSending] = useState(() => dashboardChatPanelSnapshot.sending)
+  const [pendingUserText, setPendingUserText] = useState(() => dashboardChatPanelSnapshot.pendingUserText)
+  const [streamingAssistantText, setStreamingAssistantText] = useState(() => dashboardChatPanelSnapshot.streamingAssistantText)
+  const [visibleStreamingAssistantText, setVisibleStreamingAssistantText] = useState(() => dashboardChatPanelSnapshot.visibleStreamingAssistantText)
+  const [streamingAssistantModel, setStreamingAssistantModel] = useState(() => dashboardChatPanelSnapshot.streamingAssistantModel)
+  const [streamingAssistantUsage, setStreamingAssistantUsage] = useState<ChatUsage | undefined>(() => dashboardChatPanelSnapshot.streamingAssistantUsage)
+  const [assistantStreamStarted, setAssistantStreamStarted] = useState(() => dashboardChatPanelSnapshot.assistantStreamStarted)
   const [stopping, setStopping] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const [chatModelSwitching, setChatModelSwitching] = useState(false)
   const [clearingTranscript, setClearingTranscript] = useState(false)
-  const [lastRetryText, setLastRetryText] = useState('')
+  const [lastRetryText, setLastRetryText] = useState(() => dashboardChatPanelSnapshot.lastRetryText)
   const [copiedMessageId, setCopiedMessageId] = useState('')
   const [imagePreview, setImagePreview] = useState<ImagePreviewState | null>(null)
   const [imagePreviewScale, setImagePreviewScale] = useState(1)
@@ -391,6 +516,7 @@ export default function DashboardChatPanel({
   const [redactedConfigSnapshot, setRedactedConfigSnapshot] = useState<Record<string, unknown> | null>(null)
   const [redactedEnvSnapshot, setRedactedEnvSnapshot] = useState<Record<string, string>>({})
   const [showMemoryManager, setShowMemoryManager] = useState(false)
+  const [sendStateRestoring, setSendStateRestoring] = useState(true)
   const [memoryEntries, setMemoryEntries] = useState<ChatMemoryEntry[]>([])
   const [memoryLoading, setMemoryLoading] = useState(false)
   const [memorySaving, setMemorySaving] = useState(false)
@@ -403,7 +529,7 @@ export default function DashboardChatPanel({
     return dashboardChatPanelNextMountKey
   })
   const scrollRef = useRef<HTMLDivElement | null>(null)
-  const activeSendSessionIdRef = useRef('')
+  const activeSendSessionIdRef = useRef(dashboardChatPanelSnapshot.activeSendSessionId)
   const sessionsRequestIdRef = useRef(0)
   const transcriptRequestIdRef = useRef(0)
   const diagnosticsRequestIdRef = useRef(0)
@@ -418,8 +544,7 @@ export default function DashboardChatPanel({
   const canBrowseHistory = !loadingSessions && !sending
 
   const activeSession = sessions.find((session) => session.sessionId === activeSessionId) || null
-  const activeTranscriptMatchesSession = transcript?.sessionId === activeSession?.sessionId
-  const activeTranscript = activeTranscriptMatchesSession ? transcript : null
+  const activeTranscript = transcript
   const activeSessionCanPatchModel =
     activeTranscript?.canPatchModel ??
     activeSession?.canPatchModel ??
@@ -542,6 +667,12 @@ export default function DashboardChatPanel({
     loadingSessions,
     loadingTranscript,
     renderedMessageCount: renderedMessages.length,
+    suppressFullscreenLoader:
+      sendStateRestoring ||
+      sending ||
+      Boolean(pendingUserText.trim()) ||
+      Boolean(visibleStreamingAssistantText.trim()) ||
+      Boolean(activeSendSessionIdRef.current),
   })
   const resolvedImagePreviewFitMode =
     imagePreviewFitMode === 'auto'
@@ -838,7 +969,23 @@ export default function DashboardChatPanel({
     try {
       const nextTranscript = await window.api.getChatTranscript(normalizedSessionId)
       if (requestId !== transcriptRequestIdRef.current) return
-      setTranscript(nextTranscript)
+      setTranscript((current) => {
+        if (!current || current.sessionId !== normalizedSessionId) {
+          if (pendingUserText.trim() && transcriptContainsUserText(nextTranscript, pendingUserText)) {
+            setPendingUserText('')
+          }
+          return nextTranscript
+        }
+        const merged = {
+          ...nextTranscript,
+          updatedAt: Math.max(Number(nextTranscript.updatedAt) || 0, Number(current.updatedAt) || 0),
+          messages: mergeTranscriptMessagesPreferLocal(current.messages || [], nextTranscript.messages || []),
+        }
+        if (pendingUserText.trim() && transcriptContainsUserText(merged, pendingUserText)) {
+          setPendingUserText('')
+        }
+        return merged
+      })
     } catch (error) {
       if (requestId !== transcriptRequestIdRef.current) return
       setTranscript(buildEmptyTranscript(normalizedSessionId))
@@ -905,32 +1052,36 @@ export default function DashboardChatPanel({
     setPanelError('')
     setSending(true)
     setStopping(false)
+    setPendingUserText(text)
+    setStreamingAssistantText('')
+    setVisibleStreamingAssistantText('')
+    setStreamingAssistantModel('')
+    setStreamingAssistantUsage(undefined)
+    setAssistantStreamStarted(true)
+    setLastRetryText(text)
+    setDraft('')
     let sessionId = String(activeSessionId || '').trim()
     const nextDraft = text
     try {
       if (resolveDirectChatSessionAction({ activeSessionId: sessionId }) === 'create') {
         sessionId = await handleCreateSession()
-        if (!sessionId) return
+        if (!sessionId) {
+          setDraft(nextDraft)
+          return
+        }
       }
 
       if (!gatewayRunning) {
         const ready = await onEnsureGatewayRunning()
         if (!ready) {
           if (dashboardChatPanelNextMountKey === sendMountKey) {
+            setDraft(nextDraft)
             setPanelError('网关启动失败，暂时无法发送消息')
           }
           return
         }
       }
       activeSendSessionIdRef.current = sessionId
-      setPendingUserText(text)
-      setStreamingAssistantText('')
-      setVisibleStreamingAssistantText('')
-      setStreamingAssistantModel('')
-      setStreamingAssistantUsage(undefined)
-      setAssistantStreamStarted(false)
-      setLastRetryText(text)
-      setDraft('')
       const result = await window.api.sendChatMessage({
         sessionId,
         text,
@@ -956,10 +1107,10 @@ export default function DashboardChatPanel({
           current?.sessionId === resolvedSessionId ? current : buildEmptyTranscript(resolvedSessionId)
         )
       }
-      setLastRetryText('')
-      await Promise.all([
-        loadTranscript(resolvedSessionId, { silent: true }),
-        loadSessions(resolvedSessionId, { silent: true }),
+      setPanelError('')
+      void Promise.all([
+        loadTranscript(resolvedSessionId, { silent: true, preservePanelError: true }),
+        loadSessions(resolvedSessionId, { silent: true, preservePanelError: true }),
       ])
     } catch (error) {
       if (dashboardChatPanelNextMountKey !== sendMountKey) return
@@ -968,6 +1119,36 @@ export default function DashboardChatPanel({
       await reconcileSessionView(String(activeSendSessionIdRef.current || sessionId).trim())
     } finally {
       if (dashboardChatPanelNextMountKey !== sendMountKey) return
+      const state = await window.api.getActiveChatSendState().catch(() => null)
+      if (state?.status === 'sending') {
+        setSending(true)
+        setAssistantStreamStarted(true)
+        setPendingUserText(state.pendingUserText || text)
+        setStreamingAssistantText(state.streamedText || streamingAssistantText)
+        setVisibleStreamingAssistantText(state.streamedText || visibleStreamingAssistantText)
+        setStreamingAssistantModel(state.streamedModel || streamingAssistantModel)
+        setStreamingAssistantUsage(state.streamedUsage || streamingAssistantUsage)
+        activeSendSessionIdRef.current = String(state.sessionId || activeSendSessionIdRef.current || sessionId).trim()
+        return
+      }
+
+      if (!state || state.status === 'idle') {
+        setSending(true)
+        setAssistantStreamStarted(true)
+        setPendingUserText((current) => current || text)
+        window.setTimeout(() => {
+          void reconcileSessionView(String(activeSendSessionIdRef.current || sessionId).trim())
+        }, 450)
+        return
+      }
+
+      if (state.status === 'completed') {
+        window.setTimeout(() => {
+          void reconcileSessionView(String(activeSendSessionIdRef.current || sessionId).trim())
+        }, 300)
+        return
+      }
+
       activeSendSessionIdRef.current = ''
       setPendingUserText('')
       setStreamingAssistantText('')
@@ -981,12 +1162,29 @@ export default function DashboardChatPanel({
   }
 
   const handleCancelSend = async () => {
-    if (!sending || stopping) return
+    if (stopping) return
 
     setStopping(true)
     setPanelError('')
     try {
-      const canceled = await window.api.cancelChatMessage()
+      if (!sending) {
+        const state = await window.api.getActiveChatSendState().catch(() => null)
+        if (state?.status === 'sending') {
+          setSending(true)
+          setPendingUserText(state.pendingUserText || pendingUserText)
+          activeSendSessionIdRef.current = String(state.sessionId || activeSendSessionIdRef.current || '').trim()
+        } else {
+          setStopping(false)
+          setPanelError('当前没有可停止的聊天任务')
+          return
+        }
+      }
+
+      let canceled = await window.api.cancelChatMessage()
+      if (!canceled) {
+        await new Promise((resolve) => window.setTimeout(resolve, 220))
+        canceled = await window.api.cancelChatMessage()
+      }
       if (!canceled) {
         setStopping(false)
         setPanelError('当前没有可停止的聊天任务')
@@ -1195,7 +1393,13 @@ export default function DashboardChatPanel({
 
   useEffect(() => {
     if (!canLoadChatData || !activeSessionId) return
-    void loadTranscript(activeSessionId)
+    void loadTranscript(activeSessionId, {
+      silent:
+        sending ||
+        Boolean(pendingUserText.trim()) ||
+        Boolean(activeSendSessionIdRef.current),
+      preservePanelError: true,
+    })
   }, [canLoadChatData, activeSessionId])
 
   useEffect(() => {
@@ -1240,6 +1444,35 @@ export default function DashboardChatPanel({
   }, [renderedMessages.length, sending, transcript?.updatedAt, visibleStreamingAssistantText])
 
   useEffect(() => {
+    dashboardChatPanelSnapshot = {
+      sessions,
+      activeSessionId,
+      transcript,
+      sending,
+      pendingUserText,
+      streamingAssistantText,
+      visibleStreamingAssistantText,
+      streamingAssistantModel,
+      streamingAssistantUsage,
+      assistantStreamStarted,
+      activeSendSessionId: activeSendSessionIdRef.current,
+      lastRetryText,
+    }
+  }, [
+    sessions,
+    activeSessionId,
+    transcript,
+    sending,
+    pendingUserText,
+    streamingAssistantText,
+    visibleStreamingAssistantText,
+    streamingAssistantModel,
+    streamingAssistantUsage,
+    assistantStreamStarted,
+    lastRetryText,
+  ])
+
+  useEffect(() => {
     if (visibleStreamingAssistantText === streamingAssistantText) return
 
     const timer = window.setTimeout(() => {
@@ -1278,9 +1511,6 @@ export default function DashboardChatPanel({
       if (nextTrackedSessionId !== activeSendSessionIdRef.current) {
         activeSendSessionIdRef.current = nextTrackedSessionId
         setActiveSessionId(nextTrackedSessionId)
-        setTranscript((current) =>
-          current?.sessionId === nextTrackedSessionId ? current : buildEmptyTranscript(nextTrackedSessionId)
-        )
       }
       if (payload.sessionId !== activeSendSessionIdRef.current) return
 
@@ -1299,16 +1529,23 @@ export default function DashboardChatPanel({
       }
 
       if (payload.type === 'assistant-complete') {
-        setAssistantStreamStarted(true)
-        setStreamingAssistantText(payload.message.text)
-        setStreamingAssistantModel(payload.message.model || '')
-        setStreamingAssistantUsage(payload.message.usage)
+        setTranscript((current) => {
+          const active = current?.sessionId === payload.sessionId
+            ? current
+            : buildEmptyTranscript(payload.sessionId)
+          return appendMessageIfMissing(active, payload.message)
+        })
+        setAssistantStreamStarted(false)
+        setStreamingAssistantText('')
+        setVisibleStreamingAssistantText('')
+        setStreamingAssistantModel('')
+        setStreamingAssistantUsage(undefined)
         setSending(false)
         setPendingUserText('')
         setStopping(false)
         activeSendSessionIdRef.current = ''
         setLastRetryText('')
-        void loadTranscript(payload.sessionId, { silent: true })
+        void loadTranscript(payload.sessionId, { silent: true, preservePanelError: true })
         void loadSessions(payload.sessionId, { silent: true })
         return
       }
@@ -1347,8 +1584,10 @@ export default function DashboardChatPanel({
   }, [activeSessionId, showMemoryManager])
 
   useEffect(() => {
+    setInitialRecoveryDone(true)
     let canceled = false
     void (async () => {
+      setSendStateRestoring(true)
       try {
         const sendState = await window.api.getActiveChatSendState()
         if (canceled) return
@@ -1366,6 +1605,8 @@ export default function DashboardChatPanel({
           setLastRetryText(sendState.pendingUserText || '')
           setPanelError('')
           setStopping(false)
+        } else if (!sendState && (sending || pendingUserText.trim() || activeSendSessionIdRef.current)) {
+          setAssistantStreamStarted(true)
         } else if (sendState?.status === 'failed' && sendState.sessionId) {
           setSending(false)
           setAssistantStreamStarted(false)
@@ -1392,12 +1633,14 @@ export default function DashboardChatPanel({
           setActiveSessionId(sendState.sessionId)
           setLastRetryText('')
           setPanelError('')
+        } else if (sendState && sendState.status !== 'idle' && (sending || pendingUserText.trim() || activeSendSessionIdRef.current)) {
+          setAssistantStreamStarted(true)
         }
       } catch (error) {
         console.error('Failed to restore active chat send state', error)
       } finally {
         if (!canceled) {
-          setInitialRecoveryDone(true)
+          setSendStateRestoring(false)
         }
       }
     })()
@@ -1407,6 +1650,58 @@ export default function DashboardChatPanel({
     // Run only on mount; refs are stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    if (!sending) return
+
+    let disposed = false
+    const timer = window.setInterval(() => {
+      if (disposed) return
+      void (async () => {
+        try {
+          const state = await window.api.getActiveChatSendState()
+          if (disposed) return
+          if (!state || state.status === 'sending') {
+            if (pendingUserText.trim() || activeSendSessionIdRef.current) {
+              setAssistantStreamStarted(true)
+            }
+            return
+          }
+
+          if (state.status === 'completed') {
+            setSending(false)
+            setStopping(false)
+            setAssistantStreamStarted(false)
+            window.setTimeout(() => {
+              void reconcileSessionView(String(activeSendSessionIdRef.current || activeSessionId || '').trim())
+            }, 220)
+            return
+          }
+
+          setSending(false)
+          setStopping(false)
+          setAssistantStreamStarted(false)
+          setPendingUserText('')
+          setStreamingAssistantText('')
+          setVisibleStreamingAssistantText('')
+          setStreamingAssistantModel('')
+          setStreamingAssistantUsage(undefined)
+          activeSendSessionIdRef.current = ''
+          if (state.status === 'failed') {
+            setPanelError(state.lastError || '聊天任务异常结束，请重试。')
+            setLastRetryText(state.pendingUserText || lastRetryText)
+          }
+        } catch {
+          // Keep UI responsive even when polling fails transiently.
+        }
+      })()
+    }, 1500)
+
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+    }
+  }, [sending, lastRetryText])
 
   useEffect(() => {
     if (!copiedMessageId) return
@@ -2138,7 +2433,7 @@ export default function DashboardChatPanel({
               <Stack gap="md">
                 {renderedMessages.map((message) => {
                   const messageText = String(message.text || '').trim()
-                  const reasoningText = String(message.reasoning || '').trim()
+                  const reasoningText = sanitizeReasoningDisplay(String(message.reasoning || '').trim())
                   const localPathLinks =
                     message.role === 'assistant'
                       ? (Array.isArray(message.localPaths) ? message.localPaths : [])
@@ -2219,7 +2514,7 @@ export default function DashboardChatPanel({
                           </Group>
                         )}
 
-                        {reasoningText && message.role === 'assistant' && (
+                        {message.role === 'assistant' && message.status !== 'pending' && (
                           <details
                             style={{
                               width: '100%',
@@ -2249,9 +2544,11 @@ export default function DashboardChatPanel({
                                 whiteSpace: 'pre-wrap',
                                 wordBreak: 'break-word',
                                 paddingBottom: 2,
+                                maxHeight: 220,
+                                overflowY: 'auto',
                               }}
                             >
-                              {reasoningText}
+                              {reasoningText || '暂无思考过程'}
                             </Text>
                           </details>
                         )}

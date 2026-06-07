@@ -1,0 +1,17 @@
+{
+  "version": "2026-05-18.1",
+  "updatedAt": "2026-05-18T00:00:00.000Z",
+  "skills": [
+    "web-search",
+    "autonomy",
+    "summarize",
+    "nano-pdf",
+    "openai-whisper",
+    "github"
+  ],
+  "sources": [
+    "openclaw-bundled",
+    "clawhub"
+  ]
+}
+

@@ -14,6 +14,9 @@ function createSession(overrides: Partial<ChatSessionSummary> & Pick<ChatSession
     sessionId: overrides.sessionId,
     sessionKey: overrides.sessionKey,
     agentId: overrides.agentId || 'main',
+    title: overrides.title,
+    previewText: overrides.previewText,
+    messageCount: overrides.messageCount,
     model: overrides.model,
     selectedModel: overrides.selectedModel,
     canPatchModel: overrides.canPatchModel,
@@ -189,10 +192,10 @@ describe('dashboard chat routing', () => {
       }),
     })
 
-    expect(status.sessionSource).toBe('OpenClaw 历史会话')
+    expect(status.sessionSource).toBe('直连历史会话')
     expect(status.sessionModel).toBe('custom-open-bigmodel-cn/glm-5')
     expect(status.willForkOnSend).toBe(false)
-    expect(status.notice).toBe('当前浏览的是 OpenClaw 历史会话；发送新消息会继续写入该会话。')
+    expect(status.notice).toBe('当前浏览的是直连历史会话；发送新消息会继续写入该会话。')
   })
 
   it('keeps external direct history in fork mode when the session lacks a continuation key', () => {
@@ -210,7 +213,7 @@ describe('dashboard chat routing', () => {
       }),
     })
 
-    expect(status.sessionSource).toBe('OpenClaw 历史会话')
+    expect(status.sessionSource).toBe('直连历史会话')
     expect(status.willForkOnSend).toBe(true)
     expect(status.notice).toBe('当前历史会话缺少可续写标识；发送新消息时会新建本地会话。')
   })
@@ -251,7 +254,7 @@ describe('dashboard chat routing', () => {
       }),
     })
 
-    expect(status.sessionSource).toBe('Qclaw 本地会话')
+    expect(status.sessionSource).toBe('Mclaw 本地会话')
     expect(status.notice).toBe('')
   })
 
@@ -272,7 +275,7 @@ describe('dashboard chat routing', () => {
     })
 
     expect(status.sessionOrigin).toBe('external-direct')
-    expect(status.sessionSource).toBe('OpenClaw 历史会话（含本地缓存）')
+    expect(status.sessionSource).toBe('直连历史会话（含本地缓存）')
     expect(status.willForkOnSend).toBe(false)
   })
 
@@ -293,9 +296,9 @@ describe('dashboard chat routing', () => {
     })
 
     expect(status.sessionOrigin).toBe('external-direct')
-    expect(status.sessionSource).toBe('OpenClaw 已确认会话')
+    expect(status.sessionSource).toBe('直连会话')
     expect(status.willForkOnSend).toBe(false)
-    expect(status.notice).toBe('当前会话已被 OpenClaw 确认创建；发送新消息会继续写入该会话。')
+    expect(status.notice).toBe('当前直连会话已确认创建；发送新消息会继续写入该会话。')
   })
 
   it('does not label an upstream-confirmed local shadow as local history in the sidebar summary', () => {
@@ -313,7 +316,7 @@ describe('dashboard chat routing', () => {
       })
     )
 
-    expect(summary.originBadge).toBe('OpenClaw 会话')
+    expect(summary.originBadge).toBe('直连会话')
     expect(summary.secondaryBadge).toBe('已确认')
     expect(summary.modelDetail).toBe('当前模型：openai/gpt-5.1-codex')
   })
@@ -384,6 +387,27 @@ describe('dashboard chat routing', () => {
     )
 
     expect(summary.modelDetail).toBe('最近使用：openai/gpt-5.4-pro')
+  })
+
+  it('prefers the derived session topic and preview text in history cards', () => {
+    const summary = buildHistorySessionSummary(
+      createSession({
+        sessionId: 'titled-local-history',
+        title: '帮我查一下 Python 最新官网',
+        previewText: '已经查好了，以下是结果。',
+        messageCount: 4,
+        model: 'openai/gpt-5.4-pro',
+        authorityKind: 'local-cache-only',
+        cachePresence: 'local-transcript',
+        kind: 'direct',
+        hasLocalTranscript: true,
+        localOnly: true,
+      })
+    )
+
+    expect(summary.title).toBe('帮我查一下 Python 最新官网')
+    expect(summary.previewText).toBe('已经查好了，以下是结果。')
+    expect(summary.sourceDetail).toBe('本地记录 · 4 条消息')
   })
 
   it('adopts the actual forked session id on assistant-start so the UI follows the real send target', () => {

@@ -134,8 +134,14 @@ export const api = {
   getStatus: () => ipcRenderer.invoke('status:get'),
 
   // Config
-  readConfig: () => ipcRenderer.invoke('config:read'),
-  readConfigRedacted: () => ipcRenderer.invoke('config:read:redacted'),
+  readConfig: (candidate?: Record<string, any>) =>
+    typeof candidate === 'undefined'
+      ? ipcRenderer.invoke('config:read')
+      : ipcRenderer.invoke('config:read', candidate),
+  readConfigRedacted: (candidate?: Record<string, any>) =>
+    typeof candidate === 'undefined'
+      ? ipcRenderer.invoke('config:read:redacted')
+      : ipcRenderer.invoke('config:read:redacted', candidate),
   readEnvFile: () => ipcRenderer.invoke('env:read'),
   readEnvFileRedacted: () => ipcRenderer.invoke('env:read:redacted'),
 
@@ -204,6 +210,7 @@ export const api = {
     subscribeToChannel('weixin:installer:event', listener),
   listWeixinAccounts: () => ipcRenderer.invoke('weixin:accounts:list'),
   removeWeixinAccount: (accountId: string) => ipcRenderer.invoke('weixin:accounts:remove', accountId),
+  getWeixinPathDiagnostic: () => ipcRenderer.invoke('weixin:diagnostics:path'),
 
   // Channels
   channelsAdd: (channel: string, token: string) => ipcRenderer.invoke('channels:add', channel, token),
@@ -213,12 +220,12 @@ export const api = {
     ipcRenderer.invoke('channels:official:status', channelId),
   repairOfficialChannel: (channelId: 'feishu' | 'dingtalk') =>
     ipcRenderer.invoke('channels:official:repair', channelId),
-  getManagedChannelPluginStatus: (channelId: string) =>
-    ipcRenderer.invoke('channels:managed:status', channelId),
+  getManagedChannelPluginStatus: (channelId: string, candidate?: any) =>
+    ipcRenderer.invoke('channels:managed:status', channelId, candidate),
   prepareManagedChannelPluginForSetup: (channelId: string) =>
     ipcRenderer.invoke('channels:managed:prepare', channelId),
-  repairManagedChannelPlugin: (channelId: string) =>
-    ipcRenderer.invoke('channels:managed:repair', channelId),
+  repairManagedChannelPlugin: (channelId: string, candidate?: any) =>
+    ipcRenderer.invoke('channels:managed:repair', channelId, candidate),
 
   // Dashboard
   openDashboard: () => ipcRenderer.invoke('dashboard:open'),
@@ -231,6 +238,10 @@ export const api = {
   listChatTraceEntries: (limit?: number) => ipcRenderer.invoke('chat:trace:list', limit),
   patchChatSessionModel: (request: Record<string, any>) => ipcRenderer.invoke('chat:session:model:patch', request),
   getChatTranscript: (sessionId: string) => ipcRenderer.invoke('chat:transcript:get', sessionId),
+  getClaudeCodeStatus: () => ipcRenderer.invoke('chat:coding:claude-code:status:get'),
+  installClaudeCode: () => ipcRenderer.invoke('chat:coding:claude-code:install'),
+  inspectCodingWorkspacePath: (workspacePath?: string) =>
+    ipcRenderer.invoke('chat:coding:workspace:inspect', workspacePath),
   sendChatMessage: (request: Record<string, any>) => ipcRenderer.invoke('chat:send', request),
   cancelChatMessage: () => ipcRenderer.invoke('chat:cancel'),
   getActiveChatSendState: () => ipcRenderer.invoke('chat:send:state'),
@@ -308,6 +319,43 @@ export const api = {
   skillsInstall: (name: string) => ipcRenderer.invoke('skills:install', name),
   clawhubSearch: (query: string, limit?: number) => ipcRenderer.invoke('clawhub:search', query, limit),
   clawhubInstall: (slug: string) => ipcRenderer.invoke('clawhub:install', slug),
+  getSkillsSecuritySummary: () => ipcRenderer.invoke('skills:security-summary'),
+  exportSkillsSecurityAuditLog: () => ipcRenderer.invoke('skills:export-audit-log'),
+  getSkillsRuntimeRiskSummary: () => ipcRenderer.invoke('skills:runtime:risk-summary'),
+  scanOneSkillSecurity: (slug: string) => ipcRenderer.invoke('skills:scan-one', slug),
+  scanAllSkillsSecurity: () => ipcRenderer.invoke('skills:scan-all'),
+  getSkillsScanReport: () => ipcRenderer.invoke('skills:scan-report'),
+  probeSkillDynamicSecurity: (slug: string, options?: { timeoutMs?: number; maxFiles?: number }) =>
+    ipcRenderer.invoke('skills:dynamic-probe', slug, options),
+  runSkillsContinuousAudit: () => ipcRenderer.invoke('skills:audit:run'),
+  getLatestSkillsAuditSnapshot: () => ipcRenderer.invoke('skills:audit:latest'),
+  listSkillsAuditSnapshots: (limit?: number) => ipcRenderer.invoke('skills:audit:list', limit),
+  startSkillsAuditScheduler: (options?: { intervalMs?: number }) =>
+    ipcRenderer.invoke('skills:audit:scheduler:start', options),
+  stopSkillsAuditScheduler: () => ipcRenderer.invoke('skills:audit:scheduler:stop'),
+  getSkillsAuditSchedulerState: () => ipcRenderer.invoke('skills:audit:scheduler:state'),
+  applySkillRemediation: (payload: {
+    skillSlug: string
+    level: 'low' | 'medium' | 'high' | 'critical'
+    reason?: string
+    operator?: 'system' | 'manual'
+  }) => ipcRenderer.invoke('skills:remediation:apply', payload),
+  restoreSkillRemediation: (payload: {
+    skillSlug: string
+    reason?: string
+    operator?: 'system' | 'manual'
+  }) => ipcRenderer.invoke('skills:remediation:restore', payload),
+  getSkillRemediationState: () => ipcRenderer.invoke('skills:remediation:state'),
+  upsertSkillRemediationExemption: (payload: {
+    skillSlug: string
+    reason: string
+    reviewer: string
+    expiresInHours: number
+  }) => ipcRenderer.invoke('skills:remediation:exemption:upsert', payload),
+  removeSkillRemediationExemption: (skillSlug: string) =>
+    ipcRenderer.invoke('skills:remediation:exemption:remove', skillSlug),
+  listSkillRemediationExemptions: () => ipcRenderer.invoke('skills:remediation:exemption:list'),
+  autoApplyRemediationFromLatestAudit: () => ipcRenderer.invoke('skills:remediation:auto-apply-latest-audit'),
   depsInstallBin: (bin: string) => ipcRenderer.invoke('deps:installBin', bin),
   depsInstallSkillDeps: (skillName: string) => ipcRenderer.invoke('deps:installSkillDeps', skillName),
   onDepsInstallLog: (listener: (msg: string) => void) => subscribeToChannel('deps:install:log', listener),

@@ -39,6 +39,6 @@ describe('openclaw data cleanup dialog helpers', () => {
         { type: 'manual-backup' } as any,
         { type: 'config-snapshot' } as any,
       ])
-    ).toBe('将删除全部 OpenClaw 备份。此操作不可恢复。')
+    ).toBe('将删除全部 Mclaw 本机备份。此操作不可恢复。')
   })
 })

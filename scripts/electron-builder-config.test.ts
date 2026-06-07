@@ -22,3 +22,20 @@ describe('electron-builder mac dmg config', () => {
     expect(String(dmg.title).trim().length).toBeGreaterThan(0)
   })
 })
+
+describe('electron-builder Windows runtime payload config', () => {
+  it('packages only the Windows OpenClaw runtime into Windows artifacts', () => {
+    const config = readElectronBuilderConfig()
+    const topLevelResources = Array.isArray(config.extraResources) ? config.extraResources : []
+    const win = (config.win ?? {}) as Record<string, unknown>
+    const winResources = Array.isArray(win.extraResources) ? win.extraResources : []
+    const serializedTopLevelResources = JSON.stringify(topLevelResources)
+    const serializedWinResources = JSON.stringify(winResources)
+
+    expect(serializedTopLevelResources).not.toContain('resources/openclaw-bundle')
+    expect(serializedWinResources).toContain('resources/openclaw-bundle/runtime/windows-x64')
+    expect(serializedWinResources).not.toContain('openclaw-2026.3.24.tgz')
+    expect(serializedWinResources).not.toContain('resources/openclaw-bundle/runtime/darwin-x64')
+    expect(serializedWinResources).not.toContain('resources/openclaw-bundle/runtime/darwin-arm64')
+  })
+})

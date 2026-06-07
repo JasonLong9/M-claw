@@ -121,8 +121,8 @@ export default function ChatPage() {
         setGatewayActionPending(true)
         setGatewayActionMessage(
           options.source === 'auto'
-            ? '正在等待网关准备完成，稍后即可直接对话...'
-            : '正在确认网关状态，请稍候...'
+            ? '正在等待本机服务准备完成，稍后即可直接对话...'
+            : '正在确认本机服务状态，请稍候...'
         )
 
         try {
@@ -137,7 +137,7 @@ export default function ChatPage() {
                 ensureResult?.summary ||
                   ensureResult?.stderr ||
                   ensureResult?.stdout ||
-                  '网关启动失败，请稍后重试。'
+                  '本机服务启动失败，请稍后重试。'
               ).trim()
             )
           }
@@ -156,7 +156,7 @@ export default function ChatPage() {
               clearChatGatewayWarmupHint()
               setGatewayActionMessage('')
             } else {
-              setGatewayActionMessage('网关已接通，当前正在走兼容恢复链路，可以直接开始对话。')
+              setGatewayActionMessage('本机服务已接通，当前正在走兼容恢复链路，可以直接开始对话。')
             }
             return true
           }
@@ -164,14 +164,14 @@ export default function ChatPage() {
           setGatewayActionMessage(
             String(
               recoveredState.availabilityMessage ||
-                (readyResult.ok ? '网关已启动，但聊天状态仍未恢复，请稍候再试。' : readyResult.message) ||
-                '网关已启动，但聊天状态仍未恢复，请稍候再试。'
+                (readyResult.ok ? '本机服务已启动，但聊天状态仍未恢复，请稍候再试。' : readyResult.message) ||
+                '本机服务已启动，但聊天状态仍未恢复，请稍候再试。'
             ).trim()
           )
           return false
         } catch (error) {
           console.error('Failed to ensure gateway ready', error)
-          setGatewayActionMessage(error instanceof Error ? error.message : '启动网关失败，请稍后重试。')
+          setGatewayActionMessage(error instanceof Error ? error.message : '启动本机服务失败，请稍后重试。')
           return false
         } finally {
           setGatewayActionPending(false)
@@ -219,8 +219,7 @@ export default function ChatPage() {
       hasPotentialChat &&
       availabilityState !== 'loading' &&
       !canSend &&
-      !gatewayActionPending &&
-      (gatewayRunning || hasActiveChatGatewayWarmupHint())
+      !gatewayActionPending
 
     if (!shouldAutoWarmup) return
     if (Date.now() < autoGatewayRetryCooldownUntilRef.current) return

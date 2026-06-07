@@ -81,7 +81,7 @@ describe('createEnvCheckRestartState', () => {
       gatewayStep: {
         status: 'ok',
         version: '自动启动',
-        description: '进入控制面板时会自动启动 Gateway 并确认本地对话可用，无需手动打开终端。',
+        description: '进入控制面板时会自动准备本机服务并确认本地对话可用，无需手动打开终端。',
         progress: 100,
       },
       progress: 100,
@@ -172,7 +172,7 @@ describe('createEnvCheckRestartState', () => {
     ).toEqual({
       status: 'pending-install',
       version: 'v22.15.0',
-      description: 'OpenClaw 需要 Node.js 22.16.0 或更高版本。当前版本过低，请先手动升级 Node.js 后再继续。',
+      description: 'Mclaw 本机运行组件需要 Node.js 22.16.0 或更高版本。当前版本过低，请先手动升级 Node.js 后再继续。',
       progress: 20,
       latestNodeVersion: '22.18.0',
       blocksContinue: true,
@@ -371,27 +371,27 @@ describe('createEnvCheckRestartState', () => {
       missingAfterInstallError: '安装后仍无法检测到',
     })
     expect(resolveOpenClawInstallBehavior().resolveRecheckDescription(true)).toBe(
-      '正在验证 OpenClaw 运行环境...'
+      '正在验证本机运行组件...'
     )
     expect(resolveOpenClawInstallBehavior().resolveRecheckDescription(false)).toBe(
-      '重新检测 OpenClaw 运行环境...'
+      '重新检测本机运行组件...'
     )
     expect(resolveOpenClawInstallBehavior().missingAfterInstallMessage).toEqual(
       expect.arrayContaining([
-        'OpenClaw 运行环境准备流程已执行，但当前仍无法检测到可用命令。',
+        '本机运行组件准备流程已执行，但当前仍无法检测到可用命令。',
         '这通常表示内置本体释放和 PATH 生效之间仍存在异常。',
         '请先重启 Mclaw 再试一次。',
       ])
     )
     expect(resolveGatewayBehavior()).toMatchObject({
-      deferredCheckingDescription: '当前先完成模型配置；点击进入控制面板后，Mclaw 会先自动启动并确认 Gateway，再进入主界面。',
+      deferredCheckingDescription: '当前先完成模型配置；点击进入控制面板后，Mclaw 会先准备本机服务并确认本地对话入口，再进入主界面。',
       deferredStepVersion: '自动启动',
-      deferredReadyDescription: '进入控制面板时会自动启动 Gateway 并确认本地对话可用，无需手动打开终端。',
+      deferredReadyDescription: '进入控制面板时会自动准备本机服务并确认本地对话可用，无需手动打开终端。',
     })
     expect(resolveGatewayDeferredStepState(resolveGatewayBehavior())).toEqual({
       status: 'ok',
       version: '自动启动',
-      description: '进入控制面板时会自动启动 Gateway 并确认本地对话可用，无需手动打开终端。',
+      description: '进入控制面板时会自动准备本机服务并确认本地对话可用，无需手动打开终端。',
       progress: 100,
     })
     expect(resolveGatewayBehavior().resolveContinueLabel(true)).toBe('进入控制面板')
@@ -535,37 +535,8 @@ describe('createEnvCheckRestartState', () => {
     ).resolves.toBe('~/Documents/Qclaw Lite Backups')
   })
 
-  it('starts startup plugin repair without blocking env checks', async () => {
-    const kickoffStartupPluginRepair = (
-      EnvCheckModule as typeof EnvCheckModule & {
-        kickoffStartupPluginRepair?: (startRepair?: () => Promise<unknown>) => void
-      }
-    ).kickoffStartupPluginRepair
-
-    expect(kickoffStartupPluginRepair).toBeTypeOf('function')
-
-    const events: string[] = []
-    let resolveRepair: () => void = () => {
-      throw new Error('repair resolver not initialized')
-    }
-    const repairPromise = new Promise<void>((resolve) => {
-      resolveRepair = () => {
-        events.push('repair-settled')
-        resolve()
-      }
-    })
-
-    kickoffStartupPluginRepair?.(() => {
-      events.push('repair-started')
-      return repairPromise
-    })
-    events.push('after-kickoff')
-
-    expect(events).toEqual(['repair-started', 'after-kickoff'])
-
-    resolveRepair()
-    await repairPromise
-    expect(events).toEqual(['repair-started', 'after-kickoff', 'repair-settled'])
+  it('does not expose a startup plugin repair hook from env check', () => {
+    expect(Object.prototype.hasOwnProperty.call(EnvCheckModule, 'kickoffStartupPluginRepair')).toBe(false)
   })
 
   it('treats 2026.3.22 as the minimum supported openclaw version after stripping suffixes', () => {
@@ -775,7 +746,7 @@ describe('createEnvCheckRestartState', () => {
 
     expect(message).toContain('当前版本：2026.3.28')
     expect(message).toContain('目标版本：2026.3.24')
-    expect(message).toContain('自动回退 OpenClaw')
+    expect(message).toContain('自动回退本机运行组件')
     expect(message).toContain('Mclaw 将立即退出')
   })
 
@@ -955,7 +926,7 @@ describe('createEnvCheckRestartState', () => {
       })
     ).toEqual({
       label: '内置本体',
-      title: '当前使用安装包内置的 OpenClaw 运行本体。',
+      title: '当前使用安装包内置的本机运行组件。',
     })
 
     expect(
@@ -989,7 +960,7 @@ describe('createEnvCheckRestartState', () => {
       })
     ).toEqual({
       label: '自定义安装',
-      title: '当前使用的是用户自定义路径中的 OpenClaw 运行环境。',
+      title: '当前使用的是用户自定义路径中的本机运行组件。',
     })
 
     expect(
@@ -999,7 +970,7 @@ describe('createEnvCheckRestartState', () => {
       })
     ).toEqual({
       label: 'nvm',
-      title: '当前使用的是 nvm 环境中的 OpenClaw。',
+      title: '当前使用的是 nvm 环境中的本机运行组件。',
     })
   })
 
@@ -1013,7 +984,7 @@ describe('createEnvCheckRestartState', () => {
       color: 'yellow',
       title: '运行来源',
       message:
-        '当前 OpenClaw 交付模式为 bundled-fallback，目标模式为 bundled-runtime。这通常表示当前平台没有命中目标本体路径，或当前安装包中的该平台内置 runtime 载荷缺失、损坏或打包不完整。',
+        '当前本机运行组件交付模式为 bundled-fallback，目标模式为 bundled-runtime。这通常表示当前平台没有命中目标本体路径，或当前安装包中的该平台内置 runtime 载荷缺失、损坏或打包不完整。',
     })
   })
 

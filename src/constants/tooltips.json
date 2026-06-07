@@ -9,9 +9,9 @@
   "layout": {
     "navigation": {
       "dashboard": "查看系统总览、运行状态和关键入口。",
-      "dashboardExplain": "这里可以查看 OpenClaw 的状态，执行重启、修复等常用操作。",
+      "dashboardExplain": "这里可以查看本机运行状态，执行重启、修复等常用操作。",
       "chat": "进入对话页面，发起和管理会话。",
-      "chatExplain": "这里可以给 OpenClaw 发送消息。",
+      "chatExplain": "这里可以直接和 Mclaw 对话。",
       "channels": "配置 IM 渠道接入、机器人和消息通道。",
       "channelsExplain": "这里可以管理飞书、企微等即时通讯消息渠道。",
       "models": "管理模型服务商、模型列表和 API 连接。",
@@ -23,12 +23,12 @@
   },
   "dashboard": {
     "refreshModelCatalog": "重新扫描并同步当前模型目录。",
-    "startGateway": "启动网关服务，让模型和渠道开始可用。",
-    "restartGateway": "重启网关，让最新配置重新生效。",
-    "forceRestartGateway": "强制重启网关，适合卡住或无响应时使用。",
-    "selfRepair": "自动检查常见问题，并尝试恢复网关运行。",
+    "startGateway": "启动本机服务，让模型和渠道开始可用。",
+    "restartGateway": "重启本机服务，让最新配置重新生效。",
+    "forceRestartGateway": "强制重启本机服务，适合卡住或无响应时使用。",
+    "selfRepair": "自动检查常见问题，并尝试恢复本机服务运行。",
     "repairPluginEnvironment": "自动检查并处理损坏或冲突的插件。",
-    "openDeveloperPanel": "打开 OpenClaw 的开发者页面，用于查看和调试运行状态。",
+    "openDeveloperPanel": "打开本机运行组件的诊断页面，用于查看和调试运行状态。",
     "openWorkspaceFolder": "打开本地工作区文件夹，方便查看配置和日志文件。",
     "catalogModeAvailable": "仅显示当前可直接使用的模型。",
     "catalogModeAll": "显示所有已发现模型，包括暂不可用项。"
@@ -73,7 +73,7 @@
     "deleteSkill": "卸载当前 Skill。",
     "sources": {
       "extra": "这类 Skills 一般来自飞书、企微等插件",
-      "bundled": "这类 Skills 随 OpenClaw 一起安装。",
+      "bundled": "这类 Skills 随 Mclaw 本机运行组件一起安装。",
       "workspace": "这类 Skills 只在当前工作区生效，适合放项目专用能力。"
     }
   },
@@ -86,9 +86,9 @@
     "toggleThemeToDark": "当前为亮色模式，点击切换到暗色模式。",
     "enableGlobalTooltip": "当前已关闭全局悬浮提示，点击后重新开启所有 Tooltip 提示。",
     "disableGlobalTooltip": "当前已开启全局悬浮提示，点击后关闭所有 Tooltip 提示。",
-    "deleteOpenClawAndData": "删除OpenClaw及数据",
-    "cleanupOpenClaw": "删除当前 OpenClaw 安装和相关环境，请谨慎操作。",
-    "cleanupOpenClawData": "清理 OpenClaw 的本地数据和配置，清理后通常无法恢复。"
+    "deleteOpenClawAndData": "内测版本已关闭本机运行组件清理入口，避免误删 Mclaw 工作数据。",
+    "cleanupOpenClaw": "内测暂不开放。如需清理运行组件，请联系 MetaCode 工作室统一处理。",
+    "cleanupOpenClawData": "内测暂不开放。当前会保护本机对话、配置和运行数据。"
   },
   "backupCenter": {
     "rootDirectory": "显示当前备份根目录位置。",
@@ -106,9 +106,9 @@
   },
   "envCheck": {
     "repairPluginEnvironment": "自动检查并处理损坏或冲突的插件。",
-    "nodeRuntime": "这是整个OpenClaw运行的基础环境。",
-    "openClawCli": "这是 OpenClaw 的核心运行环境，Mclaw 会优先释放内置本体，并在必要时执行回退修复。",
-    "gatewayService": "这是OpenClaw的后台网关服务。"
+    "nodeRuntime": "这是 Mclaw 本机运行组件所需的基础环境。",
+    "openClawCli": "这是 Mclaw 的本机运行组件，会优先释放内置组件，并在必要时执行回退修复。",
+    "gatewayService": "这是 Mclaw 的本机后台服务。"
   },
   "welcome": {
     "acknowledgeNotice": "确认已阅读并了解当前页面提示内容。"

@@ -102,7 +102,7 @@ export default function BackupCenter({
         <Group justify="space-between" mb="sm">
           <div style={{ minWidth: 0, maxWidth: 400 }}>
             <Text size="xs" c="dimmed" mb={2}>
-              {showingFallbackRoot ? 'OpenClaw 当前实际备份目录：' : 'OpenClaw 数据将会备份到这里：'}
+              {showingFallbackRoot ? 'Mclaw 当前实际备份目录：' : 'Mclaw 数据将会备份到这里：'}
             </Text>
             <Tooltip label={data?.rootDirectory || '读取中...'} withArrow multiline maw={400}>
               <Text size="xs" c="dimmed" lineClamp={1} style={{ cursor: 'default' }}>

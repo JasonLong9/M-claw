@@ -34,7 +34,7 @@ export async function waitForDashboardGatewayRunning(
           ? healthResult.value
           : {
               running: false,
-              summary: 'Gateway 尚未确认可用',
+              summary: '本机服务尚未确认可用',
             }
       lastRuntimeStore = runtimeResult.status === 'fulfilled' ? runtimeResult.value : null
       return {
@@ -63,6 +63,6 @@ export async function waitForDashboardGatewayRunning(
       String(failedHealth?.summary || '').trim() ||
       String(failedHealth?.stderr || '').trim() ||
       String(failedHealth?.raw || '').trim() ||
-      'Gateway 尚未确认可用',
+      '本机服务尚未确认可用',
   }
 }

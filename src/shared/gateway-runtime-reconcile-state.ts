@@ -101,7 +101,7 @@ export function createDefaultUpgradeCompatibilityAssessment(): UpgradeCompatibil
     previousBand: 'unknown',
     conservativeMode: false,
     warningCodes: [],
-    summary: '尚未执行 OpenClaw 升级兼容评估。',
+    summary: '尚未执行本机运行组件升级兼容评估。',
     assessedAt: new Date(0).toISOString(),
   }
 }

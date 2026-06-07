@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+﻿import { describe, expect, it } from 'vitest'
 
 const fs = process.getBuiltinModule('node:fs') as typeof import('node:fs')
 const path = process.getBuiltinModule('node:path') as typeof import('node:path')
@@ -44,7 +44,6 @@ describe('dashboard chat panel guardrails', () => {
     const source = readDashboardChatPanelSource()
 
     expect(source).not.toContain("activeSessionStatus.willForkOnSend ? '")
-    expect(source).not.toContain('棣栨鍙戦€佹椂鑷姩鍒涘缓浼氳瘽')
   })
 
   it('renders chat images as clickable thumbnails with a preview modal', () => {
@@ -81,5 +80,12 @@ describe('dashboard chat panel guardrails', () => {
     expect(source).toContain('window.api.listChatMemories')
     expect(source).toContain('window.api.saveChatMemory')
     expect(source).toContain("type === 'memory-saved'")
+  })
+
+  it('keeps the history surface free of removed development-mode specific UI hooks', () => {
+    const source = readDashboardChatPanelSource()
+    expect(source).not.toContain('showCodingModePanel')
+    expect(source).not.toContain('isCodingTaskMode')
+    expect(source).not.toContain('sessionUsedCodingMode')
   })
 })

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+﻿import { describe, expect, it, vi } from 'vitest'
 import * as ChannelConnectModule from '../ChannelConnect'
 import {
   buildManagedPluginScopedRepairOptions,
@@ -6,10 +6,12 @@ import {
   buildChannelConnectCompletionCopy,
   buildChannelConnectConnectedActionLabel,
   canFinalizeWeixinSetup,
+  canTreatWeixinFinalizeReadyFailureAsSettled,
   canPrepareFeishuManualBindingWithoutInstall,
   canFinishFeishuCreateMode,
   captureFeishuBotConfigSnapshot,
   ensureGatewayReadyForChannelConnect,
+  hasPersistedWeixinChannelAccounts,
   hasRecoveredFeishuCreateMode,
   hasFeishuManualCredentialInput,
   isFeishuManualBindingReady,
@@ -517,6 +519,83 @@ describe('ensureGatewayReadyForChannelConnect', () => {
 
     expect(result).toEqual({ ok: true })
     expect(getManagedChannelPluginStatus).toHaveBeenCalledWith('feishu')
+  })
+})
+
+describe('hasPersistedWeixinChannelAccounts', () => {
+  it('returns false when openclaw-weixin accounts are missing from persisted config', () => {
+    expect(
+      hasPersistedWeixinChannelAccounts(
+        {
+          channels: {
+            feishu: { enabled: true },
+          },
+        },
+        [{ accountId: 'wx-account' }]
+      )
+    ).toBe(false)
+  })
+
+  it('returns true when persisted config contains all expected openclaw-weixin accounts', () => {
+    expect(
+      hasPersistedWeixinChannelAccounts(
+        {
+          channels: {
+            'openclaw-weixin': {
+              enabled: true,
+              accounts: {
+                'wx-account': { enabled: true, name: 'wx-account' },
+              },
+            },
+          },
+        },
+        [{ accountId: 'wx-account' }]
+      )
+    ).toBe(true)
+  })
+})
+
+describe('canTreatWeixinFinalizeReadyFailureAsSettled', () => {
+  it('accepts personal weixin finalize when accounts are persisted and gateway is already running', async () => {
+    const readConfig = vi.fn().mockResolvedValue({
+      channels: {
+        'openclaw-weixin': {
+          enabled: true,
+          accounts: {
+            'wx-account': { enabled: true, name: 'wx-account' },
+          },
+        },
+      },
+    })
+    const ensureGatewayRunning = vi.fn().mockResolvedValue({
+      ok: true,
+      running: true,
+    })
+
+    await expect(
+      canTreatWeixinFinalizeReadyFailureAsSettled({
+        api: { readConfig, ensureGatewayRunning } as any,
+        accounts: [{ accountId: 'wx-account' }],
+      })
+    ).resolves.toBe(true)
+
+    expect(ensureGatewayRunning).toHaveBeenCalledWith({ skipRuntimePrecheck: true })
+  })
+
+  it('keeps failing when persisted personal weixin accounts are still missing', async () => {
+    const readConfig = vi.fn().mockResolvedValue({
+      channels: {},
+    })
+    const ensureGatewayRunning = vi.fn()
+
+    await expect(
+      canTreatWeixinFinalizeReadyFailureAsSettled({
+        api: { readConfig, ensureGatewayRunning } as any,
+        accounts: [{ accountId: 'wx-account' }],
+      })
+    ).resolves.toBe(false)
+
+    expect(ensureGatewayRunning).not.toHaveBeenCalled()
   })
 })
 
@@ -1226,3 +1305,4 @@ describe('mergeFeishuCreateModeBots', () => {
     expect(result.nextConfig).toEqual(currentConfig)
   })
 })
+

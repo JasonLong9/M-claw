@@ -124,6 +124,7 @@ const CHAT_MODEL_SWITCH_UNSUPPORTED_MESSAGE = '当前 OpenClaw 版本还不支�
 const CHAT_SESSION_MODEL_PATCH_UNAVAILABLE_MESSAGE = '当前会话还没有可切换的 OpenClaw session，请先发送一条消息后再试'
 const CHAT_TRACE_HISTORY_LIMIT = 200
 const CHAT_CONCURRENT_SEND_BLOCKED_MESSAGE = '当前已有一条消息正在发送，请等待当前回答完成或先停止回答。'
+const CHAT_PENDING_CANCEL_TTL_MS = 15_000
 
 const CHAT_IMAGE_MIME_TYPES_BY_EXTENSION: Record<string, string> = {
   '.png': 'image/png',
@@ -218,9 +219,28 @@ const dashboardChatAvailabilitySelectableModelsCache: {
 let inFlightChatSendPromise: Promise<ChatSendResult> | null = null
 
 let activeSendState: ActiveChatSendState = { status: 'idle' }
+let pendingCancelBeforeChatAbortController = false
+let pendingCancelRequestedAt = 0
 
 export function getActiveChatSendState(): ActiveChatSendState {
   return { ...activeSendState }
+}
+
+export function requestPendingChatCancel(): void {
+  pendingCancelBeforeChatAbortController = true
+  pendingCancelRequestedAt = Date.now()
+}
+
+function consumePendingChatCancel(now = Date.now()): boolean {
+  if (!pendingCancelBeforeChatAbortController) return false
+  if (pendingCancelRequestedAt > 0 && now - pendingCancelRequestedAt > CHAT_PENDING_CANCEL_TTL_MS) {
+    pendingCancelBeforeChatAbortController = false
+    pendingCancelRequestedAt = 0
+    return false
+  }
+  pendingCancelBeforeChatAbortController = false
+  pendingCancelRequestedAt = 0
+  return true
 }
 
 function updateActiveSendState(patch: Partial<ActiveChatSendState>): void {
@@ -229,6 +249,8 @@ function updateActiveSendState(patch: Partial<ActiveChatSendState>): void {
 
 function resetActiveSendState(): void {
   activeSendState = { status: 'idle' }
+  pendingCancelBeforeChatAbortController = false
+  pendingCancelRequestedAt = 0
 }
 
 export function resetDashboardChatAvailabilityTrackerForTests(): void {
@@ -2144,6 +2166,7 @@ interface GatewayEnsureLike extends CliLikeResult {
 interface OpenClawChatServiceOptions {
   runCommand?: (args: string[], timeout?: number) => Promise<CliLikeResult>
   runStreamingCommand?: RunStreamingCommand
+  runChatTask?: (params: any) => Promise<any>
   chatTransport?: ChatTransport
   callGatewayRpc?: (method: string, params: unknown, timeoutMs?: number) => Promise<unknown>
   getGatewayHealth?: () => Promise<GatewayHealthLike>
@@ -6898,6 +6921,9 @@ async function sendChatMessageImpl(
 
   let result: ChatTransportRunResult | null = null
   trackActiveAbortController(abortController, 'chat')
+  if (consumePendingChatCancel()) {
+    abortController.abort()
+  }
   try {
     for (let attemptIndex = 0; attemptIndex < 2; attemptIndex += 1) {
       const effectiveThinking = thinkingResolution.effectiveThinking

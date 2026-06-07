@@ -287,5 +287,5 @@ export function getFeishuPairingModalSummary(
     return `该机器人已有 ${channel.pairedCount} 个已配对账号，你可以继续输入新的配对码授权更多用户。`
   }
 
-  return `该机器人已接入 OpenClaw，但还没有用户完成配对。请先给 ${channel?.name || '该机器人'} 发送一条消息，然后把返回的配对码粘贴到这里。`
+  return `该机器人已接入 Mclaw，但还没有用户完成配对。请先给 ${channel?.name || '该机器人'} 发送一条消息，然后把返回的配对码粘贴到这里。`
 }

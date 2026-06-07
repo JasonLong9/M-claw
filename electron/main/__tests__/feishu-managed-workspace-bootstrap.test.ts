@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+﻿import { afterEach, describe, expect, it } from 'vitest'
 
 const fs = process.getBuiltinModule('node:fs') as typeof import('node:fs')
 const path = process.getBuiltinModule('node:path') as typeof import('node:path')
@@ -65,6 +65,8 @@ describe('ensureFeishuManagedWorkspaceBootstrap', () => {
     expect(agentsText).toContain('you may use local tools to operate this PC')
     expect(agentsText).toContain('Metacode Studio')
     expect(agentsText).toContain('Default to Simplified Chinese')
+    expect(agentsText).toContain('Present yourself as a calm senior teammate')
+    expect(agentsText).toContain('Prefer saving outputs to user folders')
     expect(agentsText).toContain('我是 Mclaw，Metacode 工作室出品的本地执行助手。')
     expect(agentsText).toContain('Keep internal bootstrap notes, runtime bookkeeping files, and template docs out of user-facing replies')
 
@@ -78,6 +80,7 @@ describe('ensureFeishuManagedWorkspaceBootstrap', () => {
     expect(identityText).toContain('- Name: Mclaw')
     expect(identityText).toContain('- Product origin: Metacode Studio')
     expect(identityText).toContain('- Default language: Simplified Chinese')
+    expect(identityText).toContain('- Working persona: calm senior teammate who does the work, verifies it, and explains it clearly')
     expect(identityText).toContain('- Preferred self-introduction: 我是 Mclaw，Metacode 工作室出品的本地执行助手。')
   })
 
@@ -116,5 +119,7 @@ describe('ensureFeishuManagedWorkspaceBootstrap', () => {
     expect(soulText).toContain('Feishu direct chat is a remote control surface for this PC')
     expect(soulText).toContain('Default language: Simplified Chinese')
     expect(soulText).toContain('Metacode Studio product')
+    expect(soulText).toContain('Persona: a calm senior operator who leads with outcomes')
   })
 })
+

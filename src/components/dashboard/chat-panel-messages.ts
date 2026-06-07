@@ -260,6 +260,9 @@ function buildAssistantRenderedMessage(cluster: ChatMessage[]): RenderedChatMess
       reasoning = ''
     }
   }
+  if (!text && !reasoning && images.length === 0) {
+    return null
+  }
 
   const finalSource =
     entries.at(-1) ||
@@ -363,8 +366,16 @@ export function buildRenderedChatMessages(input: BuildRenderedChatMessagesInput)
   const now = input.now ?? Date.now
   const renderedMessages = groupBaseMessages(input.baseMessages)
   const pendingUserText = String(input.pendingUserText || '').trim()
+  const hasSameTailUserMessage = (() => {
+    if (!pendingUserText) return false
+    const tail = renderedMessages.length > 0 ? renderedMessages[renderedMessages.length - 1] : null
+    if (!tail || tail.role !== 'user') return false
+    const normalizedExisting = String(tail.text || '').trim().replace(/\s+/g, ' ')
+    const normalizedPending = pendingUserText.replace(/\s+/g, ' ')
+    return normalizedExisting === normalizedPending
+  })()
 
-  if (pendingUserText) {
+  if (pendingUserText && !hasSameTailUserMessage) {
     renderedMessages.push({
       id: '__pending-user__',
       role: 'user',
@@ -382,7 +393,6 @@ export function buildRenderedChatMessages(input: BuildRenderedChatMessagesInput)
 
   const pendingAssistantText = String(input.pendingAssistant.text || '')
   const shouldShowAssistantPreview =
-    input.pendingAssistant.sending ||
     input.pendingAssistant.started ||
     input.pendingAssistant.stopping ||
     Boolean(pendingAssistantText.trim())
@@ -416,6 +426,8 @@ export function shouldShowFullscreenChatLoader(params: {
   loadingSessions: boolean
   loadingTranscript: boolean
   renderedMessageCount: number
+  suppressFullscreenLoader?: boolean
 }): boolean {
+  if (params.suppressFullscreenLoader) return false
   return params.renderedMessageCount === 0 && (params.loadingSessions || params.loadingTranscript)
 }

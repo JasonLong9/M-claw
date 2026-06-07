@@ -255,14 +255,14 @@ describe('resolveChatPageAvailabilityState', () => {
         connectedModels: ['custom-openai/deepseek-chat'],
         defaultModel: 'custom-openai/deepseek-chat',
         availabilityMessage:
-          '当前 OpenClaw 版本不支持 models status --json，但已检测到已保存模型；启动网关后可继续尝试对话。',
+          '当前版本暂不支持直接读取模型状态，但已检测到已保存模型；启动本机服务后可继续尝试对话。',
       },
     })
 
     expect(result.availabilityState).toBe('degraded')
     expect(result.canSend).toBe(true)
     expect(result.gatewayRunning).toBe(true)
-    expect(result.availabilityMessage).toContain('可直接发送消息验证运行时可用性')
+    expect(result.availabilityMessage).toContain('直接发送消息验证实际对话链路')
   })
 
   it('recovers send availability after gateway start when health probing still reports gateway offline', () => {
@@ -330,7 +330,7 @@ describe('resolveChatPageAvailabilityState', () => {
       connectedModels: [],
       defaultModel: '',
       availabilityMessage:
-        '当前 OpenClaw 版本不支持 models status --json，但尚未检测到已保存模型。',
+        '当前版本暂不支持直接读取模型状态，且尚未检测到已保存模型。',
     }
 
     const result = recoverChatAvailabilityAfterGatewayStart({

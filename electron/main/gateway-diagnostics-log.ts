@@ -1,7 +1,11 @@
-import { join } from 'node:path'
-import { tmpdir } from 'node:os'
-import { mkdirSync, statSync, appendFileSync, writeFileSync } from 'node:fs'
 import type { DiagnosticsTrace, DiagnosticsTraceEntry } from '../../src/shared/gateway-diagnostics-trace'
+
+const pathMod = process.getBuiltinModule('node:path') as typeof import('node:path')
+const osMod = process.getBuiltinModule('node:os') as typeof import('node:os')
+const fsMod = process.getBuiltinModule('node:fs') as typeof import('node:fs')
+const { join } = pathMod
+const { tmpdir } = osMod
+const { mkdirSync, statSync, appendFileSync, writeFileSync } = fsMod
 
 const LOG_DIR = join(tmpdir(), 'mclaw', 'gateway-run')
 const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5 MB

@@ -200,6 +200,20 @@ function ensurePluginAllow(config: Record<string, any>, allowId: string | undefi
   }
 }
 
+function ensurePluginEntryEnabled(config: Record<string, any>, pluginId: string | undefined): void {
+  if (!pluginId) return
+  config.plugins = config.plugins || {}
+  config.plugins.entries =
+    config.plugins.entries && typeof config.plugins.entries === 'object' && !Array.isArray(config.plugins.entries)
+      ? config.plugins.entries
+      : {}
+  const current = config.plugins.entries[pluginId]
+  config.plugins.entries[pluginId] =
+    current && typeof current === 'object' && !Array.isArray(current)
+      ? { ...current, enabled: true }
+      : { enabled: true }
+}
+
 function removePluginAllow(config: Record<string, any>, allowId: string | undefined): void {
   if (!allowId) return
   if (!Array.isArray(config.plugins?.allow)) return
@@ -457,7 +471,9 @@ export function applyChannelConfig(
     }
   }
 
-  ensurePluginAllow(nextConfig, resolveChannelPluginAllowId(channel))
+  const pluginAllowId = resolveChannelPluginAllowId(channel)
+  ensurePluginAllow(nextConfig, pluginAllowId)
+  ensurePluginEntryEnabled(nextConfig, pluginAllowId)
   return nextConfig
 }
 
@@ -504,6 +520,7 @@ export function syncWeixinChannelAccounts(
     accounts: nextAccounts,
   }
   ensurePluginAllow(nextConfig, 'openclaw-weixin')
+  ensurePluginEntryEnabled(nextConfig, 'openclaw-weixin')
   return nextConfig
 }
 

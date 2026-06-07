@@ -356,7 +356,7 @@ describe('channels page state helpers', () => {
       '该机器人已有 2 个已配对账号，你可以继续输入新的配对码授权更多用户。'
     )
     expect(getFeishuPairingModalSummary({ pairedCount: 0, name: 'Support Bot' } as any)).toBe(
-      '该机器人已接入 OpenClaw，但还没有用户完成配对。请先给 Support Bot 发送一条消息，然后把返回的配对码粘贴到这里。'
+      '该机器人已接入 Mclaw，但还没有用户完成配对。请先给 Support Bot 发送一条消息，然后把返回的配对码粘贴到这里。'
     )
   })
 
@@ -370,7 +370,7 @@ describe('channels page state helpers', () => {
         } as any,
         'Feishu'
       )
-    ).toBe('该飞书机器人已连接，且已有配对用户。点击卡片可继续管理更多配对。')
+    ).toBe('该飞书机器人已连接，并且已有配对用户。点击卡片可继续管理更多配对。')
 
     expect(
       getChannelCardSummary(

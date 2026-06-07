@@ -348,7 +348,7 @@ describe('dashboard plugin center helpers', () => {
 
     await expect(completionPromise).resolves.toEqual({
       summary: '微信官方安装器已完成，并新增 1 个微信账号。',
-      log: '✅ 微信官方安装器已完成，新增 1 个微信账号',
+      log: '已完成微信官方安装器处理，并新增 1 个微信账号',
     })
     expect(api.onWeixinInstallerEvent).toHaveBeenCalledTimes(1)
     expect(api.startWeixinInstaller).toHaveBeenCalledTimes(1)

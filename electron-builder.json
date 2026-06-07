@@ -24,23 +24,6 @@
     {
       "from": "src/assets/logo.png",
       "to": "app-icon.png"
-    },
-    {
-      "from": "resources/openclaw-bundle",
-      "to": "openclaw-bundle"
-    },
-    {
-      "from": "node-v24.14.1-win-x64/node-v24.14.1-win-x64",
-      "to": "openclaw-bundle/runtime/windows-x64",
-      "filter": [
-        "npm",
-        "npm.cmd",
-        "npm.ps1",
-        "npx",
-        "npx.cmd",
-        "npx.ps1",
-        "node_modules/npm/**/*"
-      ]
     }
   ],
   "mac": {
@@ -56,6 +39,12 @@
     "target": [
       "dmg",
       "zip"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/openclaw-bundle",
+        "to": "openclaw-bundle"
+      }
     ]
   },
   "dmg": {
@@ -73,7 +62,42 @@
         ]
       }
     ],
-    "artifactName": "Mclaw_${env.QCLAW_DISPLAY_VERSION}.${ext}"
+    "artifactName": "Mclaw_${env.QCLAW_DISPLAY_VERSION}.${ext}",
+    "extraResources": [
+      {
+        "from": "resources/openclaw-bundle/manifest.json",
+        "to": "openclaw-bundle/manifest.json"
+      },
+      {
+        "from": "resources/openclaw-bundle/README.md",
+        "to": "openclaw-bundle/README.md"
+      },
+      {
+        "from": "resources/openclaw-bundle/managed-plugins",
+        "to": "openclaw-bundle/managed-plugins"
+      },
+      {
+        "from": "resources/openclaw-bundle/runtime/windows-x64",
+        "to": "openclaw-bundle/runtime/windows-x64"
+      },
+      {
+        "from": "resources/dev-tools-bundle/windows-x64",
+        "to": "dev-tools-bundle/windows-x64"
+      },
+      {
+        "from": "node-v24.14.1-win-x64/node-v24.14.1-win-x64",
+        "to": "openclaw-bundle/runtime/windows-x64",
+        "filter": [
+          "npm",
+          "npm.cmd",
+          "npm.ps1",
+          "npx",
+          "npx.cmd",
+          "npx.ps1",
+          "node_modules/npm/**/*"
+        ]
+      }
+    ]
   },
   "nsis": {
     "oneClick": false,

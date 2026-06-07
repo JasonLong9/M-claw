@@ -58,9 +58,16 @@ skills-lock.json
 # Build and distribution artifacts
 /electron-dist/
 /electron-builder-cache/
+/\.electron-builder-cache/
 /nsis-dist/
 /nsis-resources-dist/
 /.tmp-openclaw-stage/
+/\.tmp/
+/\.openclaw-runtime-build/
+/mac-openclaw-runtime/
+/node-v24.14.1-win-x64/
+/resources/dev-tools-bundle/
+/resources/openclaw-bundle/.staging-openclaw-package/
 /smoke-install/
 /build/
 test_output.txt

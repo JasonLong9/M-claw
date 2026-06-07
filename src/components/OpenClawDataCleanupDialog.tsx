@@ -43,7 +43,7 @@ export function buildBackupDeleteConfirmMessage(
 export function buildDeleteAllBackupsConfirmMessage(
   backups: Array<Pick<OpenClawBackupEntry, 'type'>>
 ): string {
-  const baseMessage = '将删除全部 OpenClaw 备份。此操作不可恢复。'
+  const baseMessage = '将删除全部 Mclaw 本机备份。此操作不可恢复。'
   if (!hasBaselineBackup(backups)) return baseMessage
   return `${baseMessage} 其中包含基线备份；删除后系统会转为手动备份责任，后续共享配置仍可修改，但基线恢复需由您自行负责。`
 }
@@ -183,7 +183,7 @@ export default function OpenClawDataCleanupDialog({
         backupBeforeDelete,
       })
       if (!result.ok) {
-        setError(result.message || '删除 OpenClaw 数据失败')
+      setError(result.message || '删除 Mclaw 本机数据失败')
         return
       }
 
@@ -254,7 +254,7 @@ export default function OpenClawDataCleanupDialog({
 
   const confirmTitle =
     confirmState?.kind === 'path'
-      ? '确认删除 OpenClaw 数据'
+                    ? '确认删除 Mclaw 本机数据'
       : confirmState?.kind === 'backup'
         ? '确认删除备份'
         : '确认删除全部备份'
@@ -288,7 +288,7 @@ export default function OpenClawDataCleanupDialog({
   }
 
   return (
-    <Modal opened={open} onClose={onClose} title="清理 OpenClaw 数据" size="xl" centered>
+    <Modal opened={open} onClose={onClose} title="清理 Mclaw 本机数据" size="xl" centered>
       <Group justify="space-between" mb="sm">
         <Text size="sm" c="dimmed">
           这里只处理数据目录与备份，不会卸载 OpenClaw 程序。

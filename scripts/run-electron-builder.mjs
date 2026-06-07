@@ -5,12 +5,16 @@ import { join } from 'node:path'
 import { readLocalPublishUrl } from './electron-builder-local-config.mjs'
 import { claimPackageVersion, persistPackageVersionState, releasePackageVersionClaim } from './package-version.mjs'
 import { verifyWinPackagedOpenClawBundle } from './check-win-packaged-openclaw-bundle.mjs'
+import { verifyWinPackagedDevToolsBundle } from './check-win-packaged-dev-tools-bundle.mjs'
 
 const forwardedArgs = process.argv.slice(2)
 const packageVersion = claimPackageVersion()
 const { version, displayVersion, timeZone, fromOverride } = packageVersion
 const releaseRootDir = join(process.cwd(), 'release')
 const currentReleaseDir = join(releaseRootDir, displayVersion)
+const retainedReleaseEntries = resolveRetainedReleaseEntries(
+  process.env.QCLAW_RELEASE_RETAIN || process.env.QCLAW_RELEASE_KEEP
+)
 const localPublishUrl = await readLocalPublishUrl()
 const updatePublishUrl = localPublishUrl || String(process.env.QCLAW_UPDATE_PUBLISH_URL || '').trim()
 const localElectronDist = join(process.cwd(), 'electron-dist')
@@ -28,6 +32,15 @@ const localNsisResourcesDir = join(
   'nsis-resources-3.4.1'
 )
 const hasLocalNsisResourcesDir = existsSync(join(localNsisResourcesDir, 'plugins'))
+const localWinCodeSignArchiveCandidates = [
+  process.env.ELECTRON_BUILDER_WIN_CODE_SIGN_ARCHIVE
+    ? String(process.env.ELECTRON_BUILDER_WIN_CODE_SIGN_ARCHIVE).trim()
+    : '',
+  join(process.cwd(), 'win-code-sign-dist', 'winCodeSign-2.6.0.7z'),
+  join(process.cwd(), 'winCodeSign-2.6.0.7z'),
+].filter(Boolean)
+const localWinCodeSignArchive = localWinCodeSignArchiveCandidates.find((path) => existsSync(path)) || ''
+const hasLocalWinCodeSignArchive = Boolean(localWinCodeSignArchive)
 const bundledElectronPackageJsonPath = join(process.cwd(), 'node_modules', 'electron', 'package.json')
 const bundledElectronDistDir = join(process.cwd(), 'node_modules', 'electron', 'dist')
 
@@ -103,6 +116,9 @@ function startLocalBinaryMirror() {
 
   if (hasLocalNsisResourcesArchive) {
     routes.set('/nsis-resources-3.4.1/nsis-resources-3.4.1.7z', localNsisResourcesArchive)
+  }
+  if (hasLocalWinCodeSignArchive) {
+    routes.set('/winCodeSign-2.6.0/winCodeSign-2.6.0.7z', localWinCodeSignArchive)
   }
 
   if (routes.size === 0) {
@@ -180,13 +196,35 @@ function ensureLocalNsisResourcesPatch() {
   writeFileSync(nsisTargetPath, source.replace(hardcodedLine, patchedLine), 'utf8')
 }
 
+function resolveRetainedReleaseEntries(rawValue) {
+  const raw = String(rawValue || '').trim()
+  if (!raw) return new Set()
+
+  return new Set(
+    raw
+      .split(/[,\r\n;]+/)
+      .map((entry) => entry.trim().replace(/^release[\\/]+/i, ''))
+      .filter(Boolean)
+  )
+}
+
 function pruneOlderReleaseBuilds() {
   if (!existsSync(releaseRootDir)) return
 
   const removedEntries = []
   const skippedEntries = []
+  const retainedEntries = []
+  const seenEntries = new Set()
   for (const entry of readdirSync(releaseRootDir, { withFileTypes: true })) {
-    if (entry.name === displayVersion) continue
+    if (entry.name === displayVersion) {
+      seenEntries.add(entry.name)
+      continue
+    }
+    if (retainedReleaseEntries.has(entry.name)) {
+      retainedEntries.push(entry.name)
+      seenEntries.add(entry.name)
+      continue
+    }
     const entryPath = join(releaseRootDir, entry.name)
     try {
       rmSync(entryPath, { recursive: true, force: true })
@@ -201,6 +239,19 @@ function pruneOlderReleaseBuilds() {
   if (removedEntries.length > 0) {
     console.log(
       `[run-electron-builder] 已清理旧打包产物，仅保留最新版本 ${displayVersion}：${removedEntries.join(', ')}`
+    )
+  }
+
+  if (retainedEntries.length > 0) {
+    console.log(
+      `[run-electron-builder] 已按要求额外保留以下旧打包目录：${retainedEntries.join(', ')}`
+    )
+  }
+
+  const missingRetainedEntries = [...retainedReleaseEntries].filter((entry) => !seenEntries.has(entry))
+  if (missingRetainedEntries.length > 0) {
+    console.warn(
+      `[run-electron-builder] 已请求保留但当前未找到以下打包目录：${missingRetainedEntries.join(', ')}`
     )
   }
 
@@ -228,6 +279,11 @@ if (updatePublishUrl) {
       : '[run-electron-builder] 已通过 QCLAW_UPDATE_PUBLISH_URL 注入自动更新源。'
   )
 }
+if (retainedReleaseEntries.size > 0) {
+  console.log(
+    `[run-electron-builder] 本次会额外保留这些 release 目录：${[...retainedReleaseEntries].join(', ')}`
+  )
+}
 if (hasLocalElectronDist) {
   console.log(`[run-electron-builder] 已注入本地 Electron 分发目录：${localElectronDist}`)
 }
@@ -239,6 +295,9 @@ if (hasLocalNsisResourcesArchive) {
 }
 if (hasLocalNsisResourcesDir) {
   console.log(`[run-electron-builder] 已检测到本地 NSIS resources 目录：${localNsisResourcesDir}`)
+}
+if (hasLocalWinCodeSignArchive) {
+  console.log(`[run-electron-builder] 已检测到本地 winCodeSign 包：${localWinCodeSignArchive}`)
 }
 
 ensureLocalNsisResourcesPatch()
@@ -305,6 +364,7 @@ child.on('exit', (code, signal) => {
       const winUnpackedDir = join(currentReleaseDir, 'win-unpacked')
       if (existsSync(winUnpackedDir)) {
         verifyWinPackagedOpenClawBundle({ winUnpackedDir })
+        verifyWinPackagedDevToolsBundle({ winUnpackedDir })
       }
     } catch (error) {
       try {

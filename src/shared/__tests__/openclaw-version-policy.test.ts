@@ -53,7 +53,7 @@ describe('openclaw version policy', () => {
     expect(buildOpenClawConservativeCompatibilityGuidance('2026.3.28')).toBe(
       '2026.3.28 超出当前审计范围，当前仍按保守兼容模式处理。'
     )
-    expect(buildOpenClawCompatibilityBlockingReasonLabel('2026.3.28')).toBe('当前 OpenClaw 版本超出已审计范围')
+    expect(buildOpenClawCompatibilityBlockingReasonLabel('2026.3.28')).toBe('当前本机运行组件版本超出已审计范围')
   })
 
   it('only auto-corrects sources that can be safely pinned in place', () => {

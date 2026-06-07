@@ -7,6 +7,7 @@ import { collectChangedJsonPaths } from './openclaw-config-diff'
 import { resolveGatewayApplyAction } from './gateway-apply-policy'
 import { getOpenClawPaths, readConfig, runCli } from './cli'
 import { restartGatewayLifecycle } from './gateway-lifecycle-controller'
+import { ensureFeishuManagedAgentAuthBootstrap } from './feishu-managed-auth-bootstrap'
 import { ensureFeishuManagedWorkspaceBootstrap } from './feishu-managed-workspace-bootstrap'
 import { guardedWriteConfig } from './openclaw-config-guard'
 
@@ -135,20 +136,53 @@ function appendMessage(baseMessage: string | undefined, extraMessage: string): s
   return `${normalizedBase} ${extraMessage}`
 }
 
-async function syncFeishuManagedWorkspaceBootstrap(config: Record<string, any>): Promise<void> {
-  const openClawPaths = await getOpenClawPaths().catch(() => null)
-  const homeDir = String(openClawPaths?.homeDir || '').trim()
-  if (!homeDir) return
+async function syncFeishuManagedWorkspaceBootstrap(config: Record<string, any>, homeDir: string): Promise<void> {
+  const normalizedHomeDir = String(homeDir || '').trim()
+  if (!normalizedHomeDir) return
 
   const result = await ensureFeishuManagedWorkspaceBootstrap({
-    homeDir,
+    homeDir: normalizedHomeDir,
     config,
   })
 
   if (result.changed && process.env.NODE_ENV !== 'test') {
     console.info(
-      `[feishu-workspace-bootstrap] updated=${result.changedWorkspaces.length} homeDir=${homeDir}`
+      `[feishu-workspace-bootstrap] updated=${result.changedWorkspaces.length} homeDir=${normalizedHomeDir}`
     )
+  }
+}
+
+async function syncFeishuManagedAgentAuthBootstrap(config: Record<string, any>, homeDir: string): Promise<void> {
+  const normalizedHomeDir = String(homeDir || '').trim()
+  if (!normalizedHomeDir) return
+
+  const result = await ensureFeishuManagedAgentAuthBootstrap({
+    homeDir: normalizedHomeDir,
+    config,
+  })
+
+  if (result.changed && process.env.NODE_ENV !== 'test') {
+    console.info(
+      `[feishu-auth-bootstrap] updated=${result.updatedAgentIds.length} providers=${result.providerIds.join(',') || '-'} homeDir=${normalizedHomeDir}`
+    )
+  }
+}
+
+async function syncFeishuManagedBootstrap(config: Record<string, any>): Promise<void> {
+  const openClawPaths = await getOpenClawPaths().catch(() => null)
+  const homeDir = String(openClawPaths?.homeDir || '').trim()
+  if (!homeDir) return
+
+  const results = await Promise.allSettled([
+    syncFeishuManagedWorkspaceBootstrap(config, homeDir),
+    syncFeishuManagedAgentAuthBootstrap(config, homeDir),
+  ])
+  const failures = results
+    .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+    .map((result) => result.reason instanceof Error ? result.reason.message : String(result.reason))
+
+  if (failures.length > 0) {
+    throw new Error(failures.join(' | '))
   }
 }
 
@@ -214,7 +248,15 @@ export async function applyConfigPatchGuarded(
       return buildNoopResult()
     }
 
-    const latestConfig = normalizeConfig(await readConfig().catch(() => null))
+    const latestConfig = normalizeConfig(
+      await readConfig(
+        preferredCandidate
+          ? {
+              candidate: preferredCandidate,
+            }
+          : undefined
+      ).catch(() => null)
+    )
     const rebasedConfig = rebaseConfigValue(beforeConfig, afterConfig, latestConfig)
     const nextConfig = normalizeConfig(isPlainObject(rebasedConfig) ? rebasedConfig : null)
 
@@ -227,10 +269,10 @@ export async function applyConfigPatchGuarded(
     )
 
     if (writeResult.ok && writeResult.wrote) {
-      await syncFeishuManagedWorkspaceBootstrap(nextConfig).catch((error) => {
+      await syncFeishuManagedBootstrap(nextConfig).catch((error) => {
         if (process.env.NODE_ENV !== 'test') {
           console.warn(
-            `[feishu-workspace-bootstrap] sync failed: ${error instanceof Error ? error.message : String(error)}`
+            `[feishu-bootstrap] sync failed: ${error instanceof Error ? error.message : String(error)}`
           )
         }
       })

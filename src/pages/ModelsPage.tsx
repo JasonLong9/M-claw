@@ -1369,12 +1369,12 @@ export default function ModelsPage() {
 
       const providerDisplayName = String(provider?.name || provider?.id || '').trim() || '该服务商'
       const confirmed = window.confirm(
-        `服务商「${providerDisplayName}」仍会从外部 Codex 登录自动恢复。\n\n要彻底删除，Qclaw 需要同时退出这台 Mac 上的 Codex 登录，并再次清理 OpenClaw 认证档案。\n\n是否继续？`
+        `服务商「${providerDisplayName}」仍会从外部 Codex 登录自动恢复。\n\n要彻底删除，Mclaw 需要同时退出这台机器上的外部登录，并再次清理本机认证档案。\n\n是否继续？`
       )
       if (!confirmed) {
         return {
           attempted: true,
-          message: `服务商「${providerDisplayName}」的本地配置已删除，但外部 Codex 登录仍在，OpenClaw 会继续恢复该认证。`,
+          message: `服务商「${providerDisplayName}」的本地配置已删除，但外部 Codex 登录仍在，本机运行组件会继续恢复该认证。`,
         }
       }
 
@@ -1545,11 +1545,11 @@ export default function ModelsPage() {
                 const reloadResult = await window.api.reloadGatewayAfterModelChange()
                 if (!reloadResult?.ok) {
                   deferredIssues.push(
-                    `服务商已删除，但 Gateway 重载失败：${reloadResult?.stderr || reloadResult?.stdout || '请稍后手动重载'}`
+                    `服务商已删除，但本机服务重载失败：${reloadResult?.stderr || reloadResult?.stdout || '请稍后手动重载'}`
                   )
                 }
               } catch (error: any) {
-                deferredIssues.push(`服务商已删除，但 Gateway 重载失败：${error?.message || '请稍后手动重载'}`)
+                deferredIssues.push(`服务商已删除，但本机服务重载失败：${error?.message || '请稍后手动重载'}`)
               }
 
               await loadData({ background: true, forceRefresh: true, allowCliStatusFallback: false })
@@ -1682,11 +1682,11 @@ export default function ModelsPage() {
             const reloadResult = await window.api.reloadGatewayAfterModelChange()
             if (!reloadResult?.ok) {
               deferredIssues.push(
-                `服务商已删除，但 Gateway 重载失败：${reloadResult?.stderr || reloadResult?.stdout || '请稍后手动重载'}`
+                `服务商已删除，但本机服务重载失败：${reloadResult?.stderr || reloadResult?.stdout || '请稍后手动重载'}`
               )
             }
           } catch (error: any) {
-            deferredIssues.push(`服务商已删除，但 Gateway 重载失败：${error?.message || '请稍后手动重载'}`)
+            deferredIssues.push(`服务商已删除，但本机服务重载失败：${error?.message || '请稍后手动重载'}`)
           }
 
           await loadData({ background: true, forceRefresh: true, allowCliStatusFallback: false })

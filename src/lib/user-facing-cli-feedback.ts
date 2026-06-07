@@ -17,6 +17,11 @@ const NETWORK_BLOCKED_REGEX =
 const PLUGIN_INSTALL_PERMISSION_MARKER = 'QCLAW_PLUGIN_INSTALL_PERMISSION_DENIED'
 const PERMISSION_REPAIR_MARKER = 'QCLAW_PERMISSION_REPAIR'
 const SKILL_MUTATION_BUSY_MARKER = 'QCLAW_SKILL_MUTATION_BUSY'
+const SKILL_RUNTIME_DISABLED_REGEX = /SKILL_RUNTIME_DISABLED|运行时风险过高|runtime[- ]disabled/i
+const SKILL_NOT_WHITELISTED_REGEX = /SKILL_NOT_WHITELISTED|不在官方白名单|not in official whitelist/i
+const SOURCE_NOT_ALLOWED_REGEX = /SOURCE_NOT_ALLOWED|来源不在允许列表|source.+not allowed/i
+const WHITELIST_INTEGRITY_INVALID_REGEX = /WHITELIST_INTEGRITY_INVALID|白名单完整性校验失败|integrity check failed/i
+const SKILL_SLUG_INVALID_REGEX = /SKILL_SLUG_INVALID|标识格式无效|invalid skill slug/i
 
 function stripCliControlSequences(text: string): string {
   return String(text || '')
@@ -89,6 +94,22 @@ export function toUserFacingCliFailureMessage(params: {
     return skillMutationBusyHint
   }
 
+  if (SKILL_RUNTIME_DISABLED_REGEX.test(corpus)) {
+    return '该 Skill 因运行时风险过高已被自动禁用，请先查看安全状态中的风险摘要。'
+  }
+  if (WHITELIST_INTEGRITY_INVALID_REGEX.test(corpus)) {
+    return '技能白名单完整性校验失败，请刷新或恢复安全策略文件后重试。'
+  }
+  if (SKILL_NOT_WHITELISTED_REGEX.test(corpus)) {
+    return '该 Skill 不在官方白名单中，已被安全策略拦截。'
+  }
+  if (SOURCE_NOT_ALLOWED_REGEX.test(corpus)) {
+    return '该 Skill 来源不在允许列表中，已被安全策略拦截。'
+  }
+  if (SKILL_SLUG_INVALID_REGEX.test(corpus)) {
+    return 'Skill 标识格式无效，请检查后重试。'
+  }
+
   if (API_INVALID_REGEX.test(corpus)) {
     return 'API Key 无效、已过期或权限不足，请检查后重试。'
   }
@@ -96,7 +117,7 @@ export function toUserFacingCliFailureMessage(params: {
     return '配置写入失败，请检查本机权限后重试。'
   }
   if (GATEWAY_UNREADY_REGEX.test(corpus)) {
-    return 'Gateway 尚未就绪，请稍后重试。若持续失败，请重启 Gateway 后再试。'
+    return '本机服务尚未就绪，请稍后重试。若持续失败，请重启本机服务后再试。'
   }
   if (CLAWHUB_RATE_LIMIT_REGEX.test(corpus)) {
     return 'ClawHub 当前请求过于频繁，已被限流，请稍后再试。'
@@ -105,7 +126,7 @@ export function toUserFacingCliFailureMessage(params: {
     return '插件源解析失败，请稍后重试。若该插件此前已安装，可直接继续绑定渠道。'
   }
   if (TIMEOUT_FAILURE_REGEX.test(corpus)) {
-    return '请求超时，请稍后重试。若持续失败，请检查 Gateway 与当前模型服务状态。'
+    return '请求超时，请稍后重试。若持续失败，请检查本机服务与当前模型服务状态。'
   }
   if (NETWORK_BLOCKED_REGEX.test(corpus)) {
     return '网络连接异常，请检查网络或代理配置后重试。'

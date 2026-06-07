@@ -23,6 +23,9 @@ import {
 import { toUserFacingCliFailureMessage, toUserFacingUnknownErrorMessage } from '../lib/user-facing-cli-feedback'
 
 const LOCAL_PROVIDER_IDS = new Set(['ollama', 'vllm', 'custom-openai'])
+// Internal testing stays on the generic compatible endpoint until the model hub is ready.
+const MODEL_CENTER_VISIBLE_PROVIDER_IDS = new Set(['custom-openai'])
+const ENABLE_LOCAL_COMPAT_PROVIDER_BUNDLED_MIGRATION = false
 const DEEPSEEK_PROVIDER_ID = 'deepseek'
 const DEEPSEEK_BASE_URL = 'https://api.deepseek.com'
 const CUSTOM_PROVIDER_AMBIGUOUS_ERROR_MESSAGE = '检测到多个同 endpoint/model 的自定义 Provider，请填写 Provider ID 后重试。'
@@ -45,6 +48,23 @@ function isOfficialDeepSeekBaseUrl(value: string): boolean {
     || normalized === 'https://api.deepseek.com/v1'
     || normalized === 'https://api.deepseek.com/v1/'
   )
+}
+
+function buildLocalProviderOption(providerId: string): ProviderOption {
+  const catalog = getKnownProviderCatalog().find((entry) => entry.id === providerId)
+  const metadata = getProviderMetadata(providerId)
+  const providerDisplay = resolveModelCenterProviderDisplayCopy({
+    providerId,
+    fallbackName: catalog?.name || resolveProviderDisplayName(providerId),
+    fallbackHint: metadata?.description,
+  })
+
+  return {
+    id: providerId,
+    name: providerDisplay.name,
+    ...(providerDisplay.hint ? { hint: providerDisplay.hint } : {}),
+    methods: [],
+  }
 }
 
 export function buildLocalProviderEnvUpdatesForSubmit(params: {
@@ -129,7 +149,11 @@ function resolveLocalProviderSubmitTarget(params: {
   const baseUrl = String(params.baseUrl || '').trim()
   const selectedModel = String(params.selectedModel || '').trim()
 
-  if (providerId === 'custom-openai' && isOfficialDeepSeekBaseUrl(baseUrl)) {
+  if (
+    ENABLE_LOCAL_COMPAT_PROVIDER_BUNDLED_MIGRATION
+    && providerId === 'custom-openai'
+    && isOfficialDeepSeekBaseUrl(baseUrl)
+  ) {
     const migratedModelId = extractLocalProviderModelId(selectedModel, providerId)
     return {
       providerId: DEEPSEEK_PROVIDER_ID,
@@ -405,7 +429,7 @@ export function resolveModelCenterMethodDisplayCopy(params: {
   if (providerId === 'custom' && methodId === 'custom-api-key') {
     return {
       label: '手动填写接口信息',
-      hint: '填写 Base URL、Model ID 和认证信息后，按兼容协议写入 OpenClaw。',
+      hint: '填写 Base URL、Model ID 和认证信息后，按兼容协议写入本机运行组件。',
     }
   }
 
@@ -543,7 +567,7 @@ function toDisplayName(providerId: string, providerNames?: Record<string, string
 
 function buildUnsupportedMethodReason(method: OpenClawAuthMethodDescriptor): string | undefined {
   if (method.route.kind !== 'unsupported') return undefined
-  return `Auth method "${normalizeMethodId(method.authChoice)}" is unsupported in this OpenClaw build.`
+  return `认证方式 "${normalizeMethodId(method.authChoice)}" 当前暂不支持。`
 }
 
 function buildCapabilityMismatchReason(
@@ -553,7 +577,7 @@ function buildCapabilityMismatchReason(
   if (!capabilities) return undefined
 
   if ((method.route.kind === 'onboard' || method.route.kind === 'onboard-custom') && !capabilities.supports.onboard) {
-    return '当前 OpenClaw 版本不支持 onboard 认证命令，无法使用该认证方式。'
+    return '当前本机运行组件版本不支持 onboard 认证命令，无法使用该认证方式。'
   }
 
   if (
@@ -561,27 +585,27 @@ function buildCapabilityMismatchReason(
     method.route.cliFlag &&
     !capabilities.onboardFlags.includes(method.route.cliFlag)
   ) {
-    return '当前 OpenClaw 版本未暴露该认证所需的 CLI flag，Qclaw 无法安全执行该认证方式。'
+    return '当前本机运行组件版本未暴露该认证所需的 CLI flag，Mclaw 无法安全执行该认证方式。'
   }
 
   if (method.route.kind === 'models-auth-login' && !capabilities.supports.modelsAuthLogin) {
-    return '当前 OpenClaw 版本不支持 models auth login，无法使用该认证方式。'
+    return '当前本机运行组件版本不支持 models auth login，无法使用该认证方式。'
   }
 
   if (method.route.kind === 'models-auth-login' && method.route.pluginId && !capabilities.supports.pluginsEnable) {
-    return '当前 OpenClaw 版本不支持 plugins enable，无法使用该插件 OAuth 认证方式。'
+    return '当前本机运行组件版本不支持 plugins enable，无法使用该插件 OAuth 认证方式。'
   }
 
   if (method.route.kind === 'models-auth-login-github-copilot' && !capabilities.supports.modelsAuthLoginGitHubCopilot) {
-    return '当前 OpenClaw 版本不支持 GitHub Copilot 登录命令，无法使用该认证方式。'
+    return '当前本机运行组件版本不支持 GitHub Copilot 登录命令，无法使用该认证方式。'
   }
 
   if (method.route.kind === 'models-auth-paste-token' && !capabilities.supports.modelsAuthPasteToken) {
-    return '当前 OpenClaw 版本不支持 paste-token，无法使用该认证方式。'
+    return '当前本机运行组件版本不支持 paste-token，无法使用该认证方式。'
   }
 
   if (method.route.kind === 'models-auth-setup-token' && !capabilities.supports.modelsAuthSetupToken) {
-    return '当前 OpenClaw 版本不支持 setup-token，无法使用该认证方式。'
+    return '当前本机运行组件版本不支持 setup-token，无法使用该认证方式。'
   }
 
   return undefined
@@ -595,11 +619,11 @@ function buildMethodDisabledReason(
 }
 
 export function formatAuthRegistrySourceLabel(source: OpenClawAuthRegistrySource): string {
-  if (source === 'openclaw-public-json') return 'OpenClaw 官方注册表（公共 JSON）'
-  if (source === 'openclaw-public-export') return 'OpenClaw 官方注册表（稳定导出）'
-  if (source === 'openclaw-internal-registry') return 'OpenClaw 官方注册表（内部适配层）'
-  if (source === 'unsupported-openclaw-layout') return '当前 OpenClaw 版本元数据布局不受支持'
-  return 'OpenClaw 元数据来源未知'
+  if (source === 'openclaw-public-json') return '本机运行组件官方注册表（公共 JSON）'
+  if (source === 'openclaw-public-export') return '本机运行组件官方注册表（稳定导出）'
+  if (source === 'openclaw-internal-registry') return '本机运行组件官方注册表（内部适配层）'
+  if (source === 'unsupported-openclaw-layout') return '当前本机运行组件版本元数据布局不受支持'
+  return '本机运行组件元数据来源未知'
 }
 
 export const DEFAULT_PROVIDER_CONFIG_EXPANDED = false
@@ -910,7 +934,7 @@ const CAPABILITIES_LOADING_STAGES: Array<Pick<CapabilitiesLoadingDisplay, 'stage
   [
     {
       minProgress: 0,
-      stageLabel: '连接 OpenClaw',
+      stageLabel: '连接本机运行组件',
       detail: '正在建立能力查询并读取提供商元数据。',
     },
     {
@@ -959,7 +983,7 @@ export function buildBusyStateDisplay(input: BusyStateInput): BusyStateDisplay {
   if (input.canceling) {
     return {
       title: '正在取消当前操作...',
-      detail: '系统正在取消并中断 OpenClaw 命令，请稍候。',
+      detail: '系统正在取消并中断本机认证命令，请稍候。',
       elapsed: formatElapsedSeconds(input.elapsedSeconds),
     }
   }
@@ -983,7 +1007,7 @@ export function buildBusyStateDisplay(input: BusyStateInput): BusyStateDisplay {
   if (input.phase === 'authing' && input.method?.kind === 'token') {
     return {
       title: '正在执行 Token 认证',
-      detail: '正在调用 OpenClaw 认证命令并写入授权状态。',
+      detail: '正在调用本机认证命令并写入授权状态。',
       elapsed: formatElapsedSeconds(input.elapsedSeconds),
     }
   }
@@ -991,14 +1015,14 @@ export function buildBusyStateDisplay(input: BusyStateInput): BusyStateDisplay {
   if (input.phase === 'authing' && methodRequiresSecret(input.method)) {
     return {
       title: '正在提交认证信息',
-      detail: '正在通过 OpenClaw 官方认证路由写入认证信息，请保持窗口开启。',
+      detail: '正在通过本机认证路由写入认证信息，请保持窗口开启。',
       elapsed: formatElapsedSeconds(input.elapsedSeconds),
     }
   }
 
   return {
     title: '正在执行认证流程',
-    detail: '正在调用 OpenClaw 命令，请保持窗口开启。',
+    detail: '正在调用本机认证命令，请保持窗口开启。',
     elapsed: formatElapsedSeconds(input.elapsedSeconds),
   }
 }
@@ -1185,6 +1209,23 @@ export function buildProviderOptions(
   const providerOrderMap = new Map(getKnownProviderCatalog().map((entry, index) => [entry.id, index]))
   result.sort((a, b) => (providerOrderMap.get(a.id) ?? Infinity) - (providerOrderMap.get(b.id) ?? Infinity))
   return result
+}
+
+export function buildVisibleProviderOptions(
+  capabilities: OpenClawCapabilities | null,
+  providerNames?: Record<string, string>
+): ProviderOption[] {
+  const visibleProviders = buildProviderOptions(capabilities, providerNames).filter((provider) =>
+    MODEL_CENTER_VISIBLE_PROVIDER_IDS.has(provider.id)
+  )
+  const existingIds = new Set(visibleProviders.map((provider) => provider.id))
+
+  for (const providerId of MODEL_CENTER_VISIBLE_PROVIDER_IDS) {
+    if (existingIds.has(providerId)) continue
+    visibleProviders.push(buildLocalProviderOption(providerId))
+  }
+
+  return visibleProviders
 }
 
 export interface ProviderMethodSelection {
@@ -1860,26 +1901,7 @@ export default function ModelCenter({
   }, [])
 
   const providers = useMemo(() => {
-    const registryProviders = buildProviderOptions(capabilities, providerNames)
-    const existingIds = new Set(registryProviders.map((p) => p.id))
-    const localEntries: ProviderOption[] = []
-    for (const id of LOCAL_PROVIDER_IDS) {
-      if (existingIds.has(id)) continue
-      const catalog = getKnownProviderCatalog().find((entry) => entry.id === id)
-      const metadata = getProviderMetadata(id)
-      const providerDisplay = resolveModelCenterProviderDisplayCopy({
-        providerId: id,
-        fallbackName: catalog?.name || resolveProviderDisplayName(id),
-        fallbackHint: metadata?.description,
-      })
-      localEntries.push({
-        id,
-        name: providerDisplay.name,
-        ...(providerDisplay.hint ? { hint: providerDisplay.hint } : {}),
-        methods: [],
-      })
-    }
-    return [...registryProviders, ...localEntries]
+    return buildVisibleProviderOptions(capabilities, providerNames)
   }, [capabilities, providerNames])
 
   const selectedProvider = providers.find((provider) => provider.id === selectedProviderId) || null
@@ -1945,20 +1967,20 @@ export default function ModelCenter({
     previousSelection: { providerId?: string; methodId?: string } = {}
   ): boolean => {
     setCapabilities(loaded)
-    const nextProviders = buildProviderOptions(loaded, providerNames)
+    const nextProviders = buildVisibleProviderOptions(loaded, providerNames)
     if (nextProviders.length === 0) {
       setPhase('error')
       setError(
         toUserFacingCliFailureMessage({
           stderr: loaded.authRegistry.message,
-          fallback: '未发现可用认证方式，请确认 OpenClaw CLI 已正确安装。',
+          fallback: '未发现可用认证方式，请确认 Mclaw 本机运行组件已正确准备。',
         })
       )
       return false
     }
 
     if (!loaded.authRegistry.ok) {
-      setError('当前 OpenClaw 元数据不完整，已降级展示可识别的认证方式。')
+      setError('当前本机运行组件元数据不完整，已降级展示可识别的认证方式。')
     }
 
     const nextSelection = resolveNextProviderMethodSelection(nextProviders, previousSelection)
@@ -2843,7 +2865,7 @@ export default function ModelCenter({
 
       {showProviderConfigContent && (
         <>
-          <Text size="sm" c="dimmed" mb={4}>从 OpenClaw 能力中动态加载提供商与认证方式</Text>
+          <Text size="sm" c="dimmed" mb={4}>从本机运行组件能力中动态加载提供商与认证方式</Text>
           {capabilities && <Text size="xs" c="dimmed" mb="md" className="!text-[11px]">元数据来源：{metadataSourceLabel}</Text>}
 
           {phase === 'loading' && (
@@ -2943,7 +2965,7 @@ export default function ModelCenter({
                       <Text size="xs" c="dimmed" mt={4} className="!text-[11px]">
                         {selectedProviderId === 'custom-openai'
                           ? '无鉴权 endpoint 可留空；如果你的远程服务要求认证，请填写可用 API Key。'
-                          : '留空时会写入本地注册占位 Key，帮助 OpenClaw 正确识别该 provider。'}
+                          : '留空时会写入本地注册占位 Key，帮助本机运行组件正确识别该服务商。'}
                       </Text>
                     </div>
                   )}
@@ -3151,7 +3173,7 @@ export default function ModelCenter({
                       size="sm"
                     />
                     <Text size="xs" c="dimmed" mt={4} className="!text-[11px]">
-                      留空时 OpenClaw 会按 endpoint 自动生成；填写后可避免验证阶段因自动重命名产生歧义。
+                      留空时本机运行组件会按 endpoint 自动生成；填写后可避免验证阶段因自动重命名产生歧义。
                     </Text>
                   </div>
                 </>

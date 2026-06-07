@@ -1,0 +1,17 @@
+{
+  "version": "2026-05-18.2",
+  "keys": [
+    {
+      "keyId": "mclaw-skills-trust-2026-05-a",
+      "algorithm": "ed25519",
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAQiKAK55LSO4+BT3o9er/k3/8egLxmoc5DQaWCKC7ZzM=\n-----END PUBLIC KEY-----\n",
+      "status": "active"
+    },
+    {
+      "keyId": "mclaw-skills-trust-2026-05-b",
+      "algorithm": "ed25519",
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEATWQRZRdQxikDm0nb4jLG/nIkH/ex8ocJgkaF6UFPPHM=\n-----END PUBLIC KEY-----\n",
+      "status": "active"
+    }
+  ]
+}

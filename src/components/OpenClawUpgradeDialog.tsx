@@ -28,7 +28,7 @@ export default function OpenClawUpgradeDialog({
       const nextCheck = await window.api.checkOpenClawUpgrade()
       setCheck(nextCheck)
     } catch (e: any) {
-      setError(e?.message || '读取 OpenClaw 升级状态失败')
+      setError(e?.message || '读取本机运行组件升级状态失败')
     } finally {
       setLoading(false)
     }
@@ -103,7 +103,7 @@ export default function OpenClawUpgradeDialog({
                 <Text size="sm">不迁移数据目录和配置路径</Text>
                 <Text size="sm">升级前自动创建配置快照</Text>
                 <Text size="sm">
-                  {check.gatewayRunning ? '升级后会尝试恢复 Gateway 运行态' : '当前 Gateway 未运行，不需要恢复'}
+                    {check.gatewayRunning ? '升级后会尝试恢复本机服务运行态' : '当前本机服务未运行，不需要恢复'}
                 </Text>
               </Stack>
             </Paper>
@@ -203,7 +203,7 @@ export default function OpenClawUpgradeDialog({
               onClick={() => void handleRunUpgrade()}
               disabled={running || !canRun}
             >
-              {running ? '处理中...' : '升级当前 OpenClaw'}
+              {running ? '处理中...' : '升级当前本机运行组件'}
             </Button>
           </Group>
         </>
@@ -223,7 +223,7 @@ export default function OpenClawUpgradeDialog({
         await loadCheck()
       }
     } catch (e: any) {
-      setError(e?.message || '执行 OpenClaw 升级失败')
+      setError(e?.message || '执行本机运行组件升级失败')
     } finally {
       setRunning(false)
     }

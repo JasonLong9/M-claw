@@ -39,6 +39,7 @@ export interface ChannelsPageChannelSurfaceActionHandlers<Channel>
 
 export interface ChannelsPageTogglingChannelBinding {
   togglingChannelId: ChannelsPagePendingChannelId
+  removingChannelId: ChannelsPagePendingChannelId
 }
 
 export interface ChannelsPageChannelActionsResult<Channel extends ChannelsPageChannelActionChannel>

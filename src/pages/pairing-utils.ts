@@ -128,7 +128,7 @@ export function buildPairingApprovalFeedback({
         message:
           surface === 'dashboard'
             ? '未找到待审批请求，请粘贴机器人完整回复（含用户 ID）后重试'
-            : `未找到该配对码对应的请求。请确认：\n1. 配对码是否输入正确\n2. 是否已在${channelName}中给机器人发送过消息\n3. 若使用了多个 OpenClaw 实例，请粘贴机器人完整回复（包含用户 ID）以便自动兜底授权\n4. 配对码是否已过期（请重新发送消息获取新码）`,
+            : `未找到该配对码对应的请求。请确认：\n1. 配对码是否输入正确\n2. 是否已在${channelName}中给机器人发送过消息\n3. 若同一机器上存在多个 Mclaw 接入实例，请粘贴机器人完整回复（包含用户 ID）以便自动兜底授权\n4. 配对码是否已过期（请重新发送消息获取新码）`,
       }
     default: {
       const detail = extractPairingApproveFailureDetail(result)

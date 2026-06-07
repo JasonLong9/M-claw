@@ -49,8 +49,10 @@ interface ChannelsPageChannelCardProps {
   feishuSharedStatusAlert?: FeishuSharedStatusAlertState | null
   showPluginStatus?: boolean
   togglingAnyChannel: boolean
+  removingAnyChannel: boolean
   togglingAnotherChannel: boolean
   isToggling: boolean
+  isRemoving: boolean
   showRepairAction: boolean
   repairDisabled: boolean
   repairingRepairAction: boolean
@@ -72,8 +74,10 @@ export default function ChannelsPageChannelCard({
   feishuSharedStatusAlert = null,
   showPluginStatus = false,
   togglingAnyChannel,
+  removingAnyChannel,
   togglingAnotherChannel,
   isToggling,
+  isRemoving,
   showRepairAction,
   repairDisabled,
   repairingRepairAction,
@@ -118,8 +122,10 @@ export default function ChannelsPageChannelCard({
         <ChannelCardActionButtons
           channel={channel}
           togglingAnyChannel={togglingAnyChannel}
+          removingAnyChannel={removingAnyChannel}
           togglingAnotherChannel={togglingAnotherChannel}
           isToggling={isToggling}
+          isRemoving={isRemoving}
           showRepairAction={showRepairAction}
           repairDisabled={repairDisabled}
           repairingRepairAction={repairingRepairAction}

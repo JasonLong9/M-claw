@@ -127,7 +127,7 @@ describe('chat session model switching helper', () => {
       modeLabel: '发送首条消息后可切换',
       modeTone: 'gray',
       targetLabel: '待切换目标',
-      helperText: '当前会话还没有可切换的 OpenClaw session，请先发送一条消息后再试。',
+      helperText: '当前会话还没有可切换的直连会话，请先发送一条消息后再试。',
     })
   })
 

@@ -46,6 +46,15 @@ export interface DashboardEntryBootstrapApi {
   pairingFeishuStatus: (accountIds: string[]) => Promise<Record<string, { pairedCount: number; pairedUsers: string[] }>>
   getFeishuRuntimeStatus: () => Promise<Record<string, FeishuRuntimeStatusSummary>>
   saveDiagnosticsTrace: (entries: unknown[]) => Promise<void>
+  repairIncompatiblePlugins?: (
+    options?: {
+      scopePluginIds?: string[]
+      quarantineOfficialManagedPlugins?: boolean
+      restoreConfiguredManagedChannels?: boolean
+    }
+  ) => Promise<{ ok?: boolean; summary?: string; stderr?: string } | null>
+  gatewayForceRestart?: () => Promise<{ ok?: boolean; stdout?: string; stderr?: string }>
+  repairManagedChannelPlugin?: (channelId: string) => Promise<{ kind?: string; summary?: string; message?: string } | null>
 }
 
 interface GatewayHealthCheckResult {
@@ -272,6 +281,66 @@ export async function runDashboardEntryBootstrapFlow(
     api.saveDiagnosticsTrace(entries()).catch(() => {})
     return view
   }
+  let forceDegradedGatewayBypass = false
+
+  const attemptForcedGatewayRecovery = async (
+    failedEnsureResult: GatewayEnsureRunningResult
+  ): Promise<GatewayEnsureRunningResult | null> => {
+    const corpus = `${failedEnsureResult.summary || ''}\n${failedEnsureResult.stderr || ''}\n${failedEnsureResult.stdout || ''}`
+    const looksLikePluginFailure =
+      failedEnsureResult.stateCode === 'plugin_load_failure'
+      || /plugin|allowlist|manifest|unknown channel id|failed to load plugin/i.test(corpus)
+    if (!looksLikePluginFailure && failedEnsureResult.stateCode !== 'config_invalid') {
+      return null
+    }
+
+    notify('gateway', 'active', '检测到网关插件异常，正在执行自动修复...')
+    try {
+      if (api.repairIncompatiblePlugins) {
+        await api.repairIncompatiblePlugins({
+          quarantineOfficialManagedPlugins: true,
+          restoreConfiguredManagedChannels: true,
+        }).catch(() => null)
+      }
+      if (api.gatewayForceRestart) {
+        await api.gatewayForceRestart().catch(() => null)
+      }
+    } catch {
+      // best effort only
+    }
+
+    let retryEnsureResult = await api.ensureGatewayRunning({
+      skipRuntimePrecheck: true,
+      requestId: 'dashboard-entry-bootstrap-recovery',
+    }).catch(() => null)
+
+    const retryCorpus = `${retryEnsureResult?.summary || ''}\n${retryEnsureResult?.stderr || ''}\n${retryEnsureResult?.stdout || ''}`
+    const retryStillPluginFailure =
+      !retryEnsureResult?.ok
+      && (
+        retryEnsureResult?.stateCode === 'plugin_load_failure'
+        || /plugin|allowlist|manifest|unknown channel id|failed to load plugin/i.test(retryCorpus)
+      )
+
+    if (retryStillPluginFailure && api.repairManagedChannelPlugin) {
+      notify('gateway', 'active', '正在执行托管插件定向修复（飞书 / 个人微信）...')
+      await api.repairManagedChannelPlugin('feishu').catch(() => null)
+      await api.repairManagedChannelPlugin('openclaw-weixin').catch(() => null)
+      if (api.gatewayForceRestart) {
+        await api.gatewayForceRestart().catch(() => null)
+      }
+      retryEnsureResult = await api.ensureGatewayRunning({
+        skipRuntimePrecheck: true,
+        requestId: 'dashboard-entry-bootstrap-recovery-managed',
+      }).catch(() => null)
+    }
+
+    if (retryEnsureResult && retryEnsureResult.ok && retryEnsureResult.running === true) {
+      notify('gateway', 'active', '自动修复已完成，正在重新确认网关状态...')
+      return retryEnsureResult
+    }
+    return null
+  }
 
   notify('config', 'active', '正在读取共享配置...')
   const config = await api.readConfig().catch((error) => {
@@ -286,7 +355,7 @@ export async function runDashboardEntryBootstrapFlow(
 
   const softWarnings: string[] = []
   notify('gateway', 'active', '正在自动启动并确认 Gateway...')
-  const ensureResult = await api.ensureGatewayRunning({
+  let ensureResult = await api.ensureGatewayRunning({
     skipRuntimePrecheck: true,
     requestId: 'dashboard-entry-bootstrap',
   }).catch((error) => {
@@ -295,9 +364,28 @@ export async function runDashboardEntryBootstrapFlow(
     throw failureView
   })
   if (!ensureResult.ok || ensureResult.running !== true) {
-    const failureView = traceAndResolveView(ensureResult)
-    notify('gateway', 'error', failureView.detail)
-    throw failureView
+    const recoveredResult = await attemptForcedGatewayRecovery(ensureResult)
+    if (recoveredResult) {
+      ensureResult = recoveredResult
+    }
+  }
+  if (!ensureResult.ok || ensureResult.running !== true) {
+    const pluginLikeFailure =
+      ensureResult.stateCode === 'plugin_load_failure'
+      || /plugin|allowlist|manifest|unknown channel id|failed to load plugin/i.test(
+        `${ensureResult.summary || ''}\n${ensureResult.stderr || ''}\n${ensureResult.stdout || ''}`
+      )
+    if (pluginLikeFailure) {
+      forceDegradedGatewayBypass = true
+      softWarnings.push(
+        '当前机器的网关插件链路仍未完全恢复，已降级放行到控制面板。请在控制面板内执行插件修复后再重试网关。'
+      )
+      notify('gateway', 'warning', '网关插件链路异常，已降级放行进入控制面板。')
+    } else {
+      const failureView = traceAndResolveView(ensureResult)
+      notify('gateway', 'error', failureView.detail)
+      throw failureView
+    }
   }
 
   notify('gateway', 'active', 'Gateway 已启动，正在读取控制面板首屏状态...')
@@ -330,12 +418,14 @@ export async function runDashboardEntryBootstrapFlow(
       softWarnings.push(
         'Gateway 健康探针暂未确认可用，但运行时状态已指示 Gateway 正在运行，控制面板会按已启动状态继续。'
       )
-    } else {
+    } else if (!forceDegradedGatewayBypass) {
       const failureView = traceAndResolveView(
         buildGatewayHealthFailureInput(ensureResult, health, chatAvailability)
       )
       notify('gateway', 'error', failureView.detail)
       throw failureView
+    } else {
+      softWarnings.push('网关健康探针未通过，当前以降级模式进入控制面板。')
     }
   }
   if (
@@ -346,7 +436,7 @@ export async function runDashboardEntryBootstrapFlow(
   ) {
     softWarnings.push('Gateway 已自动启动，但实时状态快照还未刷新完成，控制面板会按已启动状态继续。')
   }
-  const gatewayRunning = true
+  const gatewayRunning = !forceDegradedGatewayBypass
   notify('gateway', 'done', buildGatewayReadyDetail(ensureResult, health, chatAvailability, runtimeStore))
 
   const upstreamModelState = await readOpenClawUpstreamModelState(api.getModelUpstreamState)
@@ -404,6 +494,7 @@ export default function GatewayBootstrapGate({
   const [fatalError, setFatalError] = useState<GatewayBootstrapFailureView | null>(null)
   const [softWarnings, setSoftWarnings] = useState<string[]>([])
   const [bootstrapping, setBootstrapping] = useState(false)
+  const [fallbackSnapshot, setFallbackSnapshot] = useState<DashboardEntrySnapshot | null>(null)
   const activeAttemptRef = useRef(0)
   const bootstrappingRef = useRef(false)
 
@@ -437,6 +528,7 @@ export default function GatewayBootstrapGate({
     setTaskDetails(createTaskDetailState())
     setFatalError(null)
     setSoftWarnings([])
+    setFallbackSnapshot(null)
 
     try {
       const result = await runDashboardEntryBootstrapFlow(window.api, {
@@ -444,6 +536,7 @@ export default function GatewayBootstrapGate({
       })
       if (attemptId !== activeAttemptRef.current) return
       setSoftWarnings(result.softWarnings)
+      setFallbackSnapshot(result.snapshot)
       window.setTimeout(() => {
         if (attemptId === activeAttemptRef.current) {
           onReady(result.snapshot)
@@ -460,6 +553,13 @@ export default function GatewayBootstrapGate({
               ['先点击“重试最终检查”再试一次。', '如果问题持续存在，再回到配置向导重新整理当前机器上的配置。']
             )
       setFatalError(fallbackView)
+      setFallbackSnapshot({
+        gatewayRunning: false,
+        config: null,
+        pairingSummary: null,
+        modelStatus: null,
+        loadedAt: new Date().toISOString(),
+      })
     } finally {
       if (attemptId === activeAttemptRef.current) {
         bootstrappingRef.current = false
@@ -530,6 +630,26 @@ export default function GatewayBootstrapGate({
           <Button onClick={() => void runBootstrap()} disabled={bootstrapping} size="xs">
             {bootstrapping ? '检查中...' : fatalError ? '重试' : '重新检查'}
           </Button>
+          {fatalError && (
+            <Button
+              variant="light"
+              color="yellow"
+              size="xs"
+              onClick={() => {
+                onReady(
+                  fallbackSnapshot || {
+                    gatewayRunning: false,
+                    config: null,
+                    pairingSummary: null,
+                    modelStatus: null,
+                    loadedAt: new Date().toISOString(),
+                  }
+                )
+              }}
+            >
+              强制进入
+            </Button>
+          )}
           <Button onClick={onReconfigure} variant="default" size="xs" disabled={bootstrapping}>
             配置向导
           </Button>

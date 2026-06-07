@@ -65,10 +65,10 @@ export default function OpenClawClassify({
 
   return (
     <div className="w-full max-w-2xl rounded-2xl border app-border app-bg-inset p-6 shadow-2xl">
-      <Text size="xs" tt="uppercase" lts="0.24em" c="success.4" style={{ opacity: 0.8 }}>OpenClaw Classify</Text>
+      <Text size="xs" tt="uppercase" lts="0.24em" c="success.4" style={{ opacity: 0.8 }}>Mclaw 环境检查</Text>
       <Title order={2} size="h4" fw={600} mt="xs" c="var(--app-text-primary)">安装状态与版本分流</Title>
       <Text size="sm" lh="1.625" mt="xs" c="var(--app-text-tertiary)">
-        Qclaw 会根据当前安装状态决定是直接进入控制面板，还是继续进行首次配置。
+        Mclaw 会根据当前环境状态决定是直接进入控制面板，还是继续进行首次配置。
       </Text>
 
       <div className="mt-5 rounded-xl border app-border app-bg-tertiary p-4">
@@ -103,7 +103,7 @@ export default function OpenClawClassify({
         {checkingLatest && activeCandidate && (
           <div className="mt-4 flex items-center gap-3 text-sm app-text-tertiary">
             <div className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400 border-t-transparent" />
-            <span>正在检查 OpenClaw 最新版本...</span>
+            <span>正在检查本机运行组件版本...</span>
           </div>
         )}
 
@@ -122,13 +122,13 @@ export default function OpenClawClassify({
         <div className="mt-5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4">
           <Title order={3} size="sm" fw={500} c="var(--mantine-color-success-3)">
             {freshManagedInstall
-              ? '已安装最新 OpenClaw，并由 Qclaw 管理'
-              : '已检测到 OpenClaw，但尚未完成首次初始化'}
+              ? '本机运行组件已准备完成，并由 Mclaw 管理'
+              : '已检测到本机运行组件，但尚未完成首次初始化'}
           </Title>
           <Text size="sm" lh="1.625" mt="xs" style={{ color: 'rgba(167, 243, 208, 0.85)' }}>
             {freshManagedInstall
-              ? '当前环境是本次启动中新安装的 OpenClaw，下一步将进入首次配置流程。'
-              : '当前机器已有 OpenClaw CLI，但还没有生成可直接启动 Gateway 的共享配置。下一步必须先进入配置向导执行初始化。'}
+              ? '当前环境是本次启动中新准备的本机运行组件，下一步将进入首次配置流程。'
+              : '当前机器已有本机运行组件，但还没有生成可直接启动本机服务的共享配置。下一步必须先进入配置向导执行初始化。'}
           </Text>
           <Button
             onClick={() => onProceed('setup')}
@@ -141,9 +141,9 @@ export default function OpenClawClassify({
         </div>
       ) : classification.versionStatus === 'equal' ? (
         <div className="mt-5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4">
-          <Title order={3} size="sm" fw={500} c="var(--mantine-color-success-3)">当前 OpenClaw 已与最新版本一致</Title>
+          <Title order={3} size="sm" fw={500} c="var(--mantine-color-success-3)">当前本机运行组件已与目标版本一致</Title>
           <Text size="sm" lh="1.625" mt="xs" style={{ color: 'rgba(167, 243, 208, 0.85)' }}>
-            Qclaw 不会改写你现有的安装，只会作为监控与控制面板使用。
+            Mclaw 不会改写你现有的安装，只会作为监控与控制面板使用。
           </Text>
           <Button
             onClick={() => onProceed('dashboard')}
@@ -159,7 +159,7 @@ export default function OpenClawClassify({
           <div className="rounded-xl border app-border app-bg-tertiary p-4">
             <Title order={3} size="sm" fw={500} c="var(--app-text-primary)">选项 1：仅接管，不升级</Title>
             <Text size="sm" lh="1.625" mt="xs" c="var(--app-text-tertiary)">
-              保留当前已安装的低版本 OpenClaw，不执行程序升级，先进入面板观察和接管。
+              保留当前已安装的低版本本机运行组件，不执行程序升级，先进入面板观察和接管。
             </Text>
             <Button
               onClick={() => onProceed('dashboard')}
@@ -174,7 +174,7 @@ export default function OpenClawClassify({
           <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">
             <Title order={3} size="sm" fw={500} c="warning.3">选项 2：升级现有安装</Title>
             <Text size="sm" lh="1.625" mt="xs" style={{ color: 'rgba(254, 243, 199, 0.85)' }}>
-              升级会保留原位置、原配置和原记忆数据，不会新装第二份 OpenClaw。若当前来源无法安全自动升级，升级中心会明确告诉你原因。
+              升级会保留原位置、原配置和原记忆数据，不会新装第二份本机运行组件。若当前来源无法安全自动升级，升级中心会明确告诉你原因。
             </Text>
             <Button
               onClick={() => onProceed('dashboard', { openUpdateCenter: true })}
@@ -188,7 +188,7 @@ export default function OpenClawClassify({
         </div>
       ) : classification.versionStatus === 'latest-unknown' ? (
         <div className="mt-5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">
-          <Title order={3} size="sm" fw={500} c="warning.3">已检测到 OpenClaw，但最新版本暂时未知</Title>
+          <Title order={3} size="sm" fw={500} c="warning.3">已检测到本机运行组件，但目标版本暂时未知</Title>
           <Text size="sm" lh="1.625" mt="xs" style={{ color: 'rgba(254, 243, 199, 0.85)' }}>
             因网络或远端解析失败，当前无法确认最新版本。你仍可以先进入控制面板，不会触发自动升级。
           </Text>

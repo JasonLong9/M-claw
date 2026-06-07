@@ -884,14 +884,6 @@ export default function Dashboard({
     }
   }
 
-  const handleOpenWorkspace = async () => {
-    try {
-      await window.api.openOpenClawWorkspace()
-    } catch (e) {
-      console.error('打开工作区失败', e)
-    }
-  }
-
   const handleForceRestart = async () => {
     setForceRestarting(true)
     const notificationId = notifications.show({
@@ -1038,7 +1030,7 @@ export default function Dashboard({
         const gatewayReady = reloadResult.ok && reloadResult.running === true
         if (!gatewayReady) {
           if (isDashboardPluginCenterRepairableReloadState(reloadResult.stateCode)) {
-            appendPluginCenterLog(`⚠️ Gateway 重载命中可修复状态：${reloadResult.summary || reloadResult.stderr || '待继续复检'}`)
+      appendPluginCenterLog(`⚠️ 本机服务重载命中可修复状态：${reloadResult.summary || reloadResult.stderr || '待继续复检'}`)
             const ensureResult = await window.api.ensureGatewayRunning({ skipRuntimePrecheck: true })
             const compatibleRecovered = (!ensureResult.ok || ensureResult.running !== true)
               ? await confirmGatewayReadyAfterCompatibleRecovery()
@@ -1048,7 +1040,7 @@ export default function Dashboard({
                 ensureResult.summary
                   || ensureResult.stderr
                   || ensureResult.stdout
-                  || 'Gateway 重载失败'
+            || '本机服务重载失败'
               )
             }
             markChatGatewayWarmupHint()
@@ -1061,7 +1053,7 @@ export default function Dashboard({
               reloadResult.summary
                 || reloadResult.stderr
                 || reloadResult.stdout
-                || 'Gateway 重载失败'
+          || '本机服务重载失败'
             )
           }
         } else {
@@ -1286,16 +1278,21 @@ export default function Dashboard({
                 打开 OpenClaw 开发者面板
               </Button>
             </Tooltip>
-            <Tooltip label={tooltips.dashboard.openWorkspaceFolder} withArrow>
-              <Button
-                onClick={handleOpenWorkspace}
-                variant="light"
-                size="xs"
-                fullWidth
-                className="cursor-pointer"
-              >
-                打开 OpenClaw 工作区
-              </Button>
+            <Tooltip
+              label="Mclaw 内部运行目录已受保护，避免误删导致应用损坏；如需导出结果，请使用桌面、文档或项目目录。"
+              withArrow
+            >
+              <span className="block">
+                <Button
+                  variant="light"
+                  size="xs"
+                  fullWidth
+                  disabled
+                  className="cursor-not-allowed"
+                >
+                  Mclaw 内部工作区已受保护
+                </Button>
+              </span>
             </Tooltip>
           </div>
         </Collapse>

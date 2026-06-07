@@ -1,0 +1,17 @@
+{
+  "version": "2026-05-18.2",
+  "signedFile": "skills-whitelist.trust.json",
+  "signedHash": "bd7a1afe2503fe097075d6667defeb6b8088b543e89d4d05e4d34a115b8d4fdf",
+  "signatures": [
+    {
+      "keyId": "mclaw-skills-trust-2026-05-a",
+      "algorithm": "ed25519",
+      "signatureBase64": "zu+Vcpn4gbZXybpIAVUNeHNECu/vUJbh6CMBGi/4KV8VHA/k52uwYwmsJgqO6vzNXV2CaKwzOWsGf1nWsuUJCQ=="
+    },
+    {
+      "keyId": "mclaw-skills-trust-2026-05-b",
+      "algorithm": "ed25519",
+      "signatureBase64": "7Ugb/gc6l111gg1F/SLqxKMimpWydHFPEiT1qSfsmJPkiNcm4pGOrJZmrhWsFeZ2ef4cQr5wSQ9SVnDqY/DNBg=="
+    }
+  ]
+}

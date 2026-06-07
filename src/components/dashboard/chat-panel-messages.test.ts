@@ -76,6 +76,42 @@ describe('chat panel message helpers', () => {
     })
   })
 
+  it('shows optimistic user and thinking bubbles during send preflight', () => {
+    const messages = buildRenderedChatMessages({
+      baseMessages: [
+        createMessage({
+          id: 'assistant-1',
+          role: 'assistant',
+          text: '上一轮结果',
+        }),
+      ],
+      pendingUserText: '请继续修复第二个问题',
+      pendingAssistant: {
+        sending: true,
+        started: true,
+        stopping: false,
+        text: '',
+      },
+      now: () => 300,
+    })
+
+    expect(messages.map((message) => message.id)).toEqual([
+      'assistant-1',
+      '__pending-user__',
+      '__pending-assistant__',
+    ])
+    expect(messages.at(-2)).toMatchObject({
+      role: 'user',
+      text: '请继续修复第二个问题',
+      status: 'pending',
+    })
+    expect(messages.at(-1)).toMatchObject({
+      role: 'assistant',
+      text: 'AI 正在思考...',
+      status: 'pending',
+    })
+  })
+
   it('strips embedded timestamp prefixes from user message bodies for display', () => {
     expect(resolveChatMessageDisplayText('[Sat 2026-03-28 01:05 GMT+8] 你好', 'user')).toEqual({
       body: '你好',
@@ -150,6 +186,28 @@ describe('chat panel message helpers', () => {
     ).toEqual(['C:\\Users\\James\\Desktop\\广州今天天气.txt'])
   })
 
+  it('does not mistake https urls for local Windows file paths', () => {
+    expect(
+      collectAssistantLocalPaths(
+        [
+          '接口地址：https://api.replicate.com/v1/predictions',
+          '文档里还提到了 https://example.com/output/index.html',
+        ].join('\n')
+      )
+    ).toEqual([])
+  })
+
+  it('keeps real local file buttons while ignoring adjacent remote urls', () => {
+    expect(
+      collectAssistantLocalPaths(
+        [
+          '接口地址：https://api.replicate.com/v1/predictions',
+          '已保存到 C:\\Users\\James\\Desktop\\AI试衣间开发文档.md',
+        ].join('\n')
+      )
+    ).toEqual(['C:\\Users\\James\\Desktop\\AI试衣间开发文档.md'])
+  })
+
   it('hides internal HEARTBEAT runtime lines from visible assistant text', () => {
     expect(
       resolveChatMessageDisplayText(
@@ -162,6 +220,43 @@ describe('chat panel message helpers', () => {
     ).toMatchObject({
       body: '你好！我是 OpenClaw 的助手，很高兴见到你。',
       reasoning: '',
+    })
+  })
+
+  it('does not render OpenClaw log-follow diagnostics as assistant answers', () => {
+    expect(resolveChatMessageDisplayText('Logs: openclaw logs --follow', 'assistant')).toEqual({
+      body: '',
+      embeddedTimestamp: '',
+      reasoning: '',
+    })
+
+    const messages = buildRenderedChatMessages({
+      baseMessages: [
+        createMessage({
+          id: 'user-1',
+          role: 'user',
+          text: 'hello',
+        }),
+        createMessage({
+          id: 'assistant-1',
+          role: 'assistant',
+          text: 'Logs: openclaw logs --follow',
+          model: 'gateway-injected',
+        }),
+      ],
+      pendingAssistant: {
+        sending: false,
+        started: false,
+        stopping: false,
+      },
+      now: () => 100,
+    })
+
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({
+      id: 'user-1',
+      role: 'user',
+      text: 'hello',
     })
   })
 
@@ -316,5 +411,92 @@ describe('chat panel message helpers', () => {
         renderedMessageCount: 0,
       })
     ).toBe(true)
+    expect(
+      shouldShowFullscreenChatLoader({
+        loadingSessions: true,
+        loadingTranscript: true,
+        renderedMessageCount: 0,
+        suppressFullscreenLoader: true,
+      })
+    ).toBe(false)
+  })
+
+  it('hides internal memory bootstrap missing-file lines from reasoning and visible text', () => {
+    expect(
+      resolveChatMessageDisplayText(
+        [
+          '思考过程',
+          'memory dir not found',
+          'MEMORY.md not found',
+          '我先检查当前环境。',
+          '已完成，当前对话可以继续使用。',
+        ].join('\n'),
+        'assistant'
+      )
+    ).toEqual({
+      body: '已完成，当前对话可以继续使用。',
+      embeddedTimestamp: '',
+      reasoning: '我先检查当前环境。',
+    })
+  })
+
+  it('hides PowerShell command error diagnostics from assistant reasoning', () => {
+    expect(
+      resolveChatMessageDisplayText(
+        [
+          'Get-ChildItem : ��������������α��ڲ�����',
+          '������� �λ�:1 �ַ�: 4',
+          '+  ~~~',
+          '+ CategoryInfo          : InvalidArgument: (:) [Get-ChildItem], ParameterBindingException',
+          '+ FullyQualifiedErrorId : NamedParameterNotFound,Microsoft.PowerShell.Commands.GetChildItemCommand',
+          '(Command exited with code 1)',
+          '你好！我已经可以继续对话。',
+        ].join('\n'),
+        'assistant'
+      )
+    ).toEqual({
+      body: '你好！我已经可以继续对话。',
+      embeddedTimestamp: '',
+      reasoning: '',
+    })
+  })
+
+  it('hides memory probe shell diagnostics from assistant reasoning', () => {
+    expect(
+      resolveChatMessageDisplayText(
+        [
+          '+ ls -la memory/ 2>$null; if (-not (Test-Path memory/)) { Write-Output ...',
+          'NO_MEMORY_DIR',
+          '你好！看起来我们是第一次见面。',
+        ].join('\n'),
+        'assistant'
+      )
+    ).toEqual({
+      body: '你好！看起来我们是第一次见面。',
+      embeddedTimestamp: '',
+      reasoning: '',
+    })
+  })
+
+  it('removes metadata json blocks from assistant reasoning text', () => {
+    expect(
+      resolveChatMessageDisplayText(
+        [
+          '思考过程',
+          '{',
+          '"results": [],',
+          '"provider": "auto",',
+          '"citations": "auto",',
+          '"mode": "hybrid"',
+          '}',
+          '最终回复：你好',
+        ].join('\n'),
+        'assistant'
+      )
+    ).toEqual({
+      body: '最终回复：你好',
+      embeddedTimestamp: '',
+      reasoning: '',
+    })
   })
 })

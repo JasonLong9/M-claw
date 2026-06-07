@@ -1,0 +1,12 @@
+{
+  "version": "2026-05-18.1",
+  "riskThreshold": 100,
+  "eventWeights": {
+    "exec": 60,
+    "file_write": 35,
+    "file_read_sensitive": 30,
+    "network_external": 40,
+    "env_sensitive_access": 45
+  }
+}
+

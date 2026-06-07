@@ -43,8 +43,8 @@ export interface DashboardEntrySnapshot {
 export const DASHBOARD_ENTRY_TASKS: DashboardEntryBootstrapTaskDefinition[] = [
   {
     key: 'gateway',
-    label: '启动并确认 Gateway',
-    pendingDescription: '进入控制面板前先自动启动并确认 Gateway 已就绪，避免首屏仍显示离线。',
+    label: '准备本机服务',
+    pendingDescription: '进入控制面板前先准备本机服务，确认本地对话入口可用。',
   },
   {
     key: 'config',
@@ -110,8 +110,8 @@ export function resolveDashboardEntryBootstrapCopy(
 
   if (state.gateway === 'active') {
     return {
-      title: '启动并确认 Gateway',
-      detail: '正在自动启动 Gateway，并确认本地对话入口已经就绪。',
+      title: '准备本机服务',
+      detail: '正在准备本机服务，并确认本地对话入口可用。',
     }
   }
 

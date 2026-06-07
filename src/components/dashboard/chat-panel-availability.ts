@@ -34,9 +34,9 @@ export function deriveChatPanelAvailabilityView(
     input.availabilityState === 'loading'
       ? '正在读取聊天状态...'
       : input.availabilityState === 'degraded'
-      ? '网关连接不稳定，正在自动恢复'
+      ? '本机服务连接不稳定，正在自动恢复'
       : input.availabilityState === 'offline'
-        ? '模型已配置，但网关当前未运行'
+        ? '模型已配置，但本机服务当前未运行'
         : input.availabilityState === 'no-model'
           ? '当前还没有可直接对话的模型'
           : input.availabilityState === 'error'
@@ -69,7 +69,7 @@ export function deriveChatPanelAvailabilityView(
           ? '待连接模型'
           : input.availabilityState === 'error'
             ? '状态异常'
-            : '网关离线'
+            : '本机服务离线'
 
   return {
     isReady,

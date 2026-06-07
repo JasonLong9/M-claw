@@ -101,6 +101,34 @@ describe('preload api model channels', () => {
       reason: 'channels-remove-channel',
     }, undefined)
 
+    const managedCandidate = {
+      candidateId: 'candidate-1',
+      binaryPath: 'C:/openclaw/openclaw.cmd',
+      resolvedBinaryPath: 'C:/openclaw/openclaw.cmd',
+      packageRoot: 'C:/openclaw',
+      version: '2026.6.7',
+      installSource: 'custom',
+      isPathActive: true,
+      configPath: 'C:/Users/James/AppData/Roaming/Mclaw/openclaw-state/.openclaw/openclaw.json',
+      stateRoot: 'C:/Users/James/AppData/Roaming/Mclaw/openclaw-state/.openclaw',
+      displayConfigPath: 'C:/Users/James/AppData/Roaming/Mclaw/openclaw-state/.openclaw/openclaw.json',
+      displayStateRoot: 'C:/Users/James/AppData/Roaming/Mclaw/openclaw-state/.openclaw',
+    }
+
+    await api.getManagedChannelPluginStatus('openclaw-weixin', managedCandidate as any)
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      'channels:managed:status',
+      'openclaw-weixin',
+      managedCandidate
+    )
+
+    await api.repairManagedChannelPlugin('openclaw-weixin', managedCandidate as any)
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      'channels:managed:repair',
+      'openclaw-weixin',
+      managedCandidate
+    )
+
     await api.getOpenClawOwnership('fingerprint-1')
     expect(invokeMock).toHaveBeenLastCalledWith('openclaw:ownership:get', 'fingerprint-1')
 

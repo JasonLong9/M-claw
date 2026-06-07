@@ -19,7 +19,7 @@ vi.mock('../cli', () => ({
   readConfig: readConfigMock,
 }))
 
-import { listWeixinAccountState, removeWeixinAccountState } from '../weixin-account-state'
+import { getWeixinStatePathDiagnostic, listWeixinAccountState, removeWeixinAccountState } from '../weixin-account-state'
 
 function joinPath(...parts: string[]): string {
   return parts.join('/').replace(/\/+/g, '/')
@@ -27,9 +27,15 @@ function joinPath(...parts: string[]): string {
 
 describe('weixin-account-state', () => {
   let homeDir = ''
+  let previousUserProfile: string | undefined
+  let previousHome: string | undefined
 
   beforeEach(async () => {
     homeDir = await mkdtemp('/tmp/qclaw-weixin-state-')
+    previousUserProfile = process.env.USERPROFILE
+    previousHome = process.env.HOME
+    process.env.USERPROFILE = homeDir
+    process.env.HOME = homeDir
     getOpenClawPathsMock.mockReset()
     readConfigMock.mockReset()
     resetOpenClawLegacyEnvWarningsForTests()
@@ -38,6 +44,10 @@ describe('weixin-account-state', () => {
   })
 
   afterEach(async () => {
+    if (previousUserProfile == null) delete process.env.USERPROFILE
+    else process.env.USERPROFILE = previousUserProfile
+    if (previousHome == null) delete process.env.HOME
+    else process.env.HOME = previousHome
     if (homeDir) {
       await rm(homeDir, { recursive: true, force: true })
     }
@@ -191,5 +201,146 @@ describe('weixin-account-state', () => {
     expect(
       JSON.parse(await readFile(joinPath(weixinStateDir, 'accounts.json'), 'utf-8'))
     ).toEqual(['keep-account'])
+  })
+
+  it('mirrors fallback personal WeChat account credentials into the active state dir when only the default .openclaw copy exists', async () => {
+    const previousUserProfile = process.env.USERPROFILE
+    const previousHome = process.env.HOME
+    const defaultRoot = await mkdtemp('/tmp/qclaw-weixin-default-state-')
+    process.env.USERPROFILE = defaultRoot
+    process.env.HOME = defaultRoot
+
+    try {
+      const fallbackWeixinStateDir = joinPath(defaultRoot, '.openclaw', 'openclaw-weixin')
+      const fallbackAccountsDir = joinPath(fallbackWeixinStateDir, 'accounts')
+      await mkdir(fallbackAccountsDir, { recursive: true })
+      await writeFile(
+        joinPath(fallbackWeixinStateDir, 'accounts.json'),
+        JSON.stringify(['fallback-account'], null, 2),
+        'utf-8'
+      )
+      await writeFile(
+        joinPath(fallbackAccountsDir, 'fallback-account.json'),
+        JSON.stringify({
+          token: 'fallback-token',
+          baseUrl: 'https://ilinkai.weixin.qq.com',
+          userId: 'fallback@im.wechat',
+        }),
+        'utf-8'
+      )
+
+      const accounts = await listWeixinAccountState()
+
+      expect(accounts).toEqual([
+        {
+          accountId: 'fallback-account',
+          configured: true,
+          baseUrl: 'https://ilinkai.weixin.qq.com',
+          userId: 'fallback@im.wechat',
+          enabled: true,
+          name: undefined,
+        },
+      ])
+      expect(existsSync(joinPath(homeDir, 'openclaw-weixin', 'accounts', 'fallback-account.json'))).toBe(true)
+      expect(
+        JSON.parse(await readFile(joinPath(homeDir, 'openclaw-weixin', 'accounts.json'), 'utf-8'))
+      ).toEqual(['fallback-account'])
+    } finally {
+      if (previousUserProfile == null) delete process.env.USERPROFILE
+      else process.env.USERPROFILE = previousUserProfile
+      if (previousHome == null) delete process.env.HOME
+      else process.env.HOME = previousHome
+      await rm(defaultRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('removes personal WeChat account files from both active and fallback state dirs', async () => {
+    const previousUserProfile = process.env.USERPROFILE
+    const previousHome = process.env.HOME
+    const defaultRoot = await mkdtemp('/tmp/qclaw-weixin-default-remove-')
+    process.env.USERPROFILE = defaultRoot
+    process.env.HOME = defaultRoot
+
+    try {
+      const activeWeixinStateDir = joinPath(homeDir, 'openclaw-weixin')
+      const activeAccountsDir = joinPath(activeWeixinStateDir, 'accounts')
+      const activeCredentialsDir = joinPath(homeDir, 'credentials')
+      await mkdir(activeAccountsDir, { recursive: true })
+      await mkdir(activeCredentialsDir, { recursive: true })
+      await writeFile(joinPath(activeWeixinStateDir, 'accounts.json'), JSON.stringify(['wx-account'], null, 2), 'utf-8')
+      await writeFile(joinPath(activeAccountsDir, 'wx-account.json'), '{}', 'utf-8')
+      await writeFile(joinPath(activeCredentialsDir, 'openclaw-weixin-wx-account-allowFrom.json'), '{}', 'utf-8')
+
+      const fallbackStateRoot = joinPath(defaultRoot, '.openclaw')
+      const fallbackWeixinStateDir = joinPath(fallbackStateRoot, 'openclaw-weixin')
+      const fallbackAccountsDir = joinPath(fallbackWeixinStateDir, 'accounts')
+      const fallbackCredentialsDir = joinPath(fallbackStateRoot, 'credentials')
+      await mkdir(fallbackAccountsDir, { recursive: true })
+      await mkdir(fallbackCredentialsDir, { recursive: true })
+      await writeFile(joinPath(fallbackWeixinStateDir, 'accounts.json'), JSON.stringify(['wx-account'], null, 2), 'utf-8')
+      await writeFile(joinPath(fallbackAccountsDir, 'wx-account.json'), '{}', 'utf-8')
+      await writeFile(joinPath(fallbackCredentialsDir, 'openclaw-weixin-wx-account-allowFrom.json'), '{}', 'utf-8')
+
+      const result = await removeWeixinAccountState('wx-account')
+
+      expect(result).toEqual({ ok: true })
+      expect(existsSync(joinPath(activeAccountsDir, 'wx-account.json'))).toBe(false)
+      expect(existsSync(joinPath(fallbackAccountsDir, 'wx-account.json'))).toBe(false)
+      expect(existsSync(joinPath(activeCredentialsDir, 'openclaw-weixin-wx-account-allowFrom.json'))).toBe(false)
+      expect(existsSync(joinPath(fallbackCredentialsDir, 'openclaw-weixin-wx-account-allowFrom.json'))).toBe(false)
+      expect(
+        JSON.parse(await readFile(joinPath(activeWeixinStateDir, 'accounts.json'), 'utf-8'))
+      ).toEqual([])
+      expect(
+        JSON.parse(await readFile(joinPath(fallbackWeixinStateDir, 'accounts.json'), 'utf-8'))
+      ).toEqual([])
+    } finally {
+      if (previousUserProfile == null) delete process.env.USERPROFILE
+      else process.env.USERPROFILE = previousUserProfile
+      if (previousHome == null) delete process.env.HOME
+      else process.env.HOME = previousHome
+      await rm(defaultRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('does not report a path mismatch once fallback credentials have been mirrored into the active state dir', async () => {
+    const previousUserProfile = process.env.USERPROFILE
+    const previousHome = process.env.HOME
+    const defaultRoot = await mkdtemp('/tmp/qclaw-weixin-default-diagnostic-')
+    process.env.USERPROFILE = defaultRoot
+    process.env.HOME = defaultRoot
+
+    try {
+      const fallbackWeixinStateDir = joinPath(defaultRoot, '.openclaw', 'openclaw-weixin')
+      const fallbackAccountsDir = joinPath(fallbackWeixinStateDir, 'accounts')
+      await mkdir(fallbackAccountsDir, { recursive: true })
+      await writeFile(
+        joinPath(fallbackWeixinStateDir, 'accounts.json'),
+        JSON.stringify(['diagnostic-account'], null, 2),
+        'utf-8'
+      )
+      await writeFile(
+        joinPath(fallbackAccountsDir, 'diagnostic-account.json'),
+        JSON.stringify({
+          token: 'diagnostic-token',
+          baseUrl: 'https://ilinkai.weixin.qq.com',
+          userId: 'diagnostic@im.wechat',
+        }),
+        'utf-8'
+      )
+
+      await listWeixinAccountState()
+      const diagnostic = await getWeixinStatePathDiagnostic()
+
+      expect(diagnostic.activeConfiguredAccounts).toBe(1)
+      expect(diagnostic.defaultConfiguredAccounts).toBe(1)
+      expect(diagnostic.possiblePathMismatch).toBe(false)
+    } finally {
+      if (previousUserProfile == null) delete process.env.USERPROFILE
+      else process.env.USERPROFILE = previousUserProfile
+      if (previousHome == null) delete process.env.HOME
+      else process.env.HOME = previousHome
+      await rm(defaultRoot, { recursive: true, force: true })
+    }
   })
 })

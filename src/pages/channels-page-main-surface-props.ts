@@ -18,6 +18,7 @@ export function useChannelsPageMainSurfaceProps({
   setError,
   channels,
   togglingChannelId,
+  removingChannelId,
   repairingPluginChannelId,
   handleOpenModelConfig,
   handleToggleChannelEnabled,
@@ -63,6 +64,7 @@ export function useChannelsPageMainSurfaceProps({
   const channelCardsProps: ComponentProps<typeof ChannelsPageChannelCards> = {
     channels,
     togglingChannelId,
+    removingChannelId,
     repairingPluginChannelId,
     getPlatformInfo,
     getStatusBadges: (channel) => deriveChannelStatusBadges(channel, {

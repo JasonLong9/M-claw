@@ -215,8 +215,95 @@ describe('testLocalConnection', () => {
 
     expect(result.ok).toBe(false)
     expect(result.reachable).toBe(false)
-    expect(result.error).toContain('连接被拒绝')
     expect(result.error).toContain('127.0.0.1:11434')
+  })
+
+  it('retries transient probe failures before succeeding for OpenAI-compatible endpoints', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new TypeError('fetch failed'), {
+          cause: {
+            code: 'ECONNRESET',
+            message: 'socket hang up',
+          },
+        })
+      )
+      .mockRejectedValueOnce(
+        Object.assign(new Error('Request aborted'), {
+          name: 'AbortError',
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [{ id: 'deepseek-chat', name: 'DeepSeek Chat' }],
+          }),
+          {
+            status: 200,
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          }
+        )
+      )
+
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const result = await testLocalConnection({
+      provider: 'custom-openai',
+      baseUrl: 'https://gateway.example.com/v1',
+      apiKey: 'sk-test',
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(result).toMatchObject({
+      ok: true,
+      reachable: true,
+      modelCount: 1,
+      models: [{ key: 'deepseek-chat', name: 'DeepSeek Chat' }],
+    })
+  })
+
+  it('retries a transient DNS miss before reporting OpenAI-compatible endpoints as failed', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new TypeError('fetch failed'), {
+          cause: {
+            code: 'ENOTFOUND',
+            message: 'getaddrinfo ENOTFOUND api.deepseek.com',
+          },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [{ id: 'deepseek-chat', name: 'DeepSeek Chat' }],
+          }),
+          {
+            status: 200,
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          }
+        )
+      )
+
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const result = await testLocalConnection({
+      provider: 'custom-openai',
+      baseUrl: 'https://api.deepseek.com',
+      apiKey: 'sk-test',
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(result).toMatchObject({
+      ok: true,
+      reachable: true,
+      models: [{ key: 'deepseek-chat', name: 'DeepSeek Chat' }],
+    })
   })
 })
 

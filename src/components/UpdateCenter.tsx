@@ -19,7 +19,7 @@ function summarizeOpenClaw(check: CombinedUpdateCheckResult | null): string {
   }
   if (check.openclaw.enforcement === 'manual_block') return `当前版本需手动调整至 ${targetVersion}`
   if (check.openclaw.enforcement === 'auto_correct') return `启动阶段会先自动纠偏至 ${targetVersion}`
-  return '无法确认 OpenClaw 版本状态'
+    return '无法确认本机运行组件版本状态'
 }
 
 function summarizeQClaw(check: CombinedUpdateCheckResult | null): string {
@@ -66,22 +66,22 @@ export default function UpdateCenter({
 
   const UPDATE_OPTIONS = [
     {
-      label: 'OpenClaw',
+      label: '本机运行组件',
       desc: '保留原位置和数据，升级前自动创建快照',
       status: summarizeOpenClaw(check),
       action: () => setShowOpenClawDialog(true),
       btnText: '查看升级',
     },
     {
-      label: 'Qclaw',
-      desc: '只更新面板，不影响 OpenClaw 配置与运行',
+      label: 'Mclaw',
+      desc: '只更新面板，不影响本机配置与运行',
       status: summarizeQClaw(check),
       action: () => setShowQClawDialog(true),
       btnText: '查看更新',
     },
     {
       label: '组合更新',
-      desc: '先下载面板更新，再升级 OpenClaw',
+      desc: '先下载面板更新，再升级本机运行组件',
       status: '升级失败时面板不会自动更新',
       action: () => setShowCombinedDialog(true),
       btnText: '查看组合更新',

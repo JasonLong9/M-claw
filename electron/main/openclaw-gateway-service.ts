@@ -119,7 +119,7 @@ interface EnsureGatewayRunningOptions {
 
 const GATEWAY_SERVICE_NOT_LOADED_PATTERN = /\bgateway service not loaded\b/i
 const UNKNOWN_MANAGED_CHANNEL_ID_PATTERN =
-  /channels\.([A-Za-z0-9._-]+): unknown channel id: ([A-Za-z0-9._-]+)/gi
+  /channels\.([^:\r\n]+):\s*unknown channel id:\s*["']?([A-Za-z0-9._-]+)["']?/gi
 
 const fs = process.getBuiltinModule('node:fs') as typeof import('node:fs')
 const os = process.getBuiltinModule('node:os') as typeof import('node:os')
@@ -602,8 +602,9 @@ function resolveManagedChannelRecordByChannelAlias(channelId: string): ManagedCh
 function extractUnknownManagedChannelRecords(output: string): ManagedChannelPluginRecord[] {
   const seen = new Set<string>()
   const records: ManagedChannelPluginRecord[] = []
+  const text = String(output || '')
 
-  for (const match of String(output || '').matchAll(UNKNOWN_MANAGED_CHANNEL_ID_PATTERN)) {
+  for (const match of text.matchAll(UNKNOWN_MANAGED_CHANNEL_ID_PATTERN)) {
     const candidates = [match[1], match[2]]
       .map((value) => normalizeText(value).toLowerCase())
       .filter(Boolean)
@@ -614,6 +615,20 @@ function extractUnknownManagedChannelRecords(output: string): ManagedChannelPlug
       seen.add(record.channelId)
       records.push(record)
       break
+    }
+  }
+
+  // Fallback matcher for noisy/legacy diagnostics that do not fit strict capture groups.
+  if (records.length === 0) {
+    for (const record of listManagedChannelPluginRecords()) {
+      const id = normalizeText(record.channelId)
+      if (!id) continue
+      const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const fallbackPattern = new RegExp(`unknown channel id:\\s*["']?${escaped}["']?`, 'i')
+      if (!fallbackPattern.test(text)) continue
+      if (seen.has(record.channelId)) continue
+      seen.add(record.channelId)
+      records.push(record)
     }
   }
 
@@ -647,8 +662,25 @@ function ensureManagedPluginAllowed(
     nextConfig.plugins.allow = allow
   }
 
+  const existingEntry =
+    hasOwnRecord(nextConfig.plugins.entries) && hasOwnRecord(nextConfig.plugins.entries[record.pluginId])
+      ? nextConfig.plugins.entries[record.pluginId]
+      : null
+  const normalizedEntry = existingEntry
+    ? { ...existingEntry, enabled: true }
+    : { enabled: true }
+  if (!hasOwnRecord(nextConfig.plugins.entries)) {
+    nextConfig.plugins.entries = {}
+  }
+  const entryChanged =
+    !hasOwnRecord(nextConfig.plugins.entries[record.pluginId])
+    || JSON.stringify(nextConfig.plugins.entries[record.pluginId]) !== JSON.stringify(normalizedEntry)
+  if (entryChanged) {
+    nextConfig.plugins.entries[record.pluginId] = normalizedEntry
+  }
+
   return {
-    changed: sanitized.changed || allowChanged,
+    changed: sanitized.changed || allowChanged || entryChanged,
     config: nextConfig,
   }
 }
@@ -1525,6 +1557,49 @@ async function ensureGatewayRunningImpl(
   options: EnsureGatewayRunningOptions = {}
 ): Promise<GatewayEnsureRunningResult> {
   const existingConfig = await readConfig().catch(() => null)
+  // Defensive cleanup: if a managed channel section exists without the corresponding managed plugin
+  // allow/entry/install context, OpenClaw may fail fast with "unknown channel id".
+  if (hasOwnRecord(existingConfig)) {
+    const pluginIdsInConfig = new Set<string>()
+    const allow = Array.isArray(existingConfig.plugins?.allow) ? existingConfig.plugins.allow : []
+    for (const value of allow) {
+      const id = normalizeText(value)
+      if (id) pluginIdsInConfig.add(id)
+    }
+    if (hasOwnRecord(existingConfig.plugins?.entries)) {
+      for (const key of Object.keys(existingConfig.plugins.entries)) {
+        const id = normalizeText(key)
+        if (id) pluginIdsInConfig.add(id)
+      }
+    }
+    if (hasOwnRecord(existingConfig.plugins?.installs)) {
+      for (const key of Object.keys(existingConfig.plugins.installs)) {
+        const id = normalizeText(key)
+        if (id) pluginIdsInConfig.add(id)
+      }
+    }
+
+    const managedChannels = hasOwnRecord(existingConfig.channels) ? existingConfig.channels : null
+    let cleanedConfig: Record<string, any> | null = null
+    if (managedChannels) {
+      for (const record of listManagedChannelPluginRecords()) {
+        const hasChannelSection = Object.prototype.hasOwnProperty.call(managedChannels, record.channelId)
+        const hasPluginContext = pluginIdsInConfig.has(record.pluginId)
+        if (hasChannelSection && !hasPluginContext) {
+          if (!cleanedConfig) cleanedConfig = cloneConfig(existingConfig)
+          if (hasOwnRecord(cleanedConfig?.channels)) {
+            delete cleanedConfig.channels[record.channelId]
+          }
+        }
+      }
+    }
+    if (cleanedConfig) {
+      await guardedWriteConfig({
+        config: cleanedConfig,
+        reason: 'managed-channel-plugin-repair',
+      }).catch(() => null)
+    }
+  }
   const context = createGatewayRecoveryContext(resolveGatewayConfiguredPort(existingConfig))
   const installedFlags = {
     autoInstalledNode: false,
@@ -1809,6 +1884,39 @@ async function ensureGatewayRunningImpl(
         phase: 'done',
         title: 'Gateway 已确认可用',
         detail: recoverySummary,
+        progress: 100,
+      })
+      return result
+    }
+
+    const managedChannelRepair = await tryRepairUnknownManagedChannels(
+      options,
+      context,
+      joinNonEmpty([startupProbeHealth.stderr, startupProbeHealth.raw, startupProbeHealth.summary])
+    )
+    if (managedChannelRepair?.recovered) {
+      const result = buildGatewayEnsureResult(
+        {
+          ok: true,
+          stdout: managedChannelRepair.health.raw,
+          stderr: managedChannelRepair.health.stderr,
+          code: 0,
+        },
+        {
+          running: true,
+          autoInstalledGatewayService: false,
+          ...installedFlags,
+        },
+        context
+      )
+      await persistGatewayRuntimeReconcile({
+        result,
+        summary: managedChannelRepair.summary,
+      })
+      emitGatewayBootstrapState(options, {
+        phase: 'done',
+        title: 'Gateway 已确认可用',
+        detail: managedChannelRepair.summary,
         progress: 100,
       })
       return result

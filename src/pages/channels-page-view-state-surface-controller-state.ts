@@ -45,6 +45,7 @@ export function buildChannelsPageViewStateSurfaceControllerState({
   interactionControllerState: {
     channelActionState: {
       togglingChannelId,
+      removingChannelId,
       handleRemoveChannel,
       handleToggleChannelEnabled,
     },
@@ -76,6 +77,7 @@ export function buildChannelsPageViewStateSurfaceControllerState({
     handleRefreshChannels,
     handleOpenAddChannel,
     togglingChannelId,
+    removingChannelId,
     repairingPluginChannelId,
     handleOpenModelConfig,
     handleToggleChannelEnabled,

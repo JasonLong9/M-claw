@@ -13,9 +13,13 @@ export function useChannelsPageChannelActions<Channel extends ChannelsPageChanne
   onPageError,
 }: ChannelsPageChannelActionsOptions<Channel>): ChannelsPageChannelActionsResult<Channel> {
   const [togglingChannelId, setTogglingChannelId] = useState<string | null>(null)
+  const [removingChannelId, setRemovingChannelId] = useState<string | null>(null)
 
   const handleRemoveChannel = async (channel: Channel) => {
+    if (removingChannelId && removingChannelId !== channel.id) return
     if (!confirm(`确定要移除渠道「${channel.name}」吗？`)) return
+
+    setRemovingChannelId(channel.id)
     try {
       const config = sanitizeFeishuPluginConfig(await window.api.readConfig())
       if (config) {
@@ -52,6 +56,8 @@ export function useChannelsPageChannelActions<Channel extends ChannelsPageChanne
       }
     } catch (error) {
       onPageError('移除渠道失败：' + (error as Error).message)
+    } finally {
+      setRemovingChannelId(null)
     }
   }
 
@@ -145,6 +151,7 @@ export function useChannelsPageChannelActions<Channel extends ChannelsPageChanne
 
   return {
     togglingChannelId,
+    removingChannelId,
     handleRemoveChannel,
     handleToggleChannelEnabled,
   }

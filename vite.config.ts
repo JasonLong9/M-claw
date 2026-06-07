@@ -3,7 +3,7 @@ import { copyFileSync, existsSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import electron from 'vite-plugin-electron/simple'
+import electronSimple from 'vite-plugin-electron/simple'
 import { sanitizeNodeOptionsForElectron } from './electron/main/node-options'
 import pkg from './package.json'
 import installWebPolicy from './install-web-v1.manifest.json'
@@ -11,6 +11,17 @@ import installWebPolicy from './install-web-v1.manifest.json'
 const DEFAULT_DEV_SERVER_URL =
   (installWebPolicy as { desktop?: { devServer?: { defaultUrl?: string } } }).desktop?.devServer?.defaultUrl ||
   'http://127.0.0.1:7777/'
+
+const electron =
+  typeof electronSimple === 'function'
+    ? electronSimple
+    : (() => {
+        const fallback = electronSimple as unknown as { default?: unknown }
+        if (typeof fallback.default === 'function') {
+          return fallback.default as typeof electronSimple
+        }
+        throw new TypeError('vite-plugin-electron/simple did not expose a callable plugin factory')
+      })()
 
 function isEnabled(value: string | undefined): boolean {
   const normalized = String(value || '').trim().toLowerCase()

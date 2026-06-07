@@ -26,7 +26,9 @@ export interface LocalConnectionTestResult {
   latencyMs?: number
 }
 
-const PROBE_TIMEOUT_MS = 5_000
+const PROBE_TIMEOUT_MS = 10_000
+const PROBE_RETRY_ATTEMPTS = 4
+const PROBE_RETRY_DELAY_MS = 600
 const LOCAL_PROVIDER_DISPLAY_NAMES: Record<LocalProviderType, string> = {
   ollama: 'Ollama',
   vllm: 'vLLM',
@@ -62,6 +64,38 @@ function describeProbeTarget(url: string): { origin: string; host: string } {
       host: url,
     }
   }
+}
+
+function shouldRetryProbeStatus(status: number): boolean {
+  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500
+}
+
+function shouldRetryProbeError(error: unknown): boolean {
+  if ((error as { name?: unknown })?.name === 'AbortError') return true
+
+  const failureCode = extractConnectionFailureCode(error)
+  if (!failureCode) {
+    const failureMessage = extractConnectionFailureMessage(error).toLowerCase()
+    return failureMessage === 'fetch failed' || failureMessage.includes('network')
+  }
+
+  return new Set([
+    'ECONNRESET',
+    'ECONNABORTED',
+    'ETIMEDOUT',
+    'ECONNREFUSED',
+    'EAI_AGAIN',
+    'ENOTFOUND',
+    'ENETUNREACH',
+    'EHOSTUNREACH',
+    'UND_ERR_CONNECT_TIMEOUT',
+    'UND_ERR_HEADERS_TIMEOUT',
+    'UND_ERR_BODY_TIMEOUT',
+  ]).has(failureCode)
+}
+
+async function waitForProbeRetry(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, PROBE_RETRY_DELAY_MS))
 }
 
 function formatLocalConnectionFailure(
@@ -111,68 +145,97 @@ export async function testLocalConnection(
   }
 
   const start = Date.now()
-  try {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS)
+  for (let attempt = 1; attempt <= PROBE_RETRY_ATTEMPTS; attempt += 1) {
+    let timer: ReturnType<typeof setTimeout> | null = null
 
-    const response = await fetch(url, {
-      method: 'GET',
-      headers,
-      signal: controller.signal,
-    })
-    clearTimeout(timer)
-
-    const latencyMs = Date.now() - start
-
-    if (!response.ok) {
-      return {
-        ok: false,
-        reachable: true,
-        latencyMs,
-        error: `HTTP ${response.status} ${response.statusText}`,
-      }
-    }
-
-    let modelCount: number | undefined
-    let models: Array<{ key: string; name: string }> | undefined
     try {
-      const body = await response.json()
-      if (provider === 'ollama' && Array.isArray(body?.models)) {
-        modelCount = body.models.length
-        models = body.models
-          .map((item: any) => {
-            const key = String(item?.name || item?.model || '').trim()
-            if (!key) return null
-            return {
-              key,
-              name: key,
-            }
-          })
-          .filter((item: { key: string; name: string } | null): item is { key: string; name: string } => Boolean(item))
-      } else if (Array.isArray(body?.data)) {
-        modelCount = body.data.length
-        models = body.data
-          .map((item: any) => {
-            const key = String(item?.id ?? item?.name ?? item?.model ?? '').trim()
-            if (!key) return null
-            return {
-              key,
-              name: String(item?.name ?? item?.id ?? item?.model ?? key).trim() || key,
-            }
-          })
-          .filter((item: { key: string; name: string } | null): item is { key: string; name: string } => Boolean(item))
-      }
-    } catch {
-      // JSON parse failure is fine — reachability is confirmed
-    }
+      const controller = new AbortController()
+      timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS)
 
-    return { ok: true, reachable: true, modelCount, models, latencyMs }
-  } catch (err: any) {
-    const latencyMs = Date.now() - start
-    const message = err?.name === 'AbortError'
-      ? `Connection timed out after ${PROBE_TIMEOUT_MS}ms`
-      : formatLocalConnectionFailure(provider, url, err)
-    return { ok: false, reachable: false, latencyMs, error: message }
+      const response = await fetch(url, {
+        method: 'GET',
+        headers,
+        signal: controller.signal,
+      })
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+
+      const latencyMs = Date.now() - start
+
+      if (!response.ok) {
+        if (attempt < PROBE_RETRY_ATTEMPTS && shouldRetryProbeStatus(response.status)) {
+          await waitForProbeRetry()
+          continue
+        }
+
+        return {
+          ok: false,
+          reachable: true,
+          latencyMs,
+          error: `HTTP ${response.status} ${response.statusText}`,
+        }
+      }
+
+      let modelCount: number | undefined
+      let models: Array<{ key: string; name: string }> | undefined
+      try {
+        const body = await response.json()
+        if (provider === 'ollama' && Array.isArray(body?.models)) {
+          modelCount = body.models.length
+          models = body.models
+            .map((item: any) => {
+              const key = String(item?.name || item?.model || '').trim()
+              if (!key) return null
+              return {
+                key,
+                name: key,
+              }
+            })
+            .filter((item: { key: string; name: string } | null): item is { key: string; name: string } => Boolean(item))
+        } else if (Array.isArray(body?.data)) {
+          modelCount = body.data.length
+          models = body.data
+            .map((item: any) => {
+              const key = String(item?.id ?? item?.name ?? item?.model ?? '').trim()
+              if (!key) return null
+              return {
+                key,
+                name: String(item?.name ?? item?.id ?? item?.model ?? key).trim() || key,
+              }
+            })
+            .filter((item: { key: string; name: string } | null): item is { key: string; name: string } => Boolean(item))
+        }
+      } catch {
+        // JSON parse failure is fine - reachability is confirmed.
+      }
+
+      return { ok: true, reachable: true, modelCount, models, latencyMs }
+    } catch (err: any) {
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+
+      if (attempt < PROBE_RETRY_ATTEMPTS && shouldRetryProbeError(err)) {
+        await waitForProbeRetry()
+        continue
+      }
+
+      const latencyMs = Date.now() - start
+      const message = err?.name === 'AbortError'
+        ? `Connection timed out after ${PROBE_TIMEOUT_MS}ms`
+        : formatLocalConnectionFailure(provider, url, err)
+      return { ok: false, reachable: false, latencyMs, error: message }
+    }
+  }
+
+  return {
+    ok: false,
+    reachable: false,
+    latencyMs: Date.now() - start,
+    error: 'Connection test failed after exhausting retries.',
   }
 }
 

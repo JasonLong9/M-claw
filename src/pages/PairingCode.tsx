@@ -50,23 +50,12 @@ export default function PairingCode({
   const [log, setLog] = useState('')
   const [error, setError] = useState('')
   const [countdown, setCountdown] = useState(0)
-  const [openClawConfigDisplayPath, setOpenClawConfigDisplayPath] = useState('~/.openclaw/openclaw.json')
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
     return () => {
       if (countdownRef.current) clearInterval(countdownRef.current)
     }
-  }, [])
-
-  useEffect(() => {
-    window.api.getOpenClawPaths().then((paths) => {
-      if (paths?.configFile) {
-        setOpenClawConfigDisplayPath(paths.configFile)
-      }
-    }).catch(() => {
-      // keep default
-    })
   }, [])
 
   const channelInfo = CHANNEL_INFO[channel] || CHANNEL_INFO.feishu
@@ -156,16 +145,16 @@ export default function PairingCode({
         <Text size="lg" fw={600} ta="center">配置完成！</Text>
         <Text size="sm" c="dimmed" ta="center">
           {channel === 'feishu' && feishuBotLabel
-            ? `OpenClaw 已成功完成飞书 Bot「${feishuBotLabel}」的配对，现在可以开始对话了。`
-            : `OpenClaw 已成功连接${channelInfo.name}，现在可以在${channelInfo.name}中和您的 AI 助手对话了。`}
+            ? `Mclaw 已成功完成飞书 Bot「${feishuBotLabel}」的配对，现在可以开始对话了。`
+            : `Mclaw 已成功连接${channelInfo.name}，现在可以在${channelInfo.name}中和您的 AI 助手对话了。`}
         </Text>
 
         <Card padding="sm" withBorder w="100%">
           <Text size="xs" c="dimmed" style={{ lineHeight: 1.8 }}>
             接下来您可以：
             <br />• 在{channelInfo.name}中给机器人发消息开始对话
-            <br />• Gateway 已在后台运行，开机自启动
-            <br />• 如需修改配置，编辑 <Text span ff="monospace" c="brand">{openClawConfigDisplayPath}</Text>
+            <br />• 本机服务已在后台运行，开机自启动
+            <br />• 如需修改配置，请回到 Mclaw 面板中的模型和渠道设置，不要手动改动本地运行文件
           </Text>
         </Card>
 

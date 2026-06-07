@@ -1,3 +1,5 @@
+import { isLikelyMclawInternalPath } from './mclaw-protected-paths'
+
 const TOOL_PAYLOAD_ALLOWED_KEYS = new Set([
   'chars',
   'cmd',
@@ -38,6 +40,8 @@ const TOOL_PAYLOAD_STRONG_KEYS = new Set([
 
 export const CHAT_REPLY_REJECTED_PATH_PATTERN =
   /\b(id|session|model|provider|usage|token|finish|status|type|role|path|key|command|cmd|workdir|cwd|timeout|yield(?:ms|time_ms|_ms|_time_ms)?|prefix(?:rule|_rule)?|justification|shell|sandbox(?:permissions|_permissions)?|login|tty|event|tool|toolcall|arguments?|partialjson|thinking|signature|encrypted|summary)\b/i
+
+const DETECTED_WINDOWS_PATH_PATTERN = /[a-z]:[\\/][^\r\n<>:"|?*]+/gi
 
 const EMBEDDED_IMAGE_DATA_URL_PATTERN =
   /data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\r\n]{128,}/gi
@@ -92,8 +96,29 @@ const USER_FACING_RESPONSE_START_PATTERNS = [
   /^(?:\u4f60\u597d|\u597d\u7684|\u660e\u767d\u4e86|\u53ef\u4ee5|\u6ca1\u95ee\u9898|\u6211\u4f1a|\u6211\u662f|\u5f53\u7136|\u63a5\u4e0b\u6765|\u522b\u62c5\u5fc3)/u,
 ]
 
+const OPENCLAW_LOG_FOLLOW_DIAGNOSTIC_LINE_PATTERN =
+  /^\s*logs:\s*openclaw\s+logs\s+--follow\s*$/i
+
 const MACHINE_ARTIFACT_LINE_PATTERNS = [
   /^\s*(?:reasoning(?:_content)?|thinking(?:_content)?|analysis|tool(?:_result|_call)?|assistant_response)\s*:?\s*$/i,
+  /^\s*(?:思考过程|推理过程|分析过程)\s*[:：]?\s*$/u,
+  OPENCLAW_LOG_FOLLOW_DIAGNOSTIC_LINE_PATTERN,
+  /^\s*memory\s+dir\s+not\s+found\s*$/i,
+  /^\s*MEMORY\.md\s+not\s+found\s*$/i,
+  /^\s*NO_MEMORY_DIR\s*$/i,
+  /^\s*NO_MEMORY_FILE\s*$/i,
+  /^\s*\+\s*ls\s+-la\s+memory\b/i,
+  /^\s*ls\s+-la\s+memory\b/i,
+  /^\s*if\s+\(-not\s+\(Test-Path\s+memory\/?\)\)/i,
+  /^\s*\+\s+.*Test-Path\s+memory/i,
+  /^\s*Get-ChildItem\s*:/i,
+  /^\s*\+\s+(?:CategoryInfo|FullyQualifiedErrorId)\s*:/i,
+  /^\s*\+\s*~{2,}\s*$/i,
+  /^\s*\(Command exited with code \d+\)\s*$/i,
+  /^\s*At line:\d+\s+char:\d+\s*$/i,
+  /^\s*�+.*(?:λ|ַ|�)\s*:\s*\d+/u,
+  /^\s*\+\s*Get-ChildItem\b/i,
+  /^\s*\S+\s*:\s*InvalidArgument:\s*\(\)\s*\[Get-ChildItem\]/i,
   /^\s*(?:stdout|stderr)\(\d+chars\)=/i,
   /^\s*(?:stdout|stderr):/i,
   /^\s*headers?:\s*\{/i,
@@ -106,7 +131,22 @@ const MACHINE_ARTIFACT_LINE_PATTERNS = [
   /^\s*curl\s+/i,
 ]
 
+const ASSISTANT_METADATA_JSON_KEY_SET = new Set([
+  'results',
+  'provider',
+  'citations',
+  'mode',
+  'model',
+  'usage',
+  'tokens',
+  'status',
+  'meta',
+])
+
 const REASONING_PREFIXES = [
+  '思考过程',
+  '推理过程',
+  '分析过程',
   'let me',
   'first,',
   'first ',
@@ -308,12 +348,10 @@ function isMachineArtifactLine(line: string): boolean {
   if (MACHINE_ARTIFACT_LINE_PATTERNS.some((pattern) => pattern.test(normalized))) return true
   if (looksLikeToolPayloadJson(normalized)) return true
   if (normalizedLower.includes('heartbeat.md')) return true
-  if (normalizedLower.includes('\\mclaw\\openclaw-state\\')) return true
-  if (normalizedLower.includes('/mclaw/openclaw-state/')) return true
-  if (normalizedLower.includes('\\.openclaw\\workspace-')) return true
-  if (normalizedLower.includes('/.openclaw/workspace-')) return true
+  if (isLikelyMclawInternalPath(normalized)) return true
 
   if (/^(?:\{|\[).+(?:\}|\])$/.test(normalized)) {
+    if (looksLikeAssistantMetadataJson(normalized)) return true
     const keyHits = (
       normalized.match(
         /"(?:command|workdir|cwd|timeout|yieldMs|stdout|stderr|headers|status|body|response|path|shell|sandboxPermissions)"/gi
@@ -325,8 +363,65 @@ function isMachineArtifactLine(line: string): boolean {
   return false
 }
 
+function looksLikeAssistantMetadataJson(text: string): boolean {
+  const normalized = String(text || '').trim()
+  if (!normalized || !/^[\[{]/.test(normalized)) return false
+
+  try {
+    const parsed = JSON.parse(normalized) as unknown
+    const records = Array.isArray(parsed) ? parsed.filter(isRecord) : isRecord(parsed) ? [parsed] : []
+    if (records.length === 0) return false
+
+    return records.every((record) => {
+      const keys = Object.keys(record)
+        .map((key) => normalizeToolPayloadKey(key))
+        .filter(Boolean)
+      if (keys.length === 0) return false
+      const metadataHits = keys.filter((key) => ASSISTANT_METADATA_JSON_KEY_SET.has(key)).length
+      return metadataHits >= Math.max(2, Math.ceil(keys.length / 2))
+    })
+  } catch {
+    return /"(?:results|provider|citations|mode)"\s*:/.test(normalized)
+  }
+}
+
+function stripAssistantMetadataJsonBlocks(text: string): string {
+  const normalized = String(text || '').replace(/\r\n?/g, '\n')
+  if (!normalized) return ''
+
+  const blockPattern = /\{[\s\S]*?\}/g
+  let result = normalized
+  for (const match of normalized.matchAll(blockPattern)) {
+    const block = String(match[0] || '').trim()
+    if (!block) continue
+    if (!looksLikeAssistantMetadataJson(block)) continue
+    result = result.replace(match[0], '')
+  }
+  return result
+}
+
+export function isAssistantMachineArtifactOnlyText(text: string): boolean {
+  const lines = String(text || '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  return lines.length > 0 && lines.every((line) => isMachineArtifactLine(line))
+}
+
+function isOpenClawLogFollowDiagnosticOnlyText(text: string): boolean {
+  const lines = String(text || '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  return lines.length > 0 && lines.every((line) => OPENCLAW_LOG_FOLLOW_DIAGNOSTIC_LINE_PATTERN.test(line))
+}
+
 function buildMeaningfulAssistantLines(text: string): string[] {
-  const normalizedLines = stripKnownAssistantBootstrapNoise(String(text || ''))
+  const normalizedLines = stripAssistantMetadataJsonBlocks(stripKnownAssistantBootstrapNoise(String(text || '')))
     .replace(/\r\n?/g, '\n')
     .split('\n')
     .map((line) => line.trim())
@@ -353,6 +448,10 @@ function matchesAnyPattern(line: string, patterns: RegExp[]): boolean {
 function classifyAssistantLine(line: string): AssistantLineKind {
   const normalized = String(line || '').trim()
   if (!normalized) return 'neutral'
+
+  if (/^(?:思考过程|推理过程|分析过程|thinking|reasoning|analysis)$/iu.test(normalized)) {
+    return 'reasoning'
+  }
 
   if (
     startsWithAnyPrefix(normalized, FINAL_PREFIXES) ||
@@ -420,10 +519,7 @@ function isUserFacingAssistantLocalPath(candidatePath: string): boolean {
   const fileName = normalized.split('\\').filter(Boolean).pop() || ''
   if (fileName === 'heartbeat.md') return false
 
-  if (normalized.includes('\\mclaw\\openclaw-state\\')) return false
-  if (normalized.includes('\\.openclaw\\workspace-')) return false
-  if (normalized.includes('\\.openclaw\\media\\browser\\')) return false
-  if (normalized.includes('\\.openclaw\\')) return false
+  if (isLikelyMclawInternalPath(normalized)) return false
 
   return true
 }
@@ -452,6 +548,25 @@ function trimDetectedLocalPath(candidate: string): string {
 
   const directoryMatch = normalized.match(/^[a-z]:[\\/][^<>:"|?*\r\n]+/i)
   return directoryMatch?.[0] || normalized
+}
+
+function shouldRejectDetectedLocalPathMatch(sourceText: string, match: RegExpMatchArray): boolean {
+  const rawMatch = String(match[0] || '')
+  if (!rawMatch) return true
+
+  if (/^[a-z]:[\\/]{2,}/i.test(rawMatch)) {
+    return true
+  }
+
+  const matchIndex = typeof match.index === 'number' ? match.index : -1
+  if (matchIndex > 0) {
+    const previousChar = sourceText[matchIndex - 1] || ''
+    if (/[a-z0-9]/i.test(previousChar)) {
+      return true
+    }
+  }
+
+  return false
 }
 
 export function splitEmbeddedMessageTimestamp(text: string): ChatMessageTimestampParts {
@@ -575,7 +690,16 @@ export function sanitizeAssistantRawFallbackText(text: string): string {
     }
   }
 
-  return stripKnownAssistantBootstrapNoise(stripEmbeddedImagePayloads(normalized))
+  const cleaned = stripKnownAssistantBootstrapNoise(stripEmbeddedImagePayloads(normalized))
+  if (!cleaned) return ''
+  if (isOpenClawLogFollowDiagnosticOnlyText(cleaned)) return ''
+
+  const meaningfulLines = buildMeaningfulAssistantLines(cleaned)
+  if (meaningfulLines.length > 0) {
+    return meaningfulLines.join('\n').trim()
+  }
+
+  return cleaned
 }
 
 export function collectAssistantLocalPaths(text: string): string[] {
@@ -593,7 +717,8 @@ export function collectAssistantLocalPaths(text: string): string[] {
 
   const collectedPaths: string[] = []
   for (const variant of variants) {
-    for (const match of variant.matchAll(/[a-z]:[\\/][^\r\n<>:"|?*]+/gi)) {
+    for (const match of variant.matchAll(DETECTED_WINDOWS_PATH_PATTERN)) {
+      if (shouldRejectDetectedLocalPathMatch(variant, match)) continue
       const normalizedPath = trimDetectedLocalPath(match[0] || '')
         .replace(/[\\/]+$/g, '')
         .replace(/[\\/]+/g, '\\')

@@ -3,9 +3,7 @@ import { Text, Button, Group, Collapse, Modal, Tooltip } from '@mantine/core'
 import { useComputedColorScheme, useMantineColorScheme } from '@mantine/core'
 import { IconChevronRight } from '@tabler/icons-react'
 import BackupCenter from '../components/BackupCenter'
-import CleanupDialog from '../components/CleanupDialog'
 import FeishuBotManagerModal from '../components/FeishuBotManagerModal'
-import OpenClawDataCleanupDialog from '../components/OpenClawDataCleanupDialog'
 import UpdateCenter from '../components/UpdateCenter'
 import AboutModal from '../components/AboutModal'
 import tooltips from '@/constants/tooltips.json'
@@ -83,8 +81,6 @@ export default function SettingsPage({
 
   const [showUpdateCenter, setShowUpdateCenter] = useState(false)
   const [showBackupCenter, setShowBackupCenter] = useState(false)
-  const [showCleanupDialog, setShowCleanupDialog] = useState(false)
-  const [showDataCleanupDialog, setShowDataCleanupDialog] = useState(false)
   const [showFeishuBotManager, setShowFeishuBotManager] = useState(false)
   const [showAbout, setShowAbout] = useState(false)
   const [showReconfigureConfirm, setShowReconfigureConfirm] = useState(false)
@@ -130,16 +126,19 @@ export default function SettingsPage({
         </Group>
       </Section>
 
-      {/* 卸载清除 */}
-      <Section title="卸载清除" titleTooltip={tooltips.settingsPage.deleteOpenClawAndData} defaultOpen={false}>
+      {/* 维护清理 */}
+      <Section title="维护清理" titleTooltip={tooltips.settingsPage.deleteOpenClawAndData} defaultOpen={false}>
         <Group gap="xs" grow>
           <Tooltip label={tooltips.settingsPage.cleanupOpenClaw} withArrow>
-            <Button variant="light" color="red" size="xs" onClick={() => setShowCleanupDialog(true)}>删除 OpenClaw</Button>
+            <Button variant="light" color="gray" size="xs" disabled>内测暂不开放</Button>
           </Tooltip>
           <Tooltip label={tooltips.settingsPage.cleanupOpenClawData} withArrow>
-            <Button variant="light" color="red" size="xs" onClick={() => setShowDataCleanupDialog(true)}>清理 OpenClaw 数据</Button>
+            <Button variant="light" color="gray" size="xs" disabled>保护本机数据</Button>
           </Tooltip>
         </Group>
+        <Text size="xs" className="app-text-secondary">
+          内测版本默认关闭本机运行组件清理入口，避免误删 Mclaw 工作数据。需要清理时请联系 MetaCode 工作室统一处理。
+        </Text>
       </Section>
 
       {/* 关于 — 与上方按钮规格一致 */}
@@ -181,11 +180,6 @@ export default function SettingsPage({
       <UpdateCenter open={showUpdateCenter} onClose={() => setShowUpdateCenter(false)} />
       <BackupCenter open={showBackupCenter} onClose={() => setShowBackupCenter(false)} />
       <FeishuBotManagerModal opened={showFeishuBotManager} onClose={() => setShowFeishuBotManager(false)} />
-      <CleanupDialog open={showCleanupDialog} mode="remove-openclaw" onClose={() => setShowCleanupDialog(false)} />
-      <OpenClawDataCleanupDialog
-        open={showDataCleanupDialog}
-        onClose={() => setShowDataCleanupDialog(false)}
-      />
     </div>
   )
 }

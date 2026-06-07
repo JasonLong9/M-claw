@@ -15,6 +15,7 @@ import {
 import { tryNormalizeProcessCwd } from './runtime-working-directory'
 import { revealWindow, showOrCreateWindow } from './window-lifecycle'
 import { reloadGatewayForConfigChange } from './gateway-lifecycle-controller'
+import { ensureGatewayRunning } from './openclaw-gateway-service'
 import { sanitizeNodeOptionsForElectron } from './node-options'
 import { ensureRequiredOpenClawStateDirs, repairManagedOpenClawStateLayout } from './openclaw-state-bootstrap'
 import { resolveOpenClawPaths } from './openclaw-paths'
@@ -88,9 +89,12 @@ function createWindow() {
   const workAreaSize = screen.getPrimaryDisplay().workAreaSize
   const mainWindowBounds = resolveMainWindowBounds(workAreaSize)
 
-  const appIcon = process.platform === 'win32'
-    ? path.join(process.env.VITE_PUBLIC!, 'favicon.ico')
-    : path.join(process.env.VITE_PUBLIC!, 'tray@2x.png')
+  const appIcon = loadRuntimeAppIcon()
+    || nativeImage.createFromPath(
+      process.platform === 'win32'
+        ? path.join(process.env.VITE_PUBLIC!, 'favicon.ico')
+        : path.join(process.env.VITE_PUBLIC!, 'tray@2x.png')
+    )
 
   if (process.platform === 'darwin') {
     const dockIcon = loadRuntimeAppIcon()
@@ -101,7 +105,7 @@ function createWindow() {
 
   const browserWindow = new BrowserWindow({
     title: 'Mclaw',
-    icon: appIcon,
+    icon: appIcon.isEmpty() ? undefined : appIcon,
     width: mainWindowBounds.width,
     height: mainWindowBounds.height,
     minWidth: mainWindowBounds.minWidth,
@@ -305,11 +309,39 @@ function scheduleWatchdogStart(): void {
   }, WATCHDOG_BOOT_DELAY_MS)
 }
 
+async function warmupGatewayOnAppReady(): Promise<void> {
+  try {
+    const first = await ensureGatewayRunning({
+      skipRuntimePrecheck: true,
+    })
+    if (first.ok && first.running) return
+
+    const corpus = `${String(first.summary || '')}\n${String(first.stderr || '')}\n${String(first.stdout || '')}`.toLowerCase()
+    const looksLikeManagedChannelFailure =
+      first.stateCode === 'plugin_load_failure'
+      || first.stateCode === 'config_invalid'
+      || /unknown channel id|failed to load plugin|manifest|allowlist/.test(corpus)
+    if (!looksLikeManagedChannelFailure) return
+
+    const { repairManagedChannelPlugin } = await import('./managed-channel-plugin-lifecycle')
+    await repairManagedChannelPlugin('openclaw-weixin').catch(() => null)
+    await repairManagedChannelPlugin('feishu').catch(() => null)
+    await ensureGatewayRunning({
+      skipRuntimePrecheck: true,
+    }).catch(() => null)
+  } catch {
+    // Keep startup resilient; renderer still has manual recovery controls.
+  }
+}
+
 app.whenReady().then(() => {
   return initializeManagedRuntimeEnvironment()
     .catch(() => undefined)
     .then(() => {
       registerIpcHandlers()
+      return warmupGatewayOnAppReady()
+    })
+    .then(() => {
       createWindow()
       createTray()
       scheduleWatchdogStart()

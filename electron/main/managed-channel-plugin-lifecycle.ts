@@ -15,6 +15,7 @@ import {
 import type { OfficialChannelActionResult, OfficialChannelAdapterId } from '../../src/shared/official-channel-integration'
 import { isPluginAlreadyInstalledError } from '../../src/shared/openclaw-cli-errors'
 import type { CliResult, RepairIncompatibleExtensionPluginsOptions } from './cli'
+import type { OpenClawPathTarget } from './cli'
 import { withManagedOperationLock } from './managed-operation-lock'
 import type { RepairIncompatibleExtensionsResult } from './plugin-install-safety'
 
@@ -775,66 +776,87 @@ let defaultManagedChannelPluginLifecycleServicePromise:
   | Promise<ReturnType<typeof createManagedChannelPluginLifecycleService>>
   | null = null
 
+async function createManagedChannelPluginLifecycleServiceForTarget(target?: OpenClawPathTarget | null) {
+  const cli = await import('./cli')
+  const gateway = await import('./gateway-lifecycle-controller')
+  const officialAdapters = await import('./official-channel-adapters')
+  const commandOutput = await import('./openclaw-command-output')
+
+  return createManagedChannelPluginLifecycleService({
+    getOfficialChannelStatus: officialAdapters.getOfficialChannelStatus,
+    repairOfficialChannel: officialAdapters.repairOfficialChannel,
+    repairIncompatiblePlugins: cli.repairIncompatibleExtensionPlugins,
+    installPlugin: cli.installPlugin,
+    installPluginNpx: cli.installPluginNpx,
+    isPluginInstalledOnDisk: cli.isPluginInstalledOnDisk,
+    listRegisteredPlugins: async () => {
+      const result = await cli.runCli(['plugins', 'list', '--json'], undefined, 'plugin-install').catch(() => null)
+      if (!result?.ok) return null
+      const payload = commandOutput.parseJsonFromCommandResult<unknown>(result)
+      if (Array.isArray(payload)) {
+        return payload.map((item) => normalizeText(item)).filter(Boolean)
+      }
+      if (hasOwnRecord(payload) && Array.isArray(payload.plugins)) {
+        return payload.plugins
+          .map((item) => {
+            if (typeof item === 'string') return normalizeText(item)
+            if (!hasOwnRecord(item)) return ''
+            return normalizeText(item.id || item.pluginId || item.name)
+          })
+          .filter(Boolean)
+      }
+      return []
+    },
+    readConfig: () => cli.readConfig(target),
+    writeConfig: (config) => cli.writeConfig(config, target),
+    reloadGatewayForConfigChange: gateway.reloadGatewayForConfigChange,
+    now: () => Date.now(),
+  })
+}
+
 async function getDefaultManagedChannelPluginLifecycleService() {
   if (!defaultManagedChannelPluginLifecycleServicePromise) {
-    defaultManagedChannelPluginLifecycleServicePromise = (async () => {
-      const cli = await import('./cli')
-      const gateway = await import('./gateway-lifecycle-controller')
-      const officialAdapters = await import('./official-channel-adapters')
-      const commandOutput = await import('./openclaw-command-output')
-
-      return createManagedChannelPluginLifecycleService({
-        getOfficialChannelStatus: officialAdapters.getOfficialChannelStatus,
-        repairOfficialChannel: officialAdapters.repairOfficialChannel,
-        repairIncompatiblePlugins: cli.repairIncompatibleExtensionPlugins,
-        installPlugin: cli.installPlugin,
-        installPluginNpx: cli.installPluginNpx,
-        isPluginInstalledOnDisk: cli.isPluginInstalledOnDisk,
-        listRegisteredPlugins: async () => {
-          const result = await cli.runCli(['plugins', 'list', '--json'], undefined, 'plugin-install').catch(() => null)
-          if (!result?.ok) return null
-          const payload = commandOutput.parseJsonFromCommandResult<unknown>(result)
-          if (Array.isArray(payload)) {
-            return payload.map((item) => normalizeText(item)).filter(Boolean)
-          }
-          if (hasOwnRecord(payload) && Array.isArray(payload.plugins)) {
-            return payload.plugins
-              .map((item) => {
-                if (typeof item === 'string') return normalizeText(item)
-                if (!hasOwnRecord(item)) return ''
-                return normalizeText(item.id || item.pluginId || item.name)
-              })
-              .filter(Boolean)
-          }
-          return []
-        },
-        readConfig: cli.readConfig,
-        writeConfig: cli.writeConfig,
-        reloadGatewayForConfigChange: gateway.reloadGatewayForConfigChange,
-        now: () => Date.now(),
-      })
-    })()
+    defaultManagedChannelPluginLifecycleServicePromise = createManagedChannelPluginLifecycleServiceForTarget()
   }
 
   return defaultManagedChannelPluginLifecycleServicePromise
 }
 
-export async function inspectManagedChannelPlugin(channelId: string): Promise<ManagedChannelPluginInspectResult> {
-  const service = await getDefaultManagedChannelPluginLifecycleService()
+async function getManagedChannelPluginLifecycleService(target?: OpenClawPathTarget | null) {
+  if (target?.candidate || target?.configPath || target?.stateRoot) {
+    return createManagedChannelPluginLifecycleServiceForTarget(target)
+  }
+  return getDefaultManagedChannelPluginLifecycleService()
+}
+
+export async function inspectManagedChannelPlugin(
+  channelId: string,
+  target?: OpenClawPathTarget | null
+): Promise<ManagedChannelPluginInspectResult> {
+  const service = await getManagedChannelPluginLifecycleService(target)
   return service.inspectManagedChannelPlugin(channelId)
 }
 
-export async function getManagedChannelPluginStatus(channelId: string): Promise<ManagedChannelPluginStatusView> {
-  const service = await getDefaultManagedChannelPluginLifecycleService()
+export async function getManagedChannelPluginStatus(
+  channelId: string,
+  target?: OpenClawPathTarget | null
+): Promise<ManagedChannelPluginStatusView> {
+  const service = await getManagedChannelPluginLifecycleService(target)
   return service.getManagedChannelPluginStatus(channelId)
 }
 
-export async function prepareManagedChannelPluginForSetup(channelId: string): Promise<ManagedChannelPluginPrepareResult> {
-  const service = await getDefaultManagedChannelPluginLifecycleService()
+export async function prepareManagedChannelPluginForSetup(
+  channelId: string,
+  target?: OpenClawPathTarget | null
+): Promise<ManagedChannelPluginPrepareResult> {
+  const service = await getManagedChannelPluginLifecycleService(target)
   return service.prepareManagedChannelPluginForSetup(channelId)
 }
 
-export async function repairManagedChannelPlugin(channelId: string): Promise<ManagedChannelPluginRepairResult> {
-  const service = await getDefaultManagedChannelPluginLifecycleService()
+export async function repairManagedChannelPlugin(
+  channelId: string,
+  target?: OpenClawPathTarget | null
+): Promise<ManagedChannelPluginRepairResult> {
+  const service = await getManagedChannelPluginLifecycleService(target)
   return service.repairManagedChannelPlugin(channelId)
 }
