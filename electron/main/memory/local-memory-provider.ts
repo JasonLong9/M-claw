@@ -1,31 +1,32 @@
 import type { ChatMemoryEntry, ChatMemoryScope, ChatMemorySource } from '../../../src/shared/chat-memory'
-import { atomicWriteJson } from '../atomic-write'
+import { readOptionalFile, withMemoryStore } from './sqlite-store'
 import type { MemoryCommitParams, MemoryProvider, MemoryRetrieveParams, MemoryUpsertResult } from './memory-types'
 
 const fs = process.getBuiltinModule('node:fs') as typeof import('node:fs')
 const os = process.getBuiltinModule('node:os') as typeof import('node:os')
 const path = process.getBuiltinModule('node:path') as typeof import('node:path')
 const crypto = process.getBuiltinModule('node:crypto') as typeof import('node:crypto')
-const { readFile } = fs.promises
 const { homedir } = os
 const { randomUUID } = crypto
 
-interface StoredMemoryStore {
-  version: 1
-  entries: ChatMemoryEntry[]
-}
-
-const STORE_VERSION = 1
 const STORE_RELATIVE_PATH = path.join('memory', 'memories.json')
 const MAX_USER_MEMORIES = 60
 const MAX_SESSION_MEMORIES_PER_SESSION = 30
 
-function resolveUserDataDirectory(): string {
+export function resolveUserDataDirectory(): string {
   return String(process.env.QCLAW_USER_DATA_DIR || path.join(homedir(), '.qclaw-lite')).trim()
 }
 
-function resolveStorePath(): string {
-  return path.join(resolveUserDataDirectory(), STORE_RELATIVE_PATH)
+function memoryStore<T>(operation: Parameters<typeof withMemoryStore<T>>[2]): Promise<T> {
+  const directory = resolveUserDataDirectory()
+  return withMemoryStore(path.join(directory, 'memory', 'memories.sqlite3'), async () => {
+    const raw = await readOptionalFile(path.join(directory, STORE_RELATIVE_PATH))
+    if (!raw) return []
+    const parsed = JSON.parse(raw.toString('utf8')) as { version?: number; entries?: unknown[] }
+    if (parsed.version !== 1 || !Array.isArray(parsed.entries)) throw new Error('无法迁移聊天记忆：JSON 版本或格式无效')
+    const entries = parsed.entries.map(sanitizeEntry).filter((entry): entry is ChatMemoryEntry => Boolean(entry))
+    return trimStoreEntries([...new Map(entries.map((entry) => [entry.id, entry])).values()])
+  }, operation)
 }
 
 function normalizeScope(value: unknown): ChatMemoryScope | undefined {
@@ -111,6 +112,10 @@ function trimStoreEntries(entries: ChatMemoryEntry[]): ChatMemoryEntry[] {
   const perSessionCount = new Map<string, number>()
   const trimmedSessionEntries: ChatMemoryEntry[] = []
   for (const entry of sessionEntries) {
+    if (entry.id.startsWith('summary:')) {
+      trimmedSessionEntries.push(entry)
+      continue
+    }
     const sessionId = String(entry.sessionId || '').trim()
     if (!sessionId) continue
     const nextCount = (perSessionCount.get(sessionId) || 0) + 1
@@ -120,31 +125,6 @@ function trimStoreEntries(entries: ChatMemoryEntry[]): ChatMemoryEntry[] {
   }
 
   return [...userEntries, ...trimmedSessionEntries].sort((left, right) => right.updatedAt - left.updatedAt)
-}
-
-async function loadStore(): Promise<StoredMemoryStore> {
-  try {
-    const raw = await readFile(resolveStorePath(), 'utf8')
-    const parsed = JSON.parse(raw) as Partial<StoredMemoryStore>
-    const entries = Array.isArray(parsed.entries)
-      ? parsed.entries.map((entry) => sanitizeEntry(entry)).filter((entry): entry is ChatMemoryEntry => Boolean(entry))
-      : []
-    return {
-      version: STORE_VERSION,
-      entries: trimStoreEntries(entries),
-    }
-  } catch {
-    return {
-      version: STORE_VERSION,
-      entries: [],
-    }
-  }
-}
-
-async function saveStore(store: StoredMemoryStore): Promise<void> {
-  await atomicWriteJson(resolveStorePath(), store, {
-    description: '聊天记忆存储',
-  })
 }
 
 function findExistingEntryIndex(entries: ChatMemoryEntry[], params: {
@@ -159,7 +139,7 @@ function findExistingEntryIndex(entries: ChatMemoryEntry[], params: {
   const comparableContent = normalizeComparableMemoryContent(params.content)
   return entries.findIndex((entry) => {
     if (entry.scope !== params.scope) return false
-    if ((entry.sessionId || undefined) !== (params.sessionId || undefined)) return false
+    if (entry.id.startsWith('summary:') || (entry.sessionId || undefined) !== (params.sessionId || undefined)) return false
     return normalizeComparableMemoryContent(entry.content) === comparableContent
   })
 }
@@ -171,8 +151,8 @@ export class LocalMemoryProvider implements MemoryProvider {
     const maxResults = Number.isFinite(params.maxResults) && Number(params.maxResults) > 0
       ? Math.min(12, Math.max(1, Number(params.maxResults)))
       : 8
-    const store = await loadStore()
-    return store.entries
+    return memoryStore((entries) => ({ result: entries
+      .filter((entry) => !entry.id.startsWith('summary:'))
       .filter((entry) => entry.scope === 'user' || (normalizedSessionId && entry.scope === 'session' && entry.sessionId === normalizedSessionId))
       .sort((left, right) => {
         const scoreDelta = scoreEntry(right, normalizedQuery) - scoreEntry(left, normalizedQuery)
@@ -180,7 +160,7 @@ export class LocalMemoryProvider implements MemoryProvider {
         if (left.source !== right.source) return left.source === 'manual' ? -1 : 1
         return right.updatedAt - left.updatedAt
       })
-      .slice(0, maxResults)
+      .slice(0, maxResults) }))
   }
 
   async commit(params: MemoryCommitParams): Promise<MemoryUpsertResult> {
@@ -196,14 +176,14 @@ export class LocalMemoryProvider implements MemoryProvider {
     }
 
     const now = Date.now()
-    const store = await loadStore()
-    const existingIndex = findExistingEntryIndex(store.entries, {
-      scope,
-      sessionId,
-      content,
+    return memoryStore<MemoryUpsertResult>((entries) => {
+      const existingIndex = findExistingEntryIndex(entries, {
+        scope,
+        sessionId,
+        content,
     })
     if (existingIndex >= 0) {
-      const existing = store.entries[existingIndex]
+      const existing = entries[existingIndex]
       const sameComparableContent =
         normalizeComparableMemoryContent(existing.content) === normalizeComparableMemoryContent(content)
       const preserveManualContent =
@@ -227,13 +207,11 @@ export class LocalMemoryProvider implements MemoryProvider {
             updatedAt: now,
           }
       if (!unchanged) {
-        store.entries[existingIndex] = nextEntry
-        store.entries = trimStoreEntries(store.entries)
-        await saveStore(store)
+        entries[existingIndex] = nextEntry
       }
       return {
-        action: unchanged ? 'unchanged' : 'updated',
-        entry: unchanged ? existing : nextEntry,
+        changed: !unchanged,
+        result: { action: unchanged ? 'unchanged' : 'updated', entry: nextEntry },
       }
     }
 
@@ -246,21 +224,21 @@ export class LocalMemoryProvider implements MemoryProvider {
       createdAt: now,
       updatedAt: now,
     }
-    store.entries.unshift(entry)
-    store.entries = trimStoreEntries(store.entries)
-    await saveStore(store)
+    const trimmed = trimStoreEntries([entry, ...entries])
+    entries.splice(0, entries.length, ...trimmed)
     return {
-      action: 'created',
-      entry,
+      changed: true,
+      result: { action: 'created', entry },
     }
+    })
   }
 
   async list(params: { sessionId?: string } = {}): Promise<ChatMemoryEntry[]> {
     const normalizedSessionId = String(params.sessionId || '').trim()
-    const store = await loadStore()
-    return store.entries
+    return memoryStore((entries) => ({ result: entries
+      .filter((entry) => !entry.id.startsWith('summary:'))
       .filter((entry) => entry.scope === 'user' || (normalizedSessionId && entry.sessionId === normalizedSessionId))
-      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .sort((left, right) => right.updatedAt - left.updatedAt) }))
   }
 
   async update(id: string, content: string): Promise<MemoryUpsertResult | null> {
@@ -269,14 +247,14 @@ export class LocalMemoryProvider implements MemoryProvider {
     if (!normalizedId || !normalizedContent) return null
 
     const now = Date.now()
-    const store = await loadStore()
-    const existingIndex = findExistingEntryIndex(store.entries, {
-      id: normalizedId,
-      scope: 'user',
-      content: normalizedContent,
+    return memoryStore((entries) => {
+      const existingIndex = findExistingEntryIndex(entries, {
+        id: normalizedId,
+        scope: 'user',
+        content: normalizedContent,
     })
-    if (existingIndex < 0) return null
-    const existing = store.entries[existingIndex]
+    if (existingIndex < 0 || entries[existingIndex].id.startsWith('summary:')) return { result: null }
+    const existing = entries[existingIndex]
     const unchanged = existing.content === normalizedContent
     const nextEntry: ChatMemoryEntry = unchanged
       ? existing
@@ -286,24 +264,45 @@ export class LocalMemoryProvider implements MemoryProvider {
           updatedAt: now,
         }
     if (!unchanged) {
-      store.entries[existingIndex] = nextEntry
-      store.entries = trimStoreEntries(store.entries)
-      await saveStore(store)
+      entries[existingIndex] = nextEntry
     }
     return {
-      action: unchanged ? 'unchanged' : 'updated',
-      entry: nextEntry,
+      changed: !unchanged,
+      result: { action: unchanged ? 'unchanged' : 'updated', entry: nextEntry },
     }
+    })
   }
 
   async delete(id: string): Promise<boolean> {
     const normalizedId = String(id || '').trim()
     if (!normalizedId) return false
-    const store = await loadStore()
-    const nextEntries = store.entries.filter((entry) => entry.id !== normalizedId)
-    if (nextEntries.length === store.entries.length) return false
-    store.entries = nextEntries
-    await saveStore(store)
-    return true
+    return memoryStore((entries) => {
+      const index = entries.findIndex((entry) => entry.id === normalizedId)
+      if (index < 0) return { result: false }
+      entries.splice(index, 1)
+      return { result: true, changed: true }
+    })
+  }
+
+  async readSummary(sessionId: string): Promise<string> {
+    return memoryStore((entries) => ({ result: entries.find((entry) => entry.id === `summary:${sessionId}`)?.content || '' }))
+  }
+
+  async appendSummary(sessionId: string, userText: string, assistantText: string): Promise<void> {
+    const excerpt = (value: string) => value.replace(/\s+/g, ' ').trim().slice(0, 130)
+    const turn = JSON.stringify({ question: excerpt(userText), reply: excerpt(assistantText) })
+    await memoryStore((entries) => {
+      const id = `summary:${sessionId}`
+      const previous = entries.find((entry) => entry.id === id)
+      const lines = [...(previous?.content.split('\n') || []), turn].slice(-3)
+      const now = Date.now()
+      const entry: ChatMemoryEntry = {
+        id, scope: 'session', sessionId, source: 'auto', content: lines.join('\n'),
+        createdAt: previous?.createdAt ?? now, updatedAt: now,
+      }
+      if (previous) entries[entries.indexOf(previous)] = entry
+      else entries.push(entry)
+      return { result: undefined, changed: true }
+    })
   }
 }

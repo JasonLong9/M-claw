@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Notification, Tray, nativeImage, screen, shell } from 'electron'
+import { app, BrowserWindow, Menu, Notification, Tray, nativeImage, screen, shell, systemPreferences } from 'electron'
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -66,6 +66,16 @@ let isQuitting = false
 let watchdogStartupTimer: NodeJS.Timeout | null = null
 const preload = path.join(__dirname, '../preload/index.mjs')
 const indexHtml = path.join(RENDERER_DIST, 'index.html')
+
+function isMainAppPage(address: string): boolean {
+  try {
+    const url = new URL(address)
+    if (VITE_DEV_SERVER_URL) return url.origin === new URL(VITE_DEV_SERVER_URL).origin
+    return url.protocol === 'file:' && path.normalize(fileURLToPath(url)) === path.normalize(indexHtml)
+  } catch {
+    return false
+  }
+}
 const focusApp = process.platform === 'darwin'
   ? (options: { steal: boolean }) => app.focus(options)
   : undefined
@@ -116,6 +126,28 @@ function createWindow() {
     webPreferences: { preload },
   })
   win = browserWindow
+  const contents = browserWindow.webContents
+  contents.session.setPermissionCheckHandler((sender, permission, _origin, details) => {
+    if (permission !== 'media') return true
+    return sender === contents && details.isMainFrame && details.mediaType === 'audio' &&
+      isMainAppPage(details.requestingUrl || contents.getURL()) &&
+      (process.platform !== 'darwin' || systemPreferences.getMediaAccessStatus('microphone') === 'granted')
+  })
+  contents.session.setPermissionRequestHandler((sender, permission, callback, details) => {
+    if (permission !== 'media') {
+      callback(true)
+      return
+    }
+    const media = details as Electron.MediaAccessPermissionRequest
+    if (sender !== contents || !media.isMainFrame || !isMainAppPage(media.requestingUrl) ||
+      media.mediaTypes?.length !== 1 || media.mediaTypes[0] !== 'audio') {
+      callback(false)
+    } else if (process.platform === 'darwin') {
+      void systemPreferences.askForMediaAccess('microphone').then(callback, () => callback(false))
+    } else {
+      callback(true)
+    }
+  })
 
   browserWindow.once('ready-to-show', () => {
     if (win !== browserWindow) return
@@ -338,7 +370,11 @@ app.whenReady().then(() => {
   return initializeManagedRuntimeEnvironment()
     .catch(() => undefined)
     .then(() => {
-      registerIpcHandlers()
+      registerIpcHandlers((event) => {
+        const frame = event.senderFrame
+        return Boolean(win && frame && event.sender === win.webContents &&
+          frame === win.webContents.mainFrame && isMainAppPage(frame.url))
+      })
       return warmupGatewayOnAppReady()
     })
     .then(() => {

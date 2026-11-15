@@ -94,7 +94,10 @@ import {
   readLocalChatSessionState,
   readLocalChatTranscript,
 } from './qclaw-chat-store'
-import { buildChatMemoryContext, captureChatMemoriesFromTurn, isExplicitMemoryInstructionText } from './memory'
+import { buildChatMemoryContext, captureChatMemoriesFromTurn, clearChatSummary, isExplicitMemoryInstructionText, recordChatSummary } from './memory'
+import { runLocalAgent, saveAgentTrace } from './local-agent'
+import { connectMcpTools } from './mcp-tools'
+import { validateChatFile } from '../../src/shared/chat-files'
 import { setActiveAbortController as trackActiveAbortController } from './command-control'
 
 const { randomUUID } = process.getBuiltinModule('node:crypto') as typeof import('node:crypto')
@@ -221,12 +224,17 @@ let inFlightChatSendPromise: Promise<ChatSendResult> | null = null
 let activeSendState: ActiveChatSendState = { status: 'idle' }
 let pendingCancelBeforeChatAbortController = false
 let pendingCancelRequestedAt = 0
+let localAgentCancellation: AbortController | undefined
 
 export function getActiveChatSendState(): ActiveChatSendState {
   return { ...activeSendState }
 }
 
 export function requestPendingChatCancel(): void {
+  if (localAgentCancellation) {
+    localAgentCancellation.abort()
+    return
+  }
   pendingCancelBeforeChatAbortController = true
   pendingCancelRequestedAt = Date.now()
 }
@@ -2164,6 +2172,7 @@ interface GatewayEnsureLike extends CliLikeResult {
 }
 
 interface OpenClawChatServiceOptions {
+  runSkillCommand?: (command: string) => Promise<string>
   runCommand?: (args: string[], timeout?: number) => Promise<CliLikeResult>
   runStreamingCommand?: RunStreamingCommand
   runChatTask?: (params: any) => Promise<any>
@@ -6368,6 +6377,7 @@ export async function clearChatTranscript(
   const discoverOpenClawFn = options.discoverOpenClaw ?? discoverOpenClawInstallations
   const scopeKey = await resolveChatScopeKey(discoverOpenClawFn)
   const ok = await clearLocalChatTranscript(scopeKey, normalizedSessionId)
+  if (ok) await clearChatSummary(normalizedSessionId)
   return { ok, sessionId: normalizedSessionId }
 }
 
@@ -6380,7 +6390,9 @@ async function sendChatMessageImpl(
   // Qclaw mirrors that contract and only sends against the session's current
   // resolved model.
   const requestedSessionId = String(request.sessionId || '').trim()
-  const text = String(request.text || '').trim()
+  const rawText = String(request.text || '').trim()
+  const text = request.attachment && rawText && !/^\/(?:react|skill)(?: |$)/.test(rawText)
+    ? `/react ${rawText}` : rawText
   if (hasSendTimeModelOverride(request)) {
     return {
       ok: false,
@@ -6411,6 +6423,53 @@ async function sendChatMessageImpl(
   const runStreamingCommand = options.runStreamingCommand ?? defaultRunStreamingCommand
   const now = options.now ?? Date.now
   const emit = options.emit ?? (() => {})
+  if (text === '/react' || text.startsWith('/react ') || text === '/skill' || text.startsWith('/skill ')) {
+    const isAgent = text === '/react' || text.startsWith('/react ')
+    const question = text.slice(6).trim()
+    const answerCommand = async (): Promise<string> => {
+      const attachment = request.attachment === undefined ? undefined : validateChatFile(request.attachment)
+      if (!isAgent) {
+        if (attachment) throw new Error('Skill 管理命令不接受附件')
+        if (!options.runSkillCommand) throw new Error('Skill 命令入口不可用')
+        return options.runSkillCommand(text.slice(6).trim())
+      }
+      const baseUrl = process.env.MCLAW_REACT_BASE_URL
+      const model = process.env.MCLAW_REACT_MODEL
+      if (!baseUrl || !model || !question) throw new Error('请配置 MCLAW_REACT_BASE_URL、MCLAW_REACT_MODEL，并输入 /react <任务>')
+      const context = await buildChatMemoryContext({ sessionId: requestedSessionId, messageText: question })
+      const timeout = AbortSignal.timeout(45_000)
+      const cancellation = localAgentCancellation?.signal
+      const runSignal = cancellation ? AbortSignal.any([timeout, cancellation]) : timeout
+      const mcp = attachment ? undefined : await connectMcpTools(runSignal)
+      const result = await runLocalAgent(question, context.prompt, {
+        baseUrl, model, apiKey: process.env.MCLAW_REACT_API_KEY, attachment, tools: mcp?.tools,
+      }, fetch, 5, runSignal).finally(() => mcp?.close().catch(() => {}))
+      await saveAgentTrace(result.trace)
+      const trace = `轨迹 ${result.trace.id}`
+      if (!result.ok) throw new Error(`${result.answer}\n${trace}`)
+      if (!attachment) await recordChatSummary(requestedSessionId, question, result.answer).catch(() => {})
+      return `${result.answer}\n\n${trace}`
+    }
+    try {
+      emit({ type: 'assistant-start', sessionId: requestedSessionId })
+      const answer = await answerCommand()
+      const discover = options.discoverOpenClaw ?? discoverOpenClawInstallations
+      const scopeKey = await resolveChatScopeKey(discover)
+      const createdAt = now()
+      const message = buildChatMessage({ role: 'assistant', text: answer, createdAt })
+      await appendLocalChatMessages({
+        scopeKey, sessionId: requestedSessionId, agentId: DEFAULT_CHAT_AGENT_ID, kind: 'direct',
+        messages: [buildChatMessage({ role: 'user', text, createdAt: createdAt - 1 }), message],
+        updatedAt: createdAt,
+      })
+      updateActiveSendState({ status: 'completed' })
+      emit({ type: 'assistant-complete', sessionId: requestedSessionId, message })
+      return { ok: true, sessionId: requestedSessionId, message }
+    } catch (error) {
+      return { ok: false, sessionId: requestedSessionId, errorCode: localAgentCancellation?.signal.aborted ? 'canceled' : 'command-failed',
+        messageText: error instanceof Error ? error.message : String(error) }
+    }
+  }
   let gatewayResult: GatewayEnsureLike | null = null
   const ensureGatewayAvailable = async (): Promise<GatewayEnsureLike> => {
     if (!gatewayResult) {
@@ -6554,6 +6613,7 @@ async function sendChatMessageImpl(
   const memoryContextResult = await buildChatMemoryContext({
     sessionId: requestedSessionId,
     messageText: text,
+    includeSummary: !continueWithExternalSessionKey,
   }).catch(() => ({
     prompt: '',
     entries: [],
@@ -7453,6 +7513,9 @@ async function sendChatMessageImpl(
     sessionId,
     userMessage: text,
   }).catch(() => [])
+  if (!continueWithExternalSessionKey) {
+    await recordChatSummary(sessionId, text, finalReplyText).catch(() => {})
+  }
   if (savedMemories.length > 0) {
     const memorySavedMessage = buildMemorySavedMessage(savedMemories.map((item) => item.entry))
     appendChatTrace({
@@ -7534,6 +7597,8 @@ export async function sendChatMessage(
     startedAt: Date.now(),
   })
 
+  const isLocalAgent = Boolean(request.attachment) || /^\/react(?: |$)/.test(String(request.text || '').trim())
+  if (isLocalAgent) localAgentCancellation = new AbortController()
   const sendPromise = sendChatMessageImpl(request, options)
   inFlightChatSendPromise = sendPromise
   try {
@@ -7554,6 +7619,7 @@ export async function sendChatMessage(
     })
     throw error
   } finally {
+    if (isLocalAgent) localAgentCancellation = undefined
     if (inFlightChatSendPromise === sendPromise) {
       inFlightChatSendPromise = null
     }

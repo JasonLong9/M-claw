@@ -35,6 +35,9 @@
     "strictVerify": false,
     "entitlements": "build/entitlements.mac.plist",
     "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+    "extendInfo": {
+      "NSMicrophoneUsageDescription": "Record a short voice message and transcribe it into the chat draft."
+    },
     "notarize": false,
     "target": [
       "dmg",

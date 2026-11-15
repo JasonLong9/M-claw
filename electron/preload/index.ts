@@ -243,6 +243,9 @@ export const api = {
   inspectCodingWorkspacePath: (workspacePath?: string) =>
     ipcRenderer.invoke('chat:coding:workspace:inspect', workspacePath),
   sendChatMessage: (request: Record<string, any>) => ipcRenderer.invoke('chat:send', request),
+  checkChatVoiceConfiguration: () => ipcRenderer.invoke('chat:voice:check'),
+  transcribeChatVoice: (recording: import('../../src/shared/chat-voice').VoiceRecording) =>
+    ipcRenderer.invoke('chat:voice:transcribe', recording),
   cancelChatMessage: () => ipcRenderer.invoke('chat:cancel'),
   getActiveChatSendState: () => ipcRenderer.invoke('chat:send:state'),
   clearChatTranscript: (sessionId: string) => ipcRenderer.invoke('chat:transcript:clear', sessionId),

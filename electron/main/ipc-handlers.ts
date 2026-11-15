@@ -1,7 +1,8 @@
 /**
  * IPC handlers — bridge between renderer and CLI
  */
-import { app, ipcMain, shell } from 'electron'
+import { app, ipcMain, shell, type IpcMainInvokeEvent } from 'electron'
+import { getVoiceTranscriptionConfig, transcribeChatVoice } from './chat-voice-transcription'
 const path = process.getBuiltinModule('node:path') as typeof import('node:path')
 import {
   checkNode,
@@ -234,6 +235,7 @@ import {
 } from './skills-uninstall-safety'
 import { removeManagedSkillLocally, removeSkillDirectoryLocally } from './skills-managed-uninstall'
 import { withExclusiveSkillMutation } from './skill-mutation-guard'
+import { activateSkill, approveSkill, draftSkill, evaluateSkill, runPublishedSkill } from './skill-release'
 import { verifySkillInstallRequest } from './security/skills-install-security'
 import {
   exportSkillSecurityAuditLog,
@@ -563,7 +565,7 @@ async function waitForInstalledSkillVisibility(params: {
     : null
 }
 
-export function registerIpcHandlers() {
+export function registerIpcHandlers(isMainAppSender: (event: IpcMainInvokeEvent) => boolean = () => false) {
   if (ipcHandlersRegistered) return
   ipcHandlersRegistered = true
 
@@ -905,8 +907,52 @@ export function registerIpcHandlers() {
   ipcMain.handle('chat:coding:workspace:inspect', (_e, workspacePath?: string) =>
     inspectCodingWorkspacePath(workspacePath)
   )
+  let voiceInFlight = false
+  ipcMain.handle('chat:voice:check', (event) => {
+    if (!isMainAppSender(event)) throw new Error('语音转写只接受主窗口请求')
+    getVoiceTranscriptionConfig()
+  })
+  ipcMain.handle('chat:voice:transcribe', async (event, recording: unknown) => {
+    if (!isMainAppSender(event)) throw new Error('语音转写只接受主窗口请求')
+    if (voiceInFlight) throw new Error('已有录音正在转写，请稍后重试')
+    voiceInFlight = true
+    try {
+      return await transcribeChatVoice(recording, getVoiceTranscriptionConfig())
+    } finally {
+      voiceInFlight = false
+    }
+  })
   ipcMain.handle('chat:send', (event, request) =>
     sendChatMessage(request, {
+      runSkillCommand: async (command) => {
+        const run = command.match(/^run\s+([a-z0-9-]+)\s+([\s\S]+)$/)
+        if (run) {
+          const payload = await getOpenClawSkillsListPayload()
+          if (typeof payload?.workspaceDir !== 'string' || !payload.workspaceDir.trim()) {
+            throw new Error('无法确认 OpenClaw 工作区，请先检查 Gateway 和 Skills 列表')
+          }
+          return runPublishedSkill(run[1], run[2], resolveOpenClawSkillLocations(payload).workspaceSkillsDir)
+        }
+        const [action, id, argument, ...extra] = command.split(/\s+/)
+        if (id && !extra.length) {
+          if (action === 'draft' && argument) return draftSkill(id, argument)
+          if (action === 'evaluate' && !argument) return evaluateSkill(id)
+          if (action === 'approve' && argument) return approveSkill(id, argument)
+          if ((action === 'publish' || action === 'rollback') && !argument) {
+            const payload = await getOpenClawSkillsListPayload()
+            if (!payload || typeof payload.workspaceDir !== 'string' || !payload.workspaceDir.trim()) {
+              throw new Error('无法确认 OpenClaw 工作区，请先检查 Gateway 和 Skills 列表')
+            }
+            const workspace = resolveOpenClawSkillLocations(payload).workspaceSkillsDir
+            const mutation = await withExclusiveSkillMutation('install', id, async () => ({
+              ok: true, code: 0, stderr: '', stdout: await activateSkill(id, workspace, action === 'rollback'),
+            }))
+            if (!mutation.ok) throw new Error(mutation.stderr)
+            return mutation.stdout
+          }
+        }
+        throw new Error('用法：/skill draft <轨迹ID> <名称> | evaluate <版本ID> | approve <版本ID> <指纹> | publish <版本ID> | rollback <旧版本ID> | run <名称> <文本>')
+      },
       emit: (payload) => {
         event.sender.send('chat:stream', payload)
       },

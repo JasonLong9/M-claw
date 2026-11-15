@@ -207,6 +207,7 @@ export interface ChatTraceEntry {
 }
 
 export interface ChatSendRequest {
+  attachment?: import('./chat-files').ChatFileAttachment
   sessionId: string
   text: string
   // Deliberately no `model` field here. Session model changes must go through

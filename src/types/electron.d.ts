@@ -1775,6 +1775,7 @@ interface ChatTraceEntry {
 }
 
 interface ChatSendRequest {
+  attachment?: import('../shared/chat-files').ChatFileAttachment
   sessionId: string
   text: string
   thinking?: ChatThinkingLevel
@@ -2039,6 +2040,8 @@ interface ElectronApi {
   installClaudeCode: () => Promise<ClaudeCodeInstallResult>
   inspectCodingWorkspacePath: (workspacePath?: string) => Promise<CodingWorkspaceStatusSnapshot>
   sendChatMessage: (request: ChatSendRequest) => Promise<ChatSendResult>
+  checkChatVoiceConfiguration: () => Promise<void>
+  transcribeChatVoice: (recording: import('../shared/chat-voice').VoiceRecording) => Promise<string>
   cancelChatMessage: () => Promise<boolean>
   getActiveChatSendState: () => Promise<ActiveChatSendState>
   clearChatTranscript: (sessionId: string) => Promise<ChatClearLocalTranscriptResult>

@@ -80,7 +80,7 @@ vi.mock('../openclaw-bundled-manifest', () => ({
 }))
 
 import { resetDashboardChatAvailabilityTrackerForTests, sendChatMessage } from '../openclaw-chat-service'
-import { listChatMemories, saveChatMemory } from '../memory'
+import { buildChatMemoryContext, listChatMemories, saveChatMemory } from '../memory'
 import { appendLocalChatMessages } from '../qclaw-chat-store'
 
 const fs = process.getBuiltinModule('node:fs') as typeof import('node:fs')
@@ -537,3 +537,26 @@ describe('chat memory integration', () => {
     expect(messageText).not.toContain('BOOTSTRAP.md - Hello, World')
   })
 })
+  it('routes the /react command through local tools and saves the turn summary', async () => {
+    vi.stubEnv('MCLAW_REACT_BASE_URL', 'http://127.0.0.1:8080/v1')
+    vi.stubEnv('MCLAW_REACT_MODEL', 'test-model')
+    const request = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ choices: [{ message: { content: null, tool_calls: [{
+        id: 'call-1', type: 'function', function: { name: 'count_characters', arguments: '{"text":"abc"}' },
+      }] } }] }))
+      .mockResolvedValueOnce(Response.json({ choices: [{ message: { content: '三个字符' } }] }))
+    vi.stubGlobal('fetch', request)
+    try {
+      const result = await sendChatMessage({ sessionId: 'local-react', text: '/react 数一数 abc' }, {
+        discoverOpenClaw: createDiscovery('fingerprint-react'),
+      })
+      expect(result.ok).toBe(true)
+      expect(result.message?.text).toMatch(/三个字符\s+轨迹 [0-9a-f-]{36}/)
+      expect(await buildChatMemoryContext({ sessionId: 'local-react', messageText: '继续' }))
+        .toMatchObject({ prompt: expect.stringContaining('三个字符') })
+      expect(request).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.unstubAllGlobals()
+      vi.unstubAllEnvs()
+    }
+  })

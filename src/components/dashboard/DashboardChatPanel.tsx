@@ -1,6 +1,8 @@
 ﻿import { useEffect, useRef, useState, type SyntheticEvent, type WheelEvent } from 'react'
 import { Alert, ActionIcon, Badge, Button, Card, Group, Modal, Paper, ScrollArea, Select, Stack, Text, Textarea, Tooltip, Transition, useComputedColorScheme, useMantineColorScheme } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
+import { VoiceInputButton } from './VoiceInputButton'
+import { CHAT_FILE_EXTENSIONS, CHAT_FILE_MAX_BYTES, validateChatFile, type ChatFileAttachment } from '../../shared/chat-files'
 import { IconChevronDown, IconChevronUp, IconExternalLink, IconPlayerStop, IconRefresh, IconSend, IconTrash } from '@tabler/icons-react'
 import type { ChatMemoryEntry, ChatMemoryScope } from '../../shared/chat-memory'
 import type {
@@ -495,6 +497,9 @@ export default function DashboardChatPanel({
   const [chatModelSwitching, setChatModelSwitching] = useState(false)
   const [clearingTranscript, setClearingTranscript] = useState(false)
   const [lastRetryText, setLastRetryText] = useState(() => dashboardChatPanelSnapshot.lastRetryText)
+  const [attachment, setAttachment] = useState<ChatFileAttachment>()
+  const [readingAttachment, setReadingAttachment] = useState(false)
+  const lastRetryAttachment = useRef<ChatFileAttachment>()
   const [copiedMessageId, setCopiedMessageId] = useState('')
   const [imagePreview, setImagePreview] = useState<ImagePreviewState | null>(null)
   const [imagePreviewScale, setImagePreviewScale] = useState(1)
@@ -1044,9 +1049,17 @@ export default function DashboardChatPanel({
     }
   }
 
-  const handleSend = async (rawText?: string) => {
-    const text = String(rawText ?? draft).trim()
-    if (!text || sending || chatModelSwitching) return
+  const handleSend = async (rawText?: string, retryAttachment?: ChatFileAttachment) => {
+    const file = rawText === undefined ? attachment : retryAttachment
+    const question = String(rawText ?? draft).trim()
+    if (!question || sending || chatModelSwitching || readingAttachment) return
+    if (file && /^\/skill(?: |$)/.test(question)) {
+      setPanelError('请先移除附件，再执行 Skill 管理命令')
+      return
+    }
+    const text = file && !/^\/react(?: |$)/.test(question) ? `/react ${question}` : question
+    const localCommand = /^\/(?:react|skill)(?: |$)/.test(text)
+    if (!canSend && !localCommand) return
 
     const sendMountKey = dashboardChatPanelNextMountKey
     setPanelError('')
@@ -1059,6 +1072,7 @@ export default function DashboardChatPanel({
     setStreamingAssistantUsage(undefined)
     setAssistantStreamStarted(true)
     setLastRetryText(text)
+    lastRetryAttachment.current = file
     setDraft('')
     let sessionId = String(activeSessionId || '').trim()
     const nextDraft = text
@@ -1071,7 +1085,7 @@ export default function DashboardChatPanel({
         }
       }
 
-      if (!gatewayRunning) {
+      if (!gatewayRunning && !localCommand) {
         const ready = await onEnsureGatewayRunning()
         if (!ready) {
           if (dashboardChatPanelNextMountKey === sendMountKey) {
@@ -1085,6 +1099,7 @@ export default function DashboardChatPanel({
       const result = await window.api.sendChatMessage({
         sessionId,
         text,
+        attachment: file,
       })
       if (dashboardChatPanelNextMountKey !== sendMountKey) return
       if (!result.ok) {
@@ -1108,6 +1123,7 @@ export default function DashboardChatPanel({
         )
       }
       setPanelError('')
+      if (file) setAttachment((current) => current === file ? undefined : current)
       void Promise.all([
         loadTranscript(resolvedSessionId, { silent: true, preservePanelError: true }),
         loadSessions(resolvedSessionId, { silent: true, preservePanelError: true }),
@@ -1197,7 +1213,7 @@ export default function DashboardChatPanel({
 
   const handleRetry = async () => {
     if (!lastRetryText || sending) return
-    await handleSend(lastRetryText)
+    await handleSend(lastRetryText, lastRetryAttachment.current)
   }
 
   const handleClearLocalTranscript = async () => {
@@ -2747,7 +2763,7 @@ export default function DashboardChatPanel({
                 }
               }}
               placeholder="输入消息"
-              disabled={sending || !canSend}
+              disabled={sending}
               rows={4}
               variant="unstyled"
               styles={{
@@ -2765,6 +2781,43 @@ export default function DashboardChatPanel({
             />
             <div style={{ borderTop: '1px solid var(--app-border)', padding: '10px 12px' }}>
               <Stack gap={8}>
+                <Group gap="xs">
+                  <VoiceInputButton
+                    key={activeSessionId}
+                    disabled={sending}
+                    onText={(text) => setDraft((current) => current.trim() ? `${current.trimEnd()}\n${text}` : text)}
+                  />
+                  <Button component="label" size="compact-xs" variant="subtle" disabled={sending || readingAttachment}>
+                    添加文本附件
+                    <input
+                      type="file"
+                      hidden
+                      disabled={sending || readingAttachment}
+                      accept={CHAT_FILE_EXTENSIONS.join(',')}
+                      onChange={async (event) => {
+                        const file = event.currentTarget.files?.[0]
+                        event.currentTarget.value = ''
+                        if (!file) return
+                        setReadingAttachment(true)
+                        try {
+                          if (file.size > CHAT_FILE_MAX_BYTES) throw new Error('附件大小上限为 32 KB')
+                          const text = new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer())
+                          setAttachment(validateChatFile({ name: file.name, text }))
+                          setPanelError('')
+                        } catch (error) {
+                          setPanelError(error instanceof Error ? error.message : '无法读取附件')
+                        } finally {
+                          setReadingAttachment(false)
+                        }
+                      }}
+                    />
+                  </Button>
+                  {attachment && (
+                    <Button variant="light" size="compact-xs" disabled={sending} onClick={() => setAttachment(undefined)}>
+                      {attachment.name} · 移除
+                    </Button>
+                  )}
+                </Group>
                 {modelOptions.length > 0 && showComposerModelPicker && (
                   <Group gap="xs" wrap="nowrap" align="center">
                     <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>会话模型</Text>
@@ -2855,7 +2908,8 @@ export default function DashboardChatPanel({
                         size="lg"
                         radius="xl"
                         onClick={() => void handleSend()}
-                        disabled={!draft.trim() || !canSend || chatModelSwitching}
+                        disabled={!draft.trim() || chatModelSwitching || readingAttachment ||
+                          (!canSend && !attachment && !/^\/(?:react|skill)(?: |$)/.test(draft.trim()))}
                       >
                         <IconSend size={16} />
                       </ActionIcon>
